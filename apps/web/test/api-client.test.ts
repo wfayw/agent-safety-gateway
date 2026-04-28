@@ -1,11 +1,17 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import type { ToolCallRequest } from '@agent-safety-gateway/shared';
+
 import {
   ApiClientError,
   DEFAULT_API_BASE_URL,
+  analyzeToolCall,
   createApiClient,
+  getAudit,
   getHealth,
+  listAudits,
+  listScenarios,
   normalizeApiError,
   resolveApiBaseUrl,
 } from '../src/api';
@@ -65,6 +71,88 @@ describe('web API client requests', () => {
     assert.equal(headers.get('Accept'), 'application/json');
     assert.equal(headers.get('Content-Type'), 'application/json');
     assert.equal(receivedInit?.body, JSON.stringify({ id: 'req-1' }));
+  });
+
+  it('posts tool-call analysis requests to the safety gateway endpoint', async () => {
+    const request: ToolCallRequest = {
+      id: 'req-1',
+      actor: 'agent:ralph',
+      taskPurpose: 'Verify production delete safety',
+      toolType: 'sql',
+      rawPayload: {
+        sql: 'DELETE FROM orders WHERE status = \'PENDING\'',
+      },
+      environment: 'production',
+      createdAt: '2026-04-28T12:00:00.000Z',
+    };
+    let receivedUrl = '';
+    let receivedInit: RequestInit | undefined;
+    const client = createApiClient({
+      baseUrl: 'http://api.local',
+      fetchImpl: async (url, init) => {
+        receivedUrl = String(url);
+        receivedInit = init;
+        return jsonResponse({ auditId: 'audit-1' });
+      },
+    });
+
+    const response = await analyzeToolCall(request, client);
+
+    assert.equal(receivedUrl, 'http://api.local/api/tool-calls/analyze');
+    assert.equal(receivedInit?.method, 'POST');
+    assert.equal(receivedInit?.body, JSON.stringify(request));
+    assert.equal(response.auditId, 'audit-1');
+  });
+
+  it('lists scenarios and unwraps the API response envelope', async () => {
+    const client = createApiClient({
+      baseUrl: 'http://api.local',
+      fetchImpl: async (url, init) => {
+        assert.equal(String(url), 'http://api.local/api/scenarios');
+        assert.equal(init?.method, 'GET');
+        return jsonResponse({ scenarios: [{ id: 'sql-delete-orders-production' }] });
+      },
+    });
+
+    assert.deepEqual(await listScenarios(client), [{ id: 'sql-delete-orders-production' }]);
+  });
+
+  it('lists audits with shared-domain filters as query parameters', async () => {
+    const client = createApiClient({
+      baseUrl: 'http://api.local',
+      fetchImpl: async (url) => {
+        assert.equal(
+          String(url),
+          'http://api.local/api/audits?decision=block&riskLevel=prohibited&toolType=sql&environment=production',
+        );
+        return jsonResponse({ audits: [{ id: 'audit-1' }] });
+      },
+    });
+
+    assert.deepEqual(
+      await listAudits(
+        {
+          decision: 'block',
+          riskLevel: 'prohibited',
+          toolType: 'sql',
+          environment: 'production',
+        },
+        client,
+      ),
+      [{ id: 'audit-1' }],
+    );
+  });
+
+  it('gets one audit record with a URL-encoded id', async () => {
+    const client = createApiClient({
+      baseUrl: 'http://api.local',
+      fetchImpl: async (url) => {
+        assert.equal(String(url), 'http://api.local/api/audits/audit%2F1');
+        return jsonResponse({ audit: { id: 'audit/1' } });
+      },
+    });
+
+    assert.deepEqual(await getAudit('audit/1', client), { id: 'audit/1' });
   });
 
   it('normalizes API error responses to message, code, and details', async () => {
