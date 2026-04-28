@@ -47,3 +47,42 @@ export const DecisionType = {
 } as const;
 
 export type DecisionType = (typeof DecisionType)[keyof typeof DecisionType];
+
+export type JsonPrimitive = string | number | boolean | null;
+
+export type JsonValue =
+  | JsonPrimitive
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+export type JsonObject = { [key: string]: JsonValue };
+
+export type IsoTimestamp = string;
+
+export type ToolCallRequest = {
+  id: string;
+  actor: string;
+  taskPurpose: string;
+  toolType: ToolType;
+  rawPayload: JsonObject;
+  environment: Environment;
+  createdAt: IsoTimestamp;
+};
+
+export type ActionTuple = {
+  actor: string;
+  taskPurpose: string;
+  toolType: ToolType;
+  operation: OperationType;
+  target: string;
+  parameters: JsonObject;
+  environment: Environment;
+  timestamp: IsoTimestamp;
+};
+
+export type ParseError = {
+  code: string;
+  message: string;
+  field?: string;
+  details?: JsonObject;
+};
