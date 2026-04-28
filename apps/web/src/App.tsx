@@ -66,7 +66,24 @@ type SimulatorFormValues = {
   actor: string;
   taskPurpose: string;
   environment: Environment;
+  sqlText?: string;
+  cicdService?: string;
+  cicdVersion?: string;
+  cicdTestStatus?: string;
+  configService?: string;
+  configKey?: string;
+  configValue?: string;
 };
+
+const toolParameterFieldNames: (keyof SimulatorFormValues)[] = [
+  'sqlText',
+  'cicdService',
+  'cicdVersion',
+  'cicdTestStatus',
+  'configService',
+  'configKey',
+  'configValue',
+];
 
 const toolTypeOptions = (Object.keys(toolTypeLabels) as ToolType[]).map((toolType) => ({
   label: toolTypeLabels[toolType],
@@ -317,9 +334,125 @@ function DashboardPage({ navigateToAudit }: DashboardPageProps) {
 function SimulatorPage() {
   const [form] = Form.useForm<SimulatorFormValues>();
   const [submittedRequest, setSubmittedRequest] = useState<SimulatorFormValues | null>(null);
+  const selectedToolType = Form.useWatch('toolType', form);
+
+  const handleValuesChange: FormProps<SimulatorFormValues>['onValuesChange'] = (changedValues) => {
+    if (Object.hasOwn(changedValues, 'toolType')) {
+      form.resetFields(toolParameterFieldNames);
+      setSubmittedRequest(null);
+    }
+  };
 
   const handleSubmit: FormProps<SimulatorFormValues>['onFinish'] = (values) => {
     setSubmittedRequest(values);
+  };
+
+  const renderToolParameterFields = () => {
+    switch (selectedToolType) {
+      case 'sql':
+        return (
+          <Form.Item
+            label="SQL 文本"
+            name="sqlText"
+            rules={[{ required: true, message: '请填写SQL文本' }, { whitespace: true, message: '请填写SQL文本' }]}
+          >
+            <Input.TextArea
+              autoSize={{ minRows: 5, maxRows: 10 }}
+              placeholder="例如：DELETE FROM orders WHERE status='PENDING'"
+            />
+          </Form.Item>
+        );
+      case 'ci_cd':
+        return (
+          <Flex gap="middle" wrap>
+            <Form.Item
+              label="Service"
+              name="cicdService"
+              rules={[{ required: true, message: '请填写Service' }, { whitespace: true, message: '请填写Service' }]}
+              style={{ flex: '1 1 220px' }}
+            >
+              <Input placeholder="例如：payment-service" />
+            </Form.Item>
+            <Form.Item
+              label="Version"
+              name="cicdVersion"
+              rules={[{ required: true, message: '请填写Version' }, { whitespace: true, message: '请填写Version' }]}
+              style={{ flex: '1 1 220px' }}
+            >
+              <Input placeholder="例如：1.8.0" />
+            </Form.Item>
+            <Form.Item
+              label="TestStatus"
+              name="cicdTestStatus"
+              rules={[{ required: true, message: '请填写TestStatus' }, { whitespace: true, message: '请填写TestStatus' }]}
+              style={{ flex: '1 1 220px' }}
+            >
+              <Input placeholder="例如：failed 或 passed" />
+            </Form.Item>
+          </Flex>
+        );
+      case 'config':
+        return (
+          <Flex gap="middle" wrap>
+            <Form.Item
+              label="Service"
+              name="configService"
+              rules={[{ required: true, message: '请填写Service' }, { whitespace: true, message: '请填写Service' }]}
+              style={{ flex: '1 1 220px' }}
+            >
+              <Input placeholder="例如：payment-service" />
+            </Form.Item>
+            <Form.Item
+              label="Key"
+              name="configKey"
+              rules={[{ required: true, message: '请填写Key' }, { whitespace: true, message: '请填写Key' }]}
+              style={{ flex: '1 1 220px' }}
+            >
+              <Input placeholder="例如：payment.timeout" />
+            </Form.Item>
+            <Form.Item
+              label="Value"
+              name="configValue"
+              rules={[{ required: true, message: '请填写Value' }, { whitespace: true, message: '请填写Value' }]}
+              style={{ flex: '1 1 220px' }}
+            >
+              <Input placeholder="例如：100ms" />
+            </Form.Item>
+          </Flex>
+        );
+      default:
+        return (
+          <Alert
+            showIcon
+            type="info"
+            title="等待选择工具类型"
+            description="选择 SQL、CI/CD 或 Config 后，只会显示对应工具参数；通用字段会在切换类型时保留。"
+          />
+        );
+    }
+  };
+
+  const renderSubmittedParameters = (values: SimulatorFormValues) => {
+    switch (values.toolType) {
+      case 'sql':
+        return <Text code>{values.sqlText}</Text>;
+      case 'ci_cd':
+        return (
+          <Flex gap="middle" wrap>
+            <Text>Service：<Text code>{values.cicdService}</Text></Text>
+            <Text>Version：<Text code>{values.cicdVersion}</Text></Text>
+            <Text>TestStatus：<Text code>{values.cicdTestStatus}</Text></Text>
+          </Flex>
+        );
+      case 'config':
+        return (
+          <Flex gap="middle" wrap>
+            <Text>Service：<Text code>{values.configService}</Text></Text>
+            <Text>Key：<Text code>{values.configKey}</Text></Text>
+            <Text>Value：<Text code>{values.configValue}</Text></Text>
+          </Flex>
+        );
+    }
   };
 
   return (
@@ -343,6 +476,7 @@ function SimulatorPage() {
           form={form}
           layout="vertical"
           onFinish={handleSubmit}
+          onValuesChange={handleValuesChange}
           requiredMark="optional"
           validateMessages={{ required: '请填写${label}' }}
         >
@@ -381,6 +515,9 @@ function SimulatorPage() {
               placeholder="描述 Agent 为什么要调用该工具，以及它希望达成的业务目标。"
             />
           </Form.Item>
+          <Card size="small" title="工具参数">
+            {renderToolParameterFields()}
+          </Card>
           <Space wrap>
             <Button htmlType="submit" type="primary">
               提交待分析请求
@@ -415,6 +552,10 @@ function SimulatorPage() {
               </Text>
             </Flex>
             <Text type="secondary">Task purpose：{submittedRequest.taskPurpose}</Text>
+            <Space orientation="vertical" size={4}>
+              <Text strong>工具专用参数</Text>
+              {renderSubmittedParameters(submittedRequest)}
+            </Space>
           </Space>
         </Card>
       ) : null}
