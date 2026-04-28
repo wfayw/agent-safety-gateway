@@ -6,11 +6,14 @@
   "type": "module",
   "scripts": {
     "dev": "node scripts/workspace-placeholder.mjs dev",
-    "build": "node scripts/workspace-placeholder.mjs build",
-    "typecheck": "node scripts/workspace-placeholder.mjs typecheck",
+    "build": "pnpm --filter @agent-safety-gateway/shared build",
+    "typecheck": "pnpm --filter @agent-safety-gateway/shared typecheck",
     "test": "node scripts/workspace-placeholder.mjs test",
     "lint": "node scripts/workspace-placeholder.mjs lint",
     "format": "node scripts/workspace-placeholder.mjs format",
     "seed": "node scripts/workspace-placeholder.mjs seed"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
   }
 }
