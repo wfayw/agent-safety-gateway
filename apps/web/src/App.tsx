@@ -2,6 +2,7 @@ import { Alert, Card, ConfigProvider, Flex, Layout, Menu, Space, Typography } fr
 import type { MenuProps } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { safetyGatewayTheme } from './theme';
+import { EmptyState, ErrorState, LoadingState, SectionHeader } from './ui/states';
 import { DecisionStatusTag, RiskStatusTag } from './ui/status-tags';
 
 const { Content, Header, Sider } = Layout;
@@ -96,6 +97,34 @@ function DashboardPage() {
             <RiskStatusTag status="high" />
             <RiskStatusTag status="prohibited" />
           </Space>
+        </Flex>
+      </Card>
+      <Card>
+        <Flex vertical gap="middle">
+          <SectionHeader
+            title="共享 UI 状态组件"
+            description="加载、错误和空状态统一说明当前网关证据是否可用，避免在结果缺失时误导用户继续执行。"
+          />
+          <Flex gap="middle" wrap>
+            <div className="ui-state-example">
+              <LoadingState
+                title="正在请求网关分析"
+                description="保持工具执行禁用，等待安全决策返回。"
+              />
+            </div>
+            <div className="ui-state-example">
+              <ErrorState
+                title="分析请求失败，执行已阻止"
+                description="请检查 API 服务或请求参数；不要在没有网关决策时调用 executor。"
+              />
+            </div>
+            <div className="ui-state-example">
+              <EmptyState
+                title="暂无审计证据"
+                description="运行种子场景后，可在这里回放风险、决策和 executor 结果。"
+              />
+            </div>
+          </Flex>
         </Flex>
       </Card>
     </Flex>
