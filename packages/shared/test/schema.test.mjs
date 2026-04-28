@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   ActionTupleSchema,
+  CiCdScenarioFixtureId,
+  ConfigScenarioFixtureId,
   DecisionType,
   Environment,
   OperationType,
@@ -10,6 +12,8 @@ import {
   SqlScenarioFixtureId,
   ToolCallRequestSchema,
   ToolType,
+  cicdScenarioFixtures,
+  configScenarioFixtures,
   sqlScenarioFixtures,
 } from "../dist/index.js";
 
@@ -91,8 +95,89 @@ test("exports SQL scenario fixtures for blocked delete and allowed query", () =>
   assert.equal(readFixture.expectedDecisionType, DecisionType.Allow);
 });
 
-test("SQL scenario fixture requests and action tuples match runtime schemas", () => {
-  for (const fixture of sqlScenarioFixtures) {
+test("exports CI/CD scenario fixtures for blocked deploy and reviewed rollback", () => {
+  assert.equal(cicdScenarioFixtures.length, 2);
+
+  const deployFixture = cicdScenarioFixtures.find(
+    (fixture) =>
+      fixture.id === CiCdScenarioFixtureId.ProductionDeployPaymentService,
+  );
+  const rollbackFixture = cicdScenarioFixtures.find(
+    (fixture) =>
+      fixture.id === CiCdScenarioFixtureId.ProductionRollbackPaymentService,
+  );
+
+  assert.ok(deployFixture);
+  assert.ok(rollbackFixture);
+
+  assert.equal(deployFixture.request.rawPayload.service, "payment-service");
+  assert.equal(deployFixture.request.rawPayload.testStatus, "failed");
+  assert.equal(
+    deployFixture.expectedActionTuple.operation,
+    OperationType.Deploy,
+  );
+  assert.equal(
+    deployFixture.expectedActionTuple.environment,
+    Environment.Production,
+  );
+  assert.equal(deployFixture.expectedRiskLevel, RiskLevel.Prohibited);
+  assert.equal(deployFixture.expectedDecisionType, DecisionType.Block);
+
+  assert.equal(rollbackFixture.request.rawPayload.toVersion, "1.7.4");
+  assert.equal(
+    rollbackFixture.expectedActionTuple.operation,
+    OperationType.Rollback,
+  );
+  assert.equal(
+    rollbackFixture.expectedActionTuple.environment,
+    Environment.Production,
+  );
+  assert.equal(rollbackFixture.expectedRiskLevel, RiskLevel.Medium);
+  assert.equal(
+    rollbackFixture.expectedDecisionType,
+    DecisionType.RequireApproval,
+  );
+});
+
+test("exports config scenario fixture for sandboxed payment.timeout update", () => {
+  assert.equal(configScenarioFixtures.length, 1);
+
+  const paymentTimeoutFixture = configScenarioFixtures.find(
+    (fixture) =>
+      fixture.id === ConfigScenarioFixtureId.ProductionPaymentTimeoutUpdate,
+  );
+
+  assert.ok(paymentTimeoutFixture);
+  assert.equal(
+    paymentTimeoutFixture.request.rawPayload.service,
+    "payment-service",
+  );
+  assert.equal(paymentTimeoutFixture.request.rawPayload.key, "payment.timeout");
+  assert.equal(paymentTimeoutFixture.request.rawPayload.value, "100ms");
+  assert.equal(
+    paymentTimeoutFixture.expectedActionTuple.operation,
+    OperationType.Update,
+  );
+  assert.equal(
+    paymentTimeoutFixture.expectedActionTuple.target,
+    "payment-service.payment.timeout",
+  );
+  assert.equal(
+    paymentTimeoutFixture.expectedActionTuple.environment,
+    Environment.Production,
+  );
+  assert.equal(paymentTimeoutFixture.expectedRiskLevel, RiskLevel.Medium);
+  assert.equal(paymentTimeoutFixture.expectedDecisionType, DecisionType.Sandbox);
+});
+
+test("scenario fixture requests and action tuples match runtime schemas", () => {
+  const fixtures = [
+    ...sqlScenarioFixtures,
+    ...cicdScenarioFixtures,
+    ...configScenarioFixtures,
+  ];
+
+  for (const fixture of fixtures) {
     assert.equal(ToolCallRequestSchema.safeParse(fixture.request).success, true);
     assert.equal(
       ActionTupleSchema.safeParse(fixture.expectedActionTuple).success,

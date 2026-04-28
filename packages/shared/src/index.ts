@@ -365,6 +365,260 @@ export const sqlScenarioFixtures = [
   },
 ] as const satisfies readonly Scenario[];
 
+export const CiCdScenarioFixtureId = {
+  ProductionDeployPaymentService: "cicd-deploy-payment-service-production",
+  ProductionRollbackPaymentService:
+    "cicd-rollback-payment-service-production",
+} as const;
+
+export type CiCdScenarioFixtureId =
+  (typeof CiCdScenarioFixtureId)[keyof typeof CiCdScenarioFixtureId];
+
+export const cicdScenarioFixtures = [
+  {
+    id: CiCdScenarioFixtureId.ProductionDeployPaymentService,
+    title: "Block production deploy when payment-service tests failed",
+    description:
+      "A production payment-service deployment with failed tests must be blocked before the deploy executor runs.",
+    request: {
+      id: "req-cicd-deploy-payment-service-production",
+      actor: "agent:ralph",
+      taskPurpose:
+        "Deploy payment-service v1.8.0 to production to restore timeout behavior",
+      toolType: ToolType.CiCd,
+      rawPayload: {
+        service: "payment-service",
+        version: "1.8.0",
+        pipeline: "payment-service-release",
+        stage: "deploy",
+        testStatus: "failed",
+      },
+      environment: Environment.Production,
+      createdAt: "2026-04-28T06:20:00.000Z",
+    },
+    expectedActionTuple: {
+      actor: "agent:ralph",
+      taskPurpose:
+        "Deploy payment-service v1.8.0 to production to restore timeout behavior",
+      toolType: ToolType.CiCd,
+      operation: OperationType.Deploy,
+      target: "payment-service",
+      parameters: {
+        service: "payment-service",
+        version: "1.8.0",
+        pipeline: "payment-service-release",
+        stage: "deploy",
+        testStatus: "failed",
+      },
+      environment: Environment.Production,
+      timestamp: "2026-04-28T06:20:00.000Z",
+    },
+    expectedRiskLevel: RiskLevel.Prohibited,
+    expectedDecisionType: DecisionType.Block,
+    evidenceRequirements: [
+      "Gateway response explains failed tests and production deployment risk.",
+      "Executor log proves the deploy executor was not invoked.",
+      "Audit record preserves service, version, test status, and blocked decision.",
+    ],
+    fixtures: {
+      resources: [
+        {
+          id: "resource-service-payment-service-prod",
+          name: "payment-service",
+          type: ResourceType.Service,
+          system: "payments",
+          environment: Environment.Production,
+          sensitivityLevel: SensitivityLevel.Restricted,
+          criticalityLevel: CriticalityLevel.Critical,
+          owner: "payments-platform",
+          rollbackCapability: RollbackCapability.Manual,
+        },
+        {
+          id: "resource-pipeline-payment-service-release-prod",
+          name: "payment-service-release",
+          type: ResourceType.Pipeline,
+          system: "payments",
+          environment: Environment.Production,
+          sensitivityLevel: SensitivityLevel.Internal,
+          criticalityLevel: CriticalityLevel.High,
+          owner: "payments-platform",
+          rollbackCapability: RollbackCapability.Automatic,
+        },
+      ],
+      expectedRiskFactors: [
+        "production_deploy",
+        "test_status_failed",
+        "critical_payment_service",
+      ],
+    },
+  },
+  {
+    id: CiCdScenarioFixtureId.ProductionRollbackPaymentService,
+    title: "Require approval for production payment-service rollback",
+    description:
+      "A production payment-service rollback is reversible but still affects a critical service, so it should require approval.",
+    request: {
+      id: "req-cicd-rollback-payment-service-production",
+      actor: "agent:ralph",
+      taskPurpose:
+        "Rollback payment-service from v1.8.0 to v1.7.4 after deployment validation failed",
+      toolType: ToolType.CiCd,
+      rawPayload: {
+        service: "payment-service",
+        fromVersion: "1.8.0",
+        toVersion: "1.7.4",
+        pipeline: "payment-service-release",
+        stage: "rollback",
+        testStatus: "passed",
+      },
+      environment: Environment.Production,
+      createdAt: "2026-04-28T06:25:00.000Z",
+    },
+    expectedActionTuple: {
+      actor: "agent:ralph",
+      taskPurpose:
+        "Rollback payment-service from v1.8.0 to v1.7.4 after deployment validation failed",
+      toolType: ToolType.CiCd,
+      operation: OperationType.Rollback,
+      target: "payment-service",
+      parameters: {
+        service: "payment-service",
+        fromVersion: "1.8.0",
+        toVersion: "1.7.4",
+        pipeline: "payment-service-release",
+        stage: "rollback",
+        testStatus: "passed",
+      },
+      environment: Environment.Production,
+      timestamp: "2026-04-28T06:25:00.000Z",
+    },
+    expectedRiskLevel: RiskLevel.Medium,
+    expectedDecisionType: DecisionType.RequireApproval,
+    evidenceRequirements: [
+      "Gateway response identifies rollback as a production service change.",
+      "Approval evidence records the target service and rollback versions.",
+      "Audit record preserves rollback intent and recommended reviewer action.",
+    ],
+    fixtures: {
+      resources: [
+        {
+          id: "resource-service-payment-service-prod",
+          name: "payment-service",
+          type: ResourceType.Service,
+          system: "payments",
+          environment: Environment.Production,
+          sensitivityLevel: SensitivityLevel.Restricted,
+          criticalityLevel: CriticalityLevel.Critical,
+          owner: "payments-platform",
+          rollbackCapability: RollbackCapability.Manual,
+        },
+      ],
+      expectedRiskFactors: [
+        "production_rollback",
+        "critical_payment_service",
+        "manual_rollback_review",
+      ],
+    },
+  },
+] as const satisfies readonly Scenario[];
+
+export const ConfigScenarioFixtureId = {
+  ProductionPaymentTimeoutUpdate: "config-payment-timeout-production",
+} as const;
+
+export type ConfigScenarioFixtureId =
+  (typeof ConfigScenarioFixtureId)[keyof typeof ConfigScenarioFixtureId];
+
+export const configScenarioFixtures = [
+  {
+    id: ConfigScenarioFixtureId.ProductionPaymentTimeoutUpdate,
+    title: "Sandbox production payment.timeout config update",
+    description:
+      "A production payment.timeout change for payment-service should be redirected to a sandbox path before any production config write.",
+    request: {
+      id: "req-config-payment-timeout-production",
+      actor: "agent:ralph",
+      taskPurpose:
+        "Reduce payment-service timeout to 100ms to shorten user waiting time",
+      toolType: ToolType.Config,
+      rawPayload: {
+        service: "payment-service",
+        key: "payment.timeout",
+        value: "100ms",
+        previousValue: "2s",
+        namespace: "production",
+      },
+      environment: Environment.Production,
+      createdAt: "2026-04-28T06:30:00.000Z",
+    },
+    expectedActionTuple: {
+      actor: "agent:ralph",
+      taskPurpose:
+        "Reduce payment-service timeout to 100ms to shorten user waiting time",
+      toolType: ToolType.Config,
+      operation: OperationType.Update,
+      target: "payment-service.payment.timeout",
+      parameters: {
+        service: "payment-service",
+        key: "payment.timeout",
+        value: "100ms",
+        previousValue: "2s",
+        namespace: "production",
+      },
+      environment: Environment.Production,
+      timestamp: "2026-04-28T06:30:00.000Z",
+    },
+    expectedRiskLevel: RiskLevel.Medium,
+    expectedDecisionType: DecisionType.Sandbox,
+    evidenceRequirements: [
+      "Gateway response explains production config impact on payment-service.",
+      "Executor log proves production config writer was not invoked directly.",
+      "Audit record preserves the requested key, value, and sandbox decision.",
+    ],
+    fixtures: {
+      resources: [
+        {
+          id: "resource-config-payment-timeout-prod",
+          name: "payment.timeout",
+          type: ResourceType.ConfigKey,
+          system: "payments",
+          environment: Environment.Production,
+          sensitivityLevel: SensitivityLevel.Confidential,
+          criticalityLevel: CriticalityLevel.High,
+          owner: "payments-platform",
+          rollbackCapability: RollbackCapability.Automatic,
+        },
+        {
+          id: "resource-service-payment-service-prod",
+          name: "payment-service",
+          type: ResourceType.Service,
+          system: "payments",
+          environment: Environment.Production,
+          sensitivityLevel: SensitivityLevel.Restricted,
+          criticalityLevel: CriticalityLevel.Critical,
+          owner: "payments-platform",
+          rollbackCapability: RollbackCapability.Manual,
+        },
+      ],
+      dependencies: [
+        {
+          sourceResourceId: "resource-service-payment-service-prod",
+          targetResourceId: "resource-config-payment-timeout-prod",
+          relationType: ResourceDependencyRelationType.Configures,
+          direction: ResourceDependencyDirection.Upstream,
+          environment: Environment.Production,
+          enabled: true,
+        },
+      ],
+      expectedRiskFactors: [
+        "production_config_update",
+        "critical_payment_service",
+        "sandbox_before_production_write",
+      ],
+    },
+  },
+] as const satisfies readonly Scenario[];
+
 export type ValidationIssue = {
   path: string;
   code: string;
