@@ -1,0 +1,16 @@
+{
+  "name": "agent-safety-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.33.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/workspace-placeholder.mjs dev",
+    "build": "node scripts/workspace-placeholder.mjs build",
+    "typecheck": "node scripts/workspace-placeholder.mjs typecheck",
+    "test": "node scripts/workspace-placeholder.mjs test",
+    "lint": "node scripts/workspace-placeholder.mjs lint",
+    "format": "node scripts/workspace-placeholder.mjs format",
+    "seed": "node scripts/workspace-placeholder.mjs seed"
+  }
+}
