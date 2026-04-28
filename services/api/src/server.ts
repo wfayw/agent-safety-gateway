@@ -2,6 +2,7 @@ import Fastify from "fastify";
 
 import { ApiLogLevel, createApiConfig, type ApiConfig } from "./config.js";
 import { registerErrorHandlers } from "./errors.js";
+import { initializeLocalStorage } from "./storage.js";
 
 export type ApiLoggerOption = boolean | { level: ApiLogLevel };
 
@@ -53,6 +54,8 @@ export const buildServer = (options: ApiServerOptions = {}) => {
 
 export const startServer = async () => {
   const config = createApiConfig();
+  await initializeLocalStorage(config.dataDir);
+
   const server = buildServer({ config });
 
   await server.listen({ host: config.host, port: config.port });
