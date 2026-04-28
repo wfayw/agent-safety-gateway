@@ -9,6 +9,10 @@ import {
   type LocalStorageLayout,
 } from "./storage.js";
 import {
+  createScenarioRepository,
+  type ScenarioRepository,
+} from "./scenario-repository.js";
+import {
   createDefaultToolCallAnalysisService,
   ToolCallAnalysisError,
   type ToolCallAnalysisService,
@@ -20,6 +24,7 @@ export type ApiServerOptions = {
   config?: ApiConfig;
   logger?: ApiLoggerOption;
   localStorageLayout?: LocalStorageLayout;
+  scenarioRepository?: ScenarioRepository;
   toolCallAnalysisService?: ToolCallAnalysisService;
 };
 
@@ -38,6 +43,8 @@ export const buildServer = (options: ApiServerOptions = {}) => {
   const toolCallAnalysisService =
     options.toolCallAnalysisService ??
     createDefaultToolCallAnalysisService(localStorageLayout);
+  const scenarioRepository =
+    options.scenarioRepository ?? createScenarioRepository(localStorageLayout);
   const server = Fastify({
     logger: options.logger ?? createLoggerOption(config),
   });
@@ -64,6 +71,45 @@ export const buildServer = (options: ApiServerOptions = {}) => {
     async () => ({
       status: "ok",
     }),
+  );
+
+  server.get("/api/scenarios", async () => ({
+    scenarios: await scenarioRepository.listScenarios(),
+  }));
+
+  server.get(
+    "/api/scenarios/:id",
+    {
+      schema: {
+        params: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id"],
+          properties: {
+            id: {
+              type: "string",
+              minLength: 1,
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const scenario = await scenarioRepository.getScenarioById(id);
+
+      if (!scenario) {
+        return sendErrorResponse(reply, 404, {
+          code: "SCENARIO_NOT_FOUND",
+          message: "Scenario not found",
+          details: {
+            scenarioId: id,
+          },
+        });
+      }
+
+      return { scenario };
+    },
   );
 
   server.post("/api/tool-calls/analyze", async (request, reply) => {

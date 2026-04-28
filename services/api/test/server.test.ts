@@ -147,6 +147,60 @@ describe("API server", () => {
     assert.equal(body.auditId, "audit-route-1");
   });
 
+  it("lists seeded scenarios with simulator-ready tool call requests", async () => {
+    const server = await createAnalysisServer();
+    const fixture = getSqlDeleteFixture();
+
+    const response = await server.inject({ method: "GET", url: "/api/scenarios" });
+    const body = response.json();
+
+    assert.equal(response.statusCode, 200);
+    assert.ok(Array.isArray(body.scenarios));
+    assert.equal(body.scenarios.length, 4);
+    assert.deepEqual(
+      body.scenarios.find(
+        (scenario: { id: string }) => scenario.id === fixture.id,
+      )?.toolCallRequest,
+      fixture.request,
+    );
+  });
+
+  it("returns seeded scenario details by id", async () => {
+    const server = await createAnalysisServer();
+    const fixture = getSqlDeleteFixture();
+
+    const response = await server.inject({
+      method: "GET",
+      url: `/api/scenarios/${fixture.id}`,
+    });
+    const body = response.json();
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(body.scenario.id, fixture.id);
+    assert.equal(body.scenario.expectedRiskLevel, RiskLevel.Prohibited);
+    assert.equal(body.scenario.expectedDecision, DecisionType.Block);
+    assert.deepEqual(body.scenario.toolCallRequest, fixture.request);
+  });
+
+  it("returns 404 for missing scenarios", async () => {
+    const server = await createAnalysisServer();
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/scenarios/scenario-missing",
+    });
+    const body = response.json();
+
+    assert.equal(response.statusCode, 404);
+    assert.deepEqual(body, {
+      code: "SCENARIO_NOT_FOUND",
+      message: "Scenario not found",
+      details: {
+        scenarioId: "scenario-missing",
+      },
+    });
+  });
+
   it("returns 400 for invalid tool call request bodies", async () => {
     const server = await createAnalysisServer();
 
