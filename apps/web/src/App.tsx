@@ -1,6 +1,6 @@
-import { Alert, Button, Card, ConfigProvider, Flex, Form, Input, Layout, Menu, Select, Space, Table, Typography } from 'antd';
+import { Alert, Button, Card, ConfigProvider, Descriptions, Flex, Form, Input, Layout, Menu, Select, Space, Table, Tag, Typography } from 'antd';
 import type { FormProps, MenuProps, TableProps } from 'antd';
-import type { AuditRecord, DecisionType, Environment, JsonValue, RiskLevel, ToolCallRequest, ToolType } from '@agent-safety-gateway/shared';
+import type { AffectedResource, AuditRecord, DecisionType, Environment, ImpactPath, JsonObject, JsonValue, RiskFactor, RiskFactorSeverity, RiskLevel, ToolCallRequest, ToolType } from '@agent-safety-gateway/shared';
 import { useEffect, useMemo, useState } from 'react';
 import { analyzeToolCall, listAudits, listScenarios, normalizeApiError, type AnalyzeToolCallResponse, type ApiErrorPayload, type ScenarioSummary } from './api';
 import { safetyGatewayTheme } from './theme';
@@ -59,6 +59,21 @@ const environmentLabels: Record<Environment, string> = {
   test: '测试',
   staging: '预发',
   production: '生产',
+};
+
+const riskFactorSeverityConfig: Record<RiskFactorSeverity, { color: string; label: string }> = {
+  informational: {
+    color: 'blue',
+    label: '提示',
+  },
+  warning: {
+    color: 'warning',
+    label: '警告',
+  },
+  critical: {
+    color: 'error',
+    label: '严重',
+  },
 };
 
 type SimulatorFormValues = {
@@ -143,6 +158,20 @@ const toStringValue = (value: JsonValue | undefined) => {
   }
 
   return '';
+};
+
+const formatJsonObject = (value: JsonObject) => JSON.stringify(value, null, 2);
+
+const renderSeverityTag = (severity: RiskFactorSeverity) => {
+  const severityConfig = riskFactorSeverityConfig[severity];
+
+  return <Tag color={severityConfig.color}>{severityConfig.label}</Tag>;
+};
+
+const findImpactPath = (impactPaths: ImpactPath[], resource: AffectedResource) => {
+  return impactPaths.find((impactPath) => {
+    return impactPath.impactedResourceId === resource.id || impactPath.resourceIds.includes(resource.id);
+  });
 };
 
 const toSimulatorFormValues = (request: ToolCallRequest): SimulatorFormValues => {
@@ -262,6 +291,255 @@ const getAnalysisAlertTitle = (result: AnalyzeToolCallResponse) => {
 
   return '网关已返回允许执行结果';
 };
+
+const actionTupleDescriptionItems = (result: AnalyzeToolCallResponse) => [
+  {
+    key: 'toolType',
+    label: '工具类型',
+    children: toolTypeLabels[result.actionTuple.toolType],
+  },
+  {
+    key: 'operation',
+    label: '操作',
+    children: <Text code>{result.actionTuple.operation}</Text>,
+  },
+  {
+    key: 'target',
+    label: '目标',
+    children: <Text code>{result.actionTuple.target}</Text>,
+  },
+  {
+    key: 'environment',
+    label: '环境',
+    children: environmentLabels[result.actionTuple.environment],
+  },
+  {
+    key: 'actor',
+    label: 'Actor',
+    children: <Text code>{result.actionTuple.actor}</Text>,
+  },
+  {
+    key: 'timestamp',
+    label: '分析时间',
+    children: formatTimestamp(result.actionTuple.timestamp),
+  },
+  {
+    key: 'taskPurpose',
+    label: '任务目的',
+    children: result.actionTuple.taskPurpose,
+    span: 3,
+  },
+  {
+    key: 'parameters',
+    label: '规范化参数',
+    children: <pre className="simulator-json-preview">{formatJsonObject(result.actionTuple.parameters)}</pre>,
+    span: 3,
+  },
+];
+
+type TableColumns<T> = NonNullable<TableProps<T>['columns']>;
+
+const createResourceColumns = <T extends AffectedResource>(): TableColumns<T> => [
+  {
+    title: '资源',
+    key: 'resource',
+    render: (_, resource) => (
+      <Space orientation="vertical" size={0}>
+        <Text strong>{resource.name}</Text>
+        <Text code>{resource.id}</Text>
+      </Space>
+    ),
+    width: 220,
+  },
+  {
+    title: '类型/系统',
+    key: 'type',
+    render: (_, resource) => (
+      <Space orientation="vertical" size={0}>
+        <Text>{resource.type}</Text>
+        <Text type="secondary">{resource.system}</Text>
+      </Space>
+    ),
+    width: 160,
+  },
+  {
+    title: '环境',
+    dataIndex: 'environment',
+    key: 'environment',
+    render: (environment: Environment) => environmentLabels[environment],
+    width: 100,
+  },
+  {
+    title: '敏感度/关键性',
+    key: 'criticality',
+    render: (_, resource) => (
+      <Space orientation="vertical" size={0}>
+        <Text>{resource.sensitivityLevel}</Text>
+        <Text type="secondary">{resource.criticalityLevel}</Text>
+      </Space>
+    ),
+    width: 150,
+  },
+  {
+    title: 'Owner',
+    dataIndex: 'owner',
+    key: 'owner',
+    width: 140,
+  },
+  {
+    title: '回滚能力',
+    dataIndex: 'rollbackCapability',
+    key: 'rollbackCapability',
+    width: 120,
+  },
+];
+
+const resourceColumns = createResourceColumns<AffectedResource>();
+
+const riskFactorColumns: TableColumns<RiskFactor> = [
+  {
+    title: '风险因子',
+    key: 'factor',
+    render: (_, riskFactor) => (
+      <Space orientation="vertical" size={0}>
+        <Text strong>{riskFactor.label}</Text>
+        <Text type="secondary">{riskFactor.category}</Text>
+      </Space>
+    ),
+    width: 240,
+  },
+  {
+    title: '严重度',
+    dataIndex: 'severity',
+    key: 'severity',
+    render: (severity: RiskFactorSeverity) => renderSeverityTag(severity),
+    width: 110,
+  },
+  {
+    title: '分值',
+    dataIndex: 'score',
+    key: 'score',
+    width: 90,
+  },
+  {
+    title: '证据说明',
+    dataIndex: 'reason',
+    key: 'reason',
+    render: (reason: string) => <Text type="secondary">{reason}</Text>,
+  },
+];
+
+type IndirectResourceRow = AffectedResource & {
+  impactPath: ImpactPath | undefined;
+};
+
+const indirectResourceColumns: TableColumns<IndirectResourceRow> = [
+  ...createResourceColumns<IndirectResourceRow>(),
+  {
+    title: '影响路径',
+    key: 'impactPath',
+    render: (_, resource) => resource.impactPath ? (
+      <Space orientation="vertical" size={0}>
+        <Text>深度 {resource.impactPath.depth}</Text>
+        <Text type="secondary">{resource.impactPath.resourceIds.join(' → ')}</Text>
+      </Space>
+    ) : <Text type="secondary">未记录路径</Text>,
+    width: 260,
+  },
+];
+
+function AnalysisResultDetails({ result }: { result: AnalyzeToolCallResponse }) {
+  const indirectResourceRows = result.indirectResources.map((resource) => ({
+    ...resource,
+    impactPath: findImpactPath(result.impactPaths, resource),
+  }));
+
+  return (
+    <Flex vertical gap="middle">
+      <Card size="small" title="动作元组">
+        <Descriptions bordered column={{ xs: 1, md: 2, xl: 3 }} items={actionTupleDescriptionItems(result)} size="small" />
+      </Card>
+      <Card size="small" title="直接受影响资源">
+        <Table
+          columns={resourceColumns}
+          dataSource={result.directResources}
+          locale={{ emptyText: '未解析到直接受影响资源' }}
+          pagination={false}
+          rowKey="id"
+          scroll={{ x: 900 }}
+          size="small"
+        />
+      </Card>
+      <Card size="small" title="间接受影响资源">
+        <Table
+          columns={indirectResourceColumns}
+          dataSource={indirectResourceRows}
+          locale={{ emptyText: '未发现间接受影响资源' }}
+          pagination={false}
+          rowKey="id"
+          scroll={{ x: 1120 }}
+          size="small"
+        />
+      </Card>
+      <Card size="small" title="风险因子">
+        <Table
+          columns={riskFactorColumns}
+          dataSource={result.riskFactors}
+          locale={{ emptyText: '未生成风险因子' }}
+          pagination={false}
+          rowKey={(riskFactor) => `${riskFactor.category}-${riskFactor.label}`}
+          scroll={{ x: 760 }}
+          size="small"
+        />
+      </Card>
+      <Card size="small" title="执行决策与建议">
+        <Space orientation="vertical" size="middle">
+          <Space wrap>
+            <Text strong>风险等级</Text>
+            <RiskStatusTag status={result.riskLevel} />
+            <Text strong>执行决策</Text>
+            <DecisionStatusTag status={result.executionDecision.type as DecisionType} />
+            <Text type="secondary">Audit ID：<Text code>{result.auditId}</Text></Text>
+          </Space>
+          <Descriptions
+            bordered
+            column={1}
+            items={[
+              {
+                key: 'reason',
+                label: '决策原因',
+                children: result.executionDecision.reason,
+              },
+              {
+                key: 'recommendedAction',
+                label: '建议动作',
+                children: result.executionDecision.recommendedAction,
+              },
+              {
+                key: 'riskScore',
+                label: '评分解释',
+                children: `${result.riskScore.score} 分：${result.riskScore.explanation}`,
+              },
+              {
+                key: 'reasons',
+                label: '原因列表',
+                children: result.reasons.length > 0 ? result.reasons.join('；') : '未返回额外原因',
+              },
+              {
+                key: 'rewrite',
+                label: '改写建议',
+                children: result.executionDecision.rewrittenRequest ? (
+                  <pre className="simulator-json-preview">{formatJsonObject(result.executionDecision.rewrittenRequest.rawPayload)}</pre>
+                ) : '无需改写或未提供安全改写请求',
+              },
+            ]}
+            size="small"
+          />
+        </Space>
+      </Card>
+    </Flex>
+  );
+}
 
 const createDashboardMetrics = (audits: AuditRecord[]) => [
   {
@@ -805,36 +1083,36 @@ function SimulatorPage() {
           </Space>
         </Form>
       </Card>
-      {submittedRequest || isAnalyzing || analysisError || analysisResult ? (
-        <Card title="网关分析结果">
-          <Space orientation="vertical" size="middle">
-            {isAnalyzing ? (
-              <LoadingState title="正在提交安全网关分析" description="等待 POST /api/tool-calls/analyze 返回风险和执行决策，executor 仍保持关闭。" />
-            ) : null}
-            {analysisError ? (
-              <Alert
-                showIcon
-                type="error"
-                title="安全网关分析失败"
-                description={`${analysisError.message}（${analysisError.code}）。请修正表单或确认 API 服务可访问；失败时不会触发 executor。`}
-              />
-            ) : null}
-            {analysisResult ? (
-              <Alert
-                showIcon
-                type={getAnalysisAlertType(analysisResult)}
-                title={getAnalysisAlertTitle(analysisResult)}
-                description={analysisResult.executionDecision.reason}
-              />
-            ) : null}
+      <Card title="网关分析结果">
+        <Space orientation="vertical" size="middle">
+          {!submittedRequest && !isAnalyzing && !analysisError && !analysisResult ? (
+            <EmptyState
+              title="暂无分析结果"
+              description="请选择种子场景或手动填写工具调用，再提交安全网关分析；没有网关决策前 executor 始终保持关闭。"
+            />
+          ) : null}
+          {isAnalyzing ? (
+            <LoadingState title="正在提交安全网关分析" description="等待 POST /api/tool-calls/analyze 返回风险和执行决策，executor 仍保持关闭。" />
+          ) : null}
+          {analysisError ? (
             <Alert
               showIcon
-              type="info"
-              title="已调用 POST /api/tool-calls/analyze"
-              description="页面只展示分析响应和审计 id；真实工具执行仍需后续守卫根据网关决策单独控制。"
+              type="error"
+              title="安全网关分析失败"
+              description={`${analysisError.message}（${analysisError.code}）。请修正表单或确认 API 服务可访问；失败时不会触发 executor。`}
             />
-            {submittedRequest ? (
-              <>
+          ) : null}
+          {analysisResult ? (
+            <Alert
+              showIcon
+              type={getAnalysisAlertType(analysisResult)}
+              title={getAnalysisAlertTitle(analysisResult)}
+              description={analysisResult.executionDecision.reason}
+            />
+          ) : null}
+          {submittedRequest ? (
+            <Card size="small" title="提交请求摘要">
+              <Space orientation="vertical" size="small">
                 <Flex gap="middle" wrap>
                   <Text>
                     工具类型：<Text strong>{toolTypeLabels[submittedRequest.toolType]}</Text>
@@ -851,28 +1129,12 @@ function SimulatorPage() {
                   <Text strong>工具专用参数</Text>
                   {renderSubmittedParameters(toSimulatorFormValues(submittedRequest))}
                 </Space>
-              </>
-            ) : null}
-            {analysisResult ? (
-              <Space orientation="vertical" size="small">
-                <Space wrap>
-                  <Text strong>风险等级</Text>
-                  <RiskStatusTag status={analysisResult.riskLevel} />
-                  <Text strong>执行决策</Text>
-                  <DecisionStatusTag status={analysisResult.executionDecision.type as DecisionType} />
-                </Space>
-                <Text>
-                  动作：<Text code>{analysisResult.actionTuple.operation}</Text> → <Text code>{analysisResult.actionTuple.target}</Text>
-                </Text>
-                <Text>
-                  直接受影响资源：<Text strong>{analysisResult.directResources.map((resource) => resource.name).join('、') || '暂无'}</Text>
-                </Text>
-                <Text type="secondary">Audit ID：<Text code>{analysisResult.auditId}</Text></Text>
               </Space>
-            ) : null}
-          </Space>
-        </Card>
-      ) : null}
+            </Card>
+          ) : null}
+          {analysisResult ? <AnalysisResultDetails result={analysisResult} /> : null}
+        </Space>
+      </Card>
     </Flex>
   );
 }
