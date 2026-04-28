@@ -6,12 +6,15 @@
   "type": "module",
   "scripts": {
     "dev": "pnpm --filter @agent-safety-gateway/api dev",
-    "build": "pnpm --filter @agent-safety-gateway/shared build && pnpm --filter @agent-safety-gateway/api build",
-    "typecheck": "pnpm --filter @agent-safety-gateway/shared typecheck && pnpm --filter @agent-safety-gateway/api typecheck",
+    "build": "pnpm --filter @agent-safety-gateway/shared build && pnpm --filter @agent-safety-gateway/api build && pnpm --filter @agent-safety-gateway/web build",
+    "typecheck": "pnpm --filter @agent-safety-gateway/shared typecheck && pnpm --filter @agent-safety-gateway/api typecheck && pnpm --filter @agent-safety-gateway/web typecheck",
     "test": "node scripts/workspace-placeholder.mjs test",
     "lint": "node scripts/workspace-placeholder.mjs lint",
     "format": "node scripts/workspace-placeholder.mjs format",
-    "seed": "pnpm --filter @agent-safety-gateway/api seed"
+    "seed": "pnpm --filter @agent-safety-gateway/api seed",
+    "dev:web": "pnpm --filter @agent-safety-gateway/web dev",
+    "build:web": "pnpm --filter @agent-safety-gateway/web build",
+    "typecheck:web": "pnpm --filter @agent-safety-gateway/web typecheck"
   },
   "devDependencies": {
     "typescript": "^5.9.3"

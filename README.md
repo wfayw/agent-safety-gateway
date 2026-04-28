@@ -6,13 +6,13 @@
 
 ## 当前阶段
 
-当前仓库处于基础骨架阶段，已提供 pnpm monorepo、基础 TypeScript 配置和占位命令。核心网关服务、前端应用、策略引擎、审计回放、真实验证场景和 executor guard 会在后续迭代中逐步补齐。
+当前仓库已提供 pnpm monorepo、基础 TypeScript 配置、分析 API 骨架和 Vite React Ant Design Web 应用。策略引擎、审计回放、真实验证场景和 executor guard 会在后续迭代中逐步补齐。
 
 ## 目录结构
 
 ```text
 agent-safety-gateway/
-├── apps/                 # Web 应用入口，后续承载 Ant Design 前端
+├── apps/web/             # Vite React Ant Design 前端应用
 ├── services/             # 后端服务入口，后续承载分析 API 和执行守卫示例
 ├── packages/             # 共享包，后续承载领域类型、规则引擎和适配器
 ├── skills/               # 项目相关技能、运行规范或可复用执行说明
@@ -30,6 +30,9 @@ agent-safety-gateway/
 
 ```bash
 pnpm dev
+pnpm dev:web
+pnpm build:web
+pnpm typecheck:web
 pnpm build
 pnpm typecheck
 pnpm test
@@ -38,7 +41,7 @@ pnpm format
 pnpm seed
 ```
 
-其中 `pnpm typecheck` 是当前最小验证命令。后续包落地后，这些命令会逐步替换为真实的 API、Web、测试和数据种子化流程。
+其中 `pnpm typecheck:web`、`pnpm build:web` 可单独验证前端应用，`pnpm typecheck` 是当前工作区最小整体验证命令。
 
 ## 未完成能力
 
@@ -46,7 +49,7 @@ pnpm seed
 - ToolCallRequest/Decision/AuditRecord 等领域模型
 - SQL 删除阻断、SQL 查询放行、测试失败发布阻断和生产配置变更沙箱/审批建议规则
 - 工具执行守卫、mock executor 与真实组件 adapter
-- Ant Design 最小前端、审计回放页和场景验证入口
+- 审计回放页和场景验证入口
 - RV-001 到 RV-004 真实验证报告和证据归档
 - 后台资源/策略管理系统与正式专利文档生成
 
