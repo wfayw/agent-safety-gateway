@@ -2,7 +2,7 @@ import { Alert, Button, Card, ConfigProvider, Flex, Form, Input, Layout, Menu, S
 import type { FormProps, MenuProps, TableProps } from 'antd';
 import type { AuditRecord, DecisionType, Environment, JsonValue, RiskLevel, ToolCallRequest, ToolType } from '@agent-safety-gateway/shared';
 import { useEffect, useMemo, useState } from 'react';
-import { listAudits, listScenarios, normalizeApiError, type ApiErrorPayload, type ScenarioSummary } from './api';
+import { analyzeToolCall, listAudits, listScenarios, normalizeApiError, type AnalyzeToolCallResponse, type ApiErrorPayload, type ScenarioSummary } from './api';
 import { safetyGatewayTheme } from './theme';
 import { EmptyState, ErrorState, LoadingState, SectionHeader } from './ui/states';
 import { DecisionStatusTag, RiskStatusTag } from './ui/status-tags';
@@ -174,6 +174,93 @@ const toSimulatorFormValues = (request: ToolCallRequest): SimulatorFormValues =>
         configValue: toStringValue(request.rawPayload.value),
       };
   }
+};
+
+const createRequestId = () => {
+  if (globalThis.crypto?.randomUUID) {
+    return `sim-${globalThis.crypto.randomUUID()}`;
+  }
+
+  return `sim-${Date.now().toString(36)}`;
+};
+
+const toToolCallRequest = (
+  values: SimulatorFormValues,
+  sourceRequest?: ToolCallRequest,
+): ToolCallRequest => {
+  const baseRequest = {
+    actor: values.actor,
+    createdAt: new Date().toISOString(),
+    environment: values.environment,
+    id: createRequestId(),
+    taskPurpose: values.taskPurpose,
+    toolType: values.toolType,
+  } satisfies Omit<ToolCallRequest, 'rawPayload'>;
+
+  switch (values.toolType) {
+    case 'sql':
+      return {
+        ...baseRequest,
+        rawPayload: {
+          ...(sourceRequest?.toolType === 'sql' ? sourceRequest.rawPayload : {}),
+          sql: values.sqlText ?? '',
+        },
+      };
+    case 'ci_cd':
+      return {
+        ...baseRequest,
+        rawPayload: {
+          ...(sourceRequest?.toolType === 'ci_cd' ? sourceRequest.rawPayload : {}),
+          service: values.cicdService ?? '',
+          stage: sourceRequest?.toolType === 'ci_cd' ? sourceRequest.rawPayload.stage ?? 'deploy' : 'deploy',
+          testStatus: values.cicdTestStatus ?? '',
+          version: values.cicdVersion ?? '',
+        },
+      };
+    case 'config':
+      return {
+        ...baseRequest,
+        rawPayload: {
+          ...(sourceRequest?.toolType === 'config' ? sourceRequest.rawPayload : {}),
+          key: values.configKey ?? '',
+          operation: sourceRequest?.toolType === 'config' ? sourceRequest.rawPayload.operation ?? 'update' : 'update',
+          service: values.configService ?? '',
+          value: values.configValue ?? '',
+        },
+      };
+  }
+};
+
+const getAnalysisAlertType = (result: AnalyzeToolCallResponse) => {
+  if (result.executionDecision.type === 'block' || result.riskLevel === 'prohibited') {
+    return 'error' as const;
+  }
+
+  if (result.executionDecision.type === 'sandbox' || result.executionDecision.type === 'require_approval') {
+    return 'warning' as const;
+  }
+
+  return 'success' as const;
+};
+
+const getAnalysisAlertTitle = (result: AnalyzeToolCallResponse) => {
+  if (result.executionDecision.type === 'block') {
+    return '已阻断：executor 不会被调用';
+  }
+
+  if (result.riskLevel === 'prohibited') {
+    return '禁止风险：executor 不会被调用';
+  }
+
+  if (result.executionDecision.type === 'sandbox') {
+    return '建议沙箱执行：不要直接写入生产资源';
+  }
+
+  if (result.executionDecision.type === 'require_approval') {
+    return '需要审批：审批通过前不要执行工具';
+  }
+
+  return '网关已返回允许执行结果';
 };
 
 const createDashboardMetrics = (audits: AuditRecord[]) => [
@@ -387,7 +474,11 @@ function SimulatorPage() {
   const [isLoadingScenarios, setIsLoadingScenarios] = useState(true);
   const [scenarioError, setScenarioError] = useState<ApiErrorPayload | null>(null);
   const [activeScenario, setActiveScenario] = useState<ScenarioSummary | null>(null);
-  const [submittedRequest, setSubmittedRequest] = useState<SimulatorFormValues | null>(null);
+  const [submittedRequest, setSubmittedRequest] = useState<ToolCallRequest | null>(null);
+  const [analysisResult, setAnalysisResult] = useState<AnalyzeToolCallResponse | null>(null);
+  const [analysisError, setAnalysisError] = useState<ApiErrorPayload | null>(null);
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const selectedToolType = Form.useWatch('toolType', form);
 
   useEffect(() => {
@@ -423,10 +514,13 @@ function SimulatorPage() {
 
   const handleValuesChange: FormProps<SimulatorFormValues>['onValuesChange'] = (changedValues) => {
     setActiveScenario(null);
+    setSubmittedRequest(null);
+    setAnalysisResult(null);
+    setAnalysisError(null);
+    setValidationError(null);
 
     if (Object.hasOwn(changedValues, 'toolType')) {
       form.resetFields(toolParameterFieldNames);
-      setSubmittedRequest(null);
     }
   };
 
@@ -435,10 +529,36 @@ function SimulatorPage() {
     form.setFieldsValue(toSimulatorFormValues(scenario.toolCallRequest));
     setActiveScenario(scenario);
     setSubmittedRequest(null);
+    setAnalysisResult(null);
+    setAnalysisError(null);
+    setValidationError(null);
   };
 
-  const handleSubmit: FormProps<SimulatorFormValues>['onFinish'] = (values) => {
-    setSubmittedRequest(values);
+  const handleSubmit: FormProps<SimulatorFormValues>['onFinish'] = async (values) => {
+    const request = toToolCallRequest(values, activeScenario?.toolCallRequest);
+
+    setSubmittedRequest(request);
+    setAnalysisResult(null);
+    setAnalysisError(null);
+    setValidationError(null);
+    setIsAnalyzing(true);
+
+    try {
+      const result = await analyzeToolCall(request);
+
+      setAnalysisResult(result);
+    } catch (submitError: unknown) {
+      setAnalysisError(normalizeApiError(submitError, '工具调用分析失败'));
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const handleSubmitFailed: FormProps<SimulatorFormValues>['onFinishFailed'] = ({ errorFields }) => {
+    setSubmittedRequest(null);
+    setAnalysisResult(null);
+    setAnalysisError(null);
+    setValidationError(`请先修正 ${errorFields.length} 个必填或格式校验问题，再提交安全网关分析。`);
   };
 
   const renderToolParameterFields = () => {
@@ -617,10 +737,19 @@ function SimulatorPage() {
           form={form}
           layout="vertical"
           onFinish={handleSubmit}
+          onFinishFailed={handleSubmitFailed}
           onValuesChange={handleValuesChange}
           requiredMark="optional"
           validateMessages={{ required: '请填写${label}' }}
         >
+          {validationError ? (
+            <Alert
+              showIcon
+              type="error"
+              title="表单校验未通过"
+              description={`${validationError} 校验失败时不会调用分析 API，也不会触发 executor。`}
+            />
+          ) : null}
           <Flex gap="middle" wrap>
             <Form.Item
               label="工具类型"
@@ -660,44 +789,87 @@ function SimulatorPage() {
             {renderToolParameterFields()}
           </Card>
           <Space wrap>
-            <Button htmlType="submit" type="primary">
-              提交待分析请求
+            <Button htmlType="submit" loading={isAnalyzing} type="primary">
+              提交安全网关分析
             </Button>
             <Button onClick={() => {
               form.resetFields();
               setActiveScenario(null);
               setSubmittedRequest(null);
+              setAnalysisResult(null);
+              setAnalysisError(null);
+              setValidationError(null);
             }}>
               清空表单
             </Button>
           </Space>
         </Form>
       </Card>
-      {submittedRequest ? (
-        <Card title="已生成待分析请求">
+      {submittedRequest || isAnalyzing || analysisError || analysisResult ? (
+        <Card title="网关分析结果">
           <Space orientation="vertical" size="middle">
+            {isAnalyzing ? (
+              <LoadingState title="正在提交安全网关分析" description="等待 POST /api/tool-calls/analyze 返回风险和执行决策，executor 仍保持关闭。" />
+            ) : null}
+            {analysisError ? (
+              <Alert
+                showIcon
+                type="error"
+                title="安全网关分析失败"
+                description={`${analysisError.message}（${analysisError.code}）。请修正表单或确认 API 服务可访问；失败时不会触发 executor。`}
+              />
+            ) : null}
+            {analysisResult ? (
+              <Alert
+                showIcon
+                type={getAnalysisAlertType(analysisResult)}
+                title={getAnalysisAlertTitle(analysisResult)}
+                description={analysisResult.executionDecision.reason}
+              />
+            ) : null}
             <Alert
               showIcon
-              type="success"
-              title="基础字段校验通过"
-              description="请求草稿已准备好进入后续工具参数填写和网关分析步骤，executor 仍保持关闭。"
+              type="info"
+              title="已调用 POST /api/tool-calls/analyze"
+              description="页面只展示分析响应和审计 id；真实工具执行仍需后续守卫根据网关决策单独控制。"
             />
-            <Flex gap="middle" wrap>
-              <Text>
-                工具类型：<Text strong>{toolTypeLabels[submittedRequest.toolType]}</Text>
-              </Text>
-              <Text>
-                目标环境：<Text strong>{environmentLabels[submittedRequest.environment]}</Text>
-              </Text>
-              <Text>
-                Actor：<Text code>{submittedRequest.actor}</Text>
-              </Text>
-            </Flex>
-            <Text type="secondary">Task purpose：{submittedRequest.taskPurpose}</Text>
-            <Space orientation="vertical" size={4}>
-              <Text strong>工具专用参数</Text>
-              {renderSubmittedParameters(submittedRequest)}
-            </Space>
+            {submittedRequest ? (
+              <>
+                <Flex gap="middle" wrap>
+                  <Text>
+                    工具类型：<Text strong>{toolTypeLabels[submittedRequest.toolType]}</Text>
+                  </Text>
+                  <Text>
+                    目标环境：<Text strong>{environmentLabels[submittedRequest.environment]}</Text>
+                  </Text>
+                  <Text>
+                    Actor：<Text code>{submittedRequest.actor}</Text>
+                  </Text>
+                </Flex>
+                <Text type="secondary">Task purpose：{submittedRequest.taskPurpose}</Text>
+                <Space orientation="vertical" size={4}>
+                  <Text strong>工具专用参数</Text>
+                  {renderSubmittedParameters(toSimulatorFormValues(submittedRequest))}
+                </Space>
+              </>
+            ) : null}
+            {analysisResult ? (
+              <Space orientation="vertical" size="small">
+                <Space wrap>
+                  <Text strong>风险等级</Text>
+                  <RiskStatusTag status={analysisResult.riskLevel} />
+                  <Text strong>执行决策</Text>
+                  <DecisionStatusTag status={analysisResult.executionDecision.type as DecisionType} />
+                </Space>
+                <Text>
+                  动作：<Text code>{analysisResult.actionTuple.operation}</Text> → <Text code>{analysisResult.actionTuple.target}</Text>
+                </Text>
+                <Text>
+                  直接受影响资源：<Text strong>{analysisResult.directResources.map((resource) => resource.name).join('、') || '暂无'}</Text>
+                </Text>
+                <Text type="secondary">Audit ID：<Text code>{analysisResult.auditId}</Text></Text>
+              </Space>
+            ) : null}
           </Space>
         </Card>
       ) : null}
