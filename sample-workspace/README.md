@@ -17,6 +17,7 @@
 ## 目录说明
 
 - `payment-service/`：虚构支付服务样例，描述部署目标、运行约束和关键配置。
+- `agent-tasks/`：中文 Agent 任务输入样例，用于驱动 SQL、发布和配置变更验证。
 - `data/orders.json`：虚构订单表样例数据，用于 SQL 删除和只读查询场景。
 - `pipelines/payment-service-release.json`：虚构发布流水线 fixture，用于测试失败的生产发布阻断场景。
 - `config-store/payment-service.production.json`：虚构生产配置仓库 fixture，用于关键配置变更沙箱或审批场景。
