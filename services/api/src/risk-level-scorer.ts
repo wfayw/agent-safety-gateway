@@ -47,7 +47,7 @@ export type RiskLevelScorer = {
 
 const defaultThresholds: RiskLevelThresholds = {
   medium: 30,
-  high: 80,
+  high: 90,
   prohibited: 120,
 };
 
