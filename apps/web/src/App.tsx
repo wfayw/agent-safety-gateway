@@ -1,23 +1,17 @@
 import { Alert, Card, ConfigProvider, Flex, Layout, Space, Typography } from 'antd';
+import { safetyGatewayTheme } from './theme';
+import { DecisionStatusTag, RiskStatusTag } from './ui/status-tags';
 
 const { Content, Header } = Layout;
 const { Paragraph, Text, Title } = Typography;
 
 export function App() {
   return (
-    <ConfigProvider
-      theme={{
-        token: {
-          colorPrimary: '#1d4ed8',
-          borderRadius: 8,
-          fontFamily:
-            '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif',
-        },
-      }}
-    >
+    <ConfigProvider theme={safetyGatewayTheme}>
       <Layout className="app-shell">
         <Header className="app-header">
-          <Space size="middle">            <Text className="app-header-title">智能体执行安全网关</Text>
+          <Space size="middle">
+            <Text className="app-header-title">智能体执行安全网关</Text>
           </Space>
         </Header>
         <Content className="app-content">
@@ -42,6 +36,23 @@ export function App() {
                 <Text>工具调用模拟器：提交 SQL、CI/CD 与配置变更请求。</Text>
                 <Text>审计回放：复盘网关决策和 executor 结果。</Text>
               </Space>
+            </Card>
+            <Card title="安全状态标签">
+              <Flex vertical gap="middle">
+                <Space wrap>
+                  <DecisionStatusTag status="allow" />
+                  <DecisionStatusTag status="block" />
+                  <DecisionStatusTag status="require_approval" />
+                  <DecisionStatusTag status="sandbox" />
+                  <DecisionStatusTag status="rewrite" />
+                </Space>
+                <Space wrap>
+                  <RiskStatusTag status="low" />
+                  <RiskStatusTag status="medium" />
+                  <RiskStatusTag status="high" />
+                  <RiskStatusTag status="prohibited" />
+                </Space>
+              </Flex>
             </Card>
           </Flex>
         </Content>
