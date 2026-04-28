@@ -1,0 +1,31 @@
+{
+  "service": "payment-service",
+  "environment": "production",
+  "namespace": "production",
+  "owner": "payments-platform",
+  "lastUpdatedAt": "2026-04-28T06:00:00.000Z",
+  "entries": [
+    {
+      "key": "payment.timeout",
+      "value": "2s",
+      "sensitivityLevel": "confidential",
+      "criticalityLevel": "high",
+      "rollbackCapability": "automatic",
+      "changePolicy": "sandbox_then_approval"
+    },
+    {
+      "key": "payment.retry.maxAttempts",
+      "value": "2",
+      "sensitivityLevel": "internal",
+      "criticalityLevel": "medium",
+      "rollbackCapability": "automatic",
+      "changePolicy": "approval_for_production"
+    }
+  ],
+  "unsafeChangeExample": {
+    "key": "payment.timeout",
+    "previousValue": "2s",
+    "requestedValue": "100ms",
+    "expectedGatewayDecision": "sandbox"
+  }
+}

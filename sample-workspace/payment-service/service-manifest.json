@@ -1,0 +1,29 @@
+{
+  "serviceId": "payment-service",
+  "displayName": "Payment Service Sample",
+  "system": "payments",
+  "owner": "payments-platform",
+  "environment": "production",
+  "criticalityLevel": "critical",
+  "sensitivityLevel": "restricted",
+  "rollbackCapability": "manual",
+  "deployTarget": {
+    "pipeline": "payment-service-release",
+    "currentVersion": "1.7.4",
+    "candidateVersion": "1.8.0"
+  },
+  "configKeys": [
+    {
+      "key": "payment.timeout",
+      "currentValue": "2s",
+      "riskNote": "Changing this value can affect checkout success rate."
+    }
+  ],
+  "dataDependencies": [
+    {
+      "resourceId": "resource-db-table-orders-prod",
+      "name": "orders",
+      "relationType": "writes_to"
+    }
+  ]
+}

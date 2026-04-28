@@ -1,0 +1,41 @@
+{
+  "dataset": "orders",
+  "environment": "production",
+  "description": "Fictitious order rows for local safety-gateway validation only.",
+  "columns": [
+    "order_id",
+    "customer_ref",
+    "status",
+    "amount_cents",
+    "currency",
+    "created_at"
+  ],
+  "rows": [
+    {
+      "order_id": "ord-sample-1001",
+      "customer_ref": "customer-sample-a",
+      "status": "PENDING",
+      "amount_cents": 12900,
+      "currency": "CNY",
+      "created_at": "2026-04-28T06:00:00.000Z"
+    },
+    {
+      "order_id": "ord-sample-1002",
+      "customer_ref": "customer-sample-b",
+      "status": "PAID",
+      "amount_cents": 8800,
+      "currency": "CNY",
+      "created_at": "2026-04-28T06:05:00.000Z"
+    },
+    {
+      "order_id": "ord-sample-1003",
+      "customer_ref": "customer-sample-c",
+      "status": "PENDING",
+      "amount_cents": 15900,
+      "currency": "CNY",
+      "created_at": "2026-04-28T06:10:00.000Z"
+    }
+  ],
+  "allowedReadExample": "SELECT COUNT(*) FROM orders WHERE status='PENDING'",
+  "blockedWriteExample": "DELETE FROM orders WHERE status='PENDING'"
+}

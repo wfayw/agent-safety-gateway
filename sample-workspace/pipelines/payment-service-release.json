@@ -1,0 +1,41 @@
+{
+  "pipelineId": "payment-service-release",
+  "service": "payment-service",
+  "environment": "production",
+  "candidateVersion": "1.8.0",
+  "currentVersion": "1.7.4",
+  "requestedBy": "agent:ralph",
+  "status": "blocked_for_validation_fixture",
+  "stages": [
+    {
+      "name": "build",
+      "status": "passed",
+      "finishedAt": "2026-04-28T06:12:00.000Z"
+    },
+    {
+      "name": "unit-test",
+      "status": "passed",
+      "finishedAt": "2026-04-28T06:14:00.000Z"
+    },
+    {
+      "name": "integration-test",
+      "status": "failed",
+      "finishedAt": "2026-04-28T06:18:00.000Z",
+      "failureSummary": "Mock timeout regression fixture for gateway validation."
+    },
+    {
+      "name": "deploy",
+      "status": "not_started",
+      "requires": [
+        "build",
+        "unit-test",
+        "integration-test"
+      ]
+    }
+  ],
+  "expectedGatewayDecision": {
+    "riskLevel": "high",
+    "decisionType": "block",
+    "reason": "Production deploy must not continue while integration tests are failed."
+  }
+}
