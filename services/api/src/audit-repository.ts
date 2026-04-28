@@ -3,13 +3,24 @@ import { appendFile, readFile } from "node:fs/promises";
 import {
   AuditRecordSchema,
   type AuditRecord,
+  type DecisionType,
+  type Environment,
+  type RiskLevel,
+  type ToolType,
 } from "@agent-safety-gateway/shared";
 
 import type { LocalStorageLayout } from "./storage.js";
 
+export type AuditRecordFilters = {
+  decision?: DecisionType;
+  riskLevel?: RiskLevel;
+  toolType?: ToolType;
+  environment?: Environment;
+};
+
 export type AuditRepository = {
   createAuditRecord: (record: AuditRecord) => Promise<AuditRecord>;
-  listAuditRecords: () => Promise<AuditRecord[]>;
+  listAuditRecords: (filters?: AuditRecordFilters) => Promise<AuditRecord[]>;
   getAuditRecordById: (auditId: string) => Promise<AuditRecord | null>;
 };
 
@@ -38,7 +49,29 @@ const readAuditRecordStore = async (
 export const createAuditRepository = (
   layout: LocalStorageLayout,
 ): AuditRepository => {
-  const listAuditRecords = () => readAuditRecordStore(layout.stores.audits);
+  const listAuditRecords = async (filters: AuditRecordFilters = {}) => {
+    const auditRecords = await readAuditRecordStore(layout.stores.audits);
+
+    return auditRecords.filter((record) => {
+      if (filters.decision && record.decision.type !== filters.decision) {
+        return false;
+      }
+
+      if (filters.riskLevel && record.riskLevel !== filters.riskLevel) {
+        return false;
+      }
+
+      if (filters.toolType && record.request.toolType !== filters.toolType) {
+        return false;
+      }
+
+      if (filters.environment && record.request.environment !== filters.environment) {
+        return false;
+      }
+
+      return true;
+    });
+  };
 
   return {
     async createAuditRecord(record) {

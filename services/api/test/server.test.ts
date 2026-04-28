@@ -5,9 +5,13 @@ import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 
 import {
+  CiCdScenarioFixtureId,
+  ConfigScenarioFixtureId,
   DecisionType,
   RiskLevel,
   SqlScenarioFixtureId,
+  cicdScenarioFixtures,
+  configScenarioFixtures,
   sqlScenarioFixtures,
 } from "@agent-safety-gateway/shared";
 import type { FastifyInstance } from "fastify";
@@ -41,8 +45,9 @@ const createSeededLayout = async (): Promise<LocalStorageLayout> => {
 
 const createAnalysisServer = async () => {
   const layout = await createSeededLayout();
+  let auditRecordCount = 0;
   const service = createDefaultToolCallAnalysisService(layout, {
-    idFactory: () => "audit-route-1",
+    idFactory: () => `audit-route-${++auditRecordCount}`,
     now: () => new Date("2026-04-28T08:00:00.000Z"),
   });
   const server = buildServer({
@@ -67,6 +72,50 @@ const getSqlDeleteFixture = () => {
   assert.ok(fixture);
   return fixture;
 };
+
+const getSqlReadFixture = () => {
+  const fixture = sqlScenarioFixtures.find(
+    (scenario) => scenario.id === SqlScenarioFixtureId.LowRiskReadOrders,
+  );
+
+  assert.ok(fixture);
+  return fixture;
+};
+
+const getCiCdDeployFixture = () => {
+  const fixture = cicdScenarioFixtures.find(
+    (scenario) =>
+      scenario.id === CiCdScenarioFixtureId.ProductionDeployPaymentService,
+  );
+
+  assert.ok(fixture);
+  return fixture;
+};
+
+const getConfigUpdateFixture = () => {
+  const fixture = configScenarioFixtures.find(
+    (scenario) =>
+      scenario.id === ConfigScenarioFixtureId.ProductionPaymentTimeoutUpdate,
+  );
+
+  assert.ok(fixture);
+  return fixture;
+};
+
+const analyzeFixture = async (
+  server: FastifyInstance,
+  fixture: ReturnType<
+    | typeof getSqlDeleteFixture
+    | typeof getSqlReadFixture
+    | typeof getCiCdDeployFixture
+    | typeof getConfigUpdateFixture
+  >,
+) =>
+  server.inject({
+    method: "POST",
+    url: "/api/tool-calls/analyze",
+    payload: fixture.request,
+  });
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => server.close()));
@@ -145,6 +194,107 @@ describe("API server", () => {
     assert.ok(body.riskFactors.length > 0);
     assert.ok(body.reasons.length > 0);
     assert.equal(body.auditId, "audit-route-1");
+  });
+
+  it("lists audit records and filters by decision, risk, tool, and environment", async () => {
+    const server = await createAnalysisServer();
+    const sqlDeleteFixture = getSqlDeleteFixture();
+    const sqlReadFixture = getSqlReadFixture();
+    const ciCdDeployFixture = getCiCdDeployFixture();
+
+    await analyzeFixture(server, sqlDeleteFixture);
+    await analyzeFixture(server, sqlReadFixture);
+    await analyzeFixture(server, ciCdDeployFixture);
+
+    const listResponse = await server.inject({ method: "GET", url: "/api/audits" });
+    const listBody = listResponse.json();
+
+    assert.equal(listResponse.statusCode, 200);
+    assert.deepEqual(
+      listBody.audits.map((audit: { id: string }) => audit.id),
+      ["audit-route-1", "audit-route-2", "audit-route-3"],
+    );
+
+    const allowResponse = await server.inject({
+      method: "GET",
+      url: "/api/audits?decision=allow",
+    });
+    assert.deepEqual(
+      allowResponse.json().audits.map((audit: { id: string }) => audit.id),
+      ["audit-route-2"],
+    );
+
+    const lowRiskResponse = await server.inject({
+      method: "GET",
+      url: "/api/audits?riskLevel=low",
+    });
+    assert.deepEqual(
+      lowRiskResponse.json().audits.map((audit: { id: string }) => audit.id),
+      ["audit-route-2"],
+    );
+
+    const ciCdResponse = await server.inject({
+      method: "GET",
+      url: "/api/audits?toolType=ci_cd",
+    });
+    assert.deepEqual(
+      ciCdResponse.json().audits.map((audit: { id: string }) => audit.id),
+      ["audit-route-3"],
+    );
+
+    const productionSqlBlockResponse = await server.inject({
+      method: "GET",
+      url: "/api/audits?environment=production&decision=block&toolType=sql",
+    });
+    assert.deepEqual(
+      productionSqlBlockResponse
+        .json()
+        .audits.map((audit: { id: string }) => audit.id),
+      ["audit-route-1"],
+    );
+  });
+
+  it("returns complete audit details by id", async () => {
+    const server = await createAnalysisServer();
+    const fixture = getSqlDeleteFixture();
+    const analyzeResponse = await analyzeFixture(server, fixture);
+    const auditId = analyzeResponse.json().auditId;
+
+    const detailResponse = await server.inject({
+      method: "GET",
+      url: `/api/audits/${auditId}`,
+    });
+    const body = detailResponse.json();
+
+    assert.equal(detailResponse.statusCode, 200);
+    assert.equal(body.audit.id, auditId);
+    assert.deepEqual(body.audit.request, fixture.request);
+    assert.equal(body.audit.actionTuple.operation, fixture.expectedActionTuple.operation);
+    assert.equal(body.audit.riskLevel, RiskLevel.Prohibited);
+    assert.equal(body.audit.decision.type, DecisionType.Block);
+    assert.ok(body.audit.directResources.length > 0);
+    assert.ok(body.audit.indirectResources.length > 0);
+    assert.ok(body.audit.impactPaths.length > 0);
+    assert.ok(body.audit.riskFactors.length > 0);
+    assert.equal(body.audit.createdAt, "2026-04-28T08:00:00.000Z");
+  });
+
+  it("returns 404 for missing audit records", async () => {
+    const server = await createAnalysisServer();
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/audits/audit-missing",
+    });
+
+    assert.equal(response.statusCode, 404);
+    assert.deepEqual(response.json(), {
+      code: "AUDIT_NOT_FOUND",
+      message: "Audit record not found",
+      details: {
+        auditId: "audit-missing",
+      },
+    });
   });
 
   it("lists seeded scenarios with simulator-ready tool call requests", async () => {

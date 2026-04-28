@@ -1,5 +1,11 @@
 import Fastify from "fastify";
-import { ToolCallRequestSchema } from "@agent-safety-gateway/shared";
+import {
+  DecisionType,
+  Environment,
+  RiskLevel,
+  ToolCallRequestSchema,
+  ToolType,
+} from "@agent-safety-gateway/shared";
 
 import { ApiLogLevel, createApiConfig, type ApiConfig } from "./config.js";
 import { registerErrorHandlers, sendErrorResponse } from "./errors.js";
@@ -13,6 +19,11 @@ import {
   type ScenarioRepository,
 } from "./scenario-repository.js";
 import {
+  createAuditRepository,
+  type AuditRecordFilters,
+  type AuditRepository,
+} from "./audit-repository.js";
+import {
   createDefaultToolCallAnalysisService,
   ToolCallAnalysisError,
   type ToolCallAnalysisService,
@@ -24,9 +35,13 @@ export type ApiServerOptions = {
   config?: ApiConfig;
   logger?: ApiLoggerOption;
   localStorageLayout?: LocalStorageLayout;
+  auditRepository?: AuditRepository;
   scenarioRepository?: ScenarioRepository;
   toolCallAnalysisService?: ToolCallAnalysisService;
 };
+
+const enumValues = <T extends Record<string, string>>(values: T) =>
+  Object.values(values);
 
 const createLoggerOption = (config: ApiConfig): ApiLoggerOption => {
   if (config.logLevel === ApiLogLevel.Silent) {
@@ -45,6 +60,8 @@ export const buildServer = (options: ApiServerOptions = {}) => {
     createDefaultToolCallAnalysisService(localStorageLayout);
   const scenarioRepository =
     options.scenarioRepository ?? createScenarioRepository(localStorageLayout);
+  const auditRepository =
+    options.auditRepository ?? createAuditRepository(localStorageLayout);
   const server = Fastify({
     logger: options.logger ?? createLoggerOption(config),
   });
@@ -76,6 +93,76 @@ export const buildServer = (options: ApiServerOptions = {}) => {
   server.get("/api/scenarios", async () => ({
     scenarios: await scenarioRepository.listScenarios(),
   }));
+
+  server.get(
+    "/api/audits",
+    {
+      schema: {
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            decision: {
+              type: "string",
+              enum: enumValues(DecisionType),
+            },
+            riskLevel: {
+              type: "string",
+              enum: enumValues(RiskLevel),
+            },
+            toolType: {
+              type: "string",
+              enum: enumValues(ToolType),
+            },
+            environment: {
+              type: "string",
+              enum: enumValues(Environment),
+            },
+          },
+        },
+      },
+    },
+    async (request) => ({
+      audits: await auditRepository.listAuditRecords(
+        request.query as AuditRecordFilters,
+      ),
+    }),
+  );
+
+  server.get(
+    "/api/audits/:id",
+    {
+      schema: {
+        params: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id"],
+          properties: {
+            id: {
+              type: "string",
+              minLength: 1,
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const audit = await auditRepository.getAuditRecordById(id);
+
+      if (!audit) {
+        return sendErrorResponse(reply, 404, {
+          code: "AUDIT_NOT_FOUND",
+          message: "Audit record not found",
+          details: {
+            auditId: id,
+          },
+        });
+      }
+
+      return { audit };
+    },
+  );
 
   server.get(
     "/api/scenarios/:id",
