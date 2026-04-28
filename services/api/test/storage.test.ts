@@ -32,6 +32,7 @@ describe("local storage", () => {
     assert.deepEqual(Object.keys(layout.stores).sort(), [
       "audits",
       "dependencies",
+      "executionLogs",
       "resources",
       "scenarios",
     ]);
@@ -39,6 +40,7 @@ describe("local storage", () => {
     assert.equal(await readFile(layout.stores.dependencies, "utf8"), "[]\n");
     assert.equal(await readFile(layout.stores.audits, "utf8"), "");
     assert.equal(await readFile(layout.stores.scenarios, "utf8"), "[]\n");
+    assert.equal(await readFile(layout.stores.executionLogs, "utf8"), "");
   });
 
   it("keeps existing local data when initialization is repeated", async () => {
@@ -48,6 +50,7 @@ describe("local storage", () => {
     await initializeLocalStorage(dataDir);
     await writeFile(layout.stores.resources, '[{"resourceId":"database.orders"}]\n');
     await writeFile(layout.stores.audits, '{"auditId":"audit-1"}\n');
+    await writeFile(layout.stores.executionLogs, '{"requestId":"req-1"}\n');
 
     await initializeLocalStorage(dataDir);
 
@@ -56,5 +59,9 @@ describe("local storage", () => {
       '[{"resourceId":"database.orders"}]\n',
     );
     assert.equal(await readFile(layout.stores.audits, "utf8"), '{"auditId":"audit-1"}\n');
+    assert.equal(
+      await readFile(layout.stores.executionLogs, "utf8"),
+      '{"requestId":"req-1"}\n',
+    );
   });
 });

@@ -6,6 +6,7 @@ export const LocalStoreName = {
   Dependencies: "dependencies",
   Audits: "audits",
   Scenarios: "scenarios",
+  ExecutionLogs: "executionLogs",
 } as const;
 
 export type LocalStoreName = (typeof LocalStoreName)[keyof typeof LocalStoreName];
@@ -20,6 +21,7 @@ const LOCAL_STORE_FILES = {
   [LocalStoreName.Dependencies]: "dependencies.json",
   [LocalStoreName.Audits]: "audits.jsonl",
   [LocalStoreName.Scenarios]: "scenarios.json",
+  [LocalStoreName.ExecutionLogs]: "execution-log.jsonl",
 } as const satisfies Record<LocalStoreName, string>;
 
 const INITIAL_STORE_CONTENT = {
@@ -27,6 +29,7 @@ const INITIAL_STORE_CONTENT = {
   [LocalStoreName.Dependencies]: "[]\n",
   [LocalStoreName.Audits]: "",
   [LocalStoreName.Scenarios]: "[]\n",
+  [LocalStoreName.ExecutionLogs]: "",
 } as const satisfies Record<LocalStoreName, string>;
 
 type NodeError = Error & { code?: string };
@@ -52,6 +55,10 @@ export const createLocalStorageLayout = (dataDir: string): LocalStorageLayout =>
       [LocalStoreName.Scenarios]: join(
         absoluteDataDir,
         LOCAL_STORE_FILES[LocalStoreName.Scenarios],
+      ),
+      [LocalStoreName.ExecutionLogs]: join(
+        absoluteDataDir,
+        LOCAL_STORE_FILES[LocalStoreName.ExecutionLogs],
       ),
     },
   };
@@ -95,6 +102,10 @@ export const initializeLocalStorage = async (
     createStoreFileIfMissing(
       layout.stores.scenarios,
       INITIAL_STORE_CONTENT[LocalStoreName.Scenarios],
+    ),
+    createStoreFileIfMissing(
+      layout.stores.executionLogs,
+      INITIAL_STORE_CONTENT[LocalStoreName.ExecutionLogs],
     ),
   ]);
 

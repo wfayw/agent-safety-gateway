@@ -9,6 +9,11 @@ import {
   type ToolCallRequest,
 } from "@agent-safety-gateway/shared";
 
+import { createExecutionLogRepository } from "../services/api/src/execution-log-repository.js";
+import {
+  createMockSqlExecutor,
+  type MockToolExecutorResult,
+} from "../services/api/src/mock-tool-executors.js";
 import { seedLocalData } from "../services/api/src/seed.js";
 import { initializeLocalStorage } from "../services/api/src/storage.js";
 import {
@@ -16,12 +21,6 @@ import {
   type GuardedExecutionResult,
 } from "../services/api/src/tool-execution-guard.js";
 import { createDefaultToolCallAnalysisService } from "../services/api/src/tool-call-analysis-service.js";
-
-type MockSqlExecutorResult = {
-  ok: true;
-  requestId: string;
-  sql: unknown;
-};
 
 type DemoPathSummary = {
   requestId: string;
@@ -52,7 +51,7 @@ const getScenarioRequest = (scenarioId: SqlScenarioFixtureId): ToolCallRequest =
 };
 
 const summarizeResult = (
-  result: GuardedExecutionResult<MockSqlExecutorResult>,
+  result: GuardedExecutionResult<MockToolExecutorResult>,
 ): DemoPathSummary => ({
   requestId: result.requestId,
   status: result.status,
@@ -81,23 +80,23 @@ export const runToolGuardDemo = async (
   try {
     const layout = await initializeLocalStorage(demoDataDir);
     await seedLocalData(layout);
+    const executionLogRepository = createExecutionLogRepository(layout);
+    await executionLogRepository.clearExecutionLogs();
 
     const analysisService = createDefaultToolCallAnalysisService(layout, {
       idFactory: createAuditIdFactory(),
       now: () => new Date("2026-04-28T08:00:00.000Z"),
     });
-    let executorCallCount = 0;
-    const guard = createToolExecutionGuard<MockSqlExecutorResult>({
+    const guard = createToolExecutionGuard<MockToolExecutorResult>({
       analysisService,
-      executor: (request) => {
-        executorCallCount += 1;
-
-        return {
-          ok: true,
-          requestId: request.id,
-          sql: request.rawPayload.sql,
-        };
-      },
+      executor: createMockSqlExecutor({
+        executionLogRepository,
+        resolveScenarioId: (request) =>
+          request.id === "req-sql-delete-orders-production"
+            ? SqlScenarioFixtureId.HighRiskDeleteOrders
+            : SqlScenarioFixtureId.LowRiskReadOrders,
+        now: () => new Date("2026-04-28T08:00:01.000Z"),
+      }),
     });
 
     const blockedDelete = await guard.execute(
@@ -107,10 +106,12 @@ export const runToolGuardDemo = async (
       getScenarioRequest(SqlScenarioFixtureId.LowRiskReadOrders),
     );
 
+    const executionLogs = await executionLogRepository.listExecutionLogs();
+
     return {
       blockedDelete: summarizeResult(blockedDelete),
       allowedSelect: summarizeResult(allowedSelect),
-      executorCallCount,
+      executorCallCount: executionLogs.length,
     };
   } finally {
     if (ownsDataDir) {
