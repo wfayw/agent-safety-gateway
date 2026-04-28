@@ -5,9 +5,9 @@
   "packageManager": "pnpm@10.33.0",
   "type": "module",
   "scripts": {
-    "dev": "node scripts/workspace-placeholder.mjs dev",
-    "build": "pnpm --filter @agent-safety-gateway/shared build",
-    "typecheck": "pnpm --filter @agent-safety-gateway/shared typecheck",
+    "dev": "pnpm --filter @agent-safety-gateway/api dev",
+    "build": "pnpm --filter @agent-safety-gateway/shared build && pnpm --filter @agent-safety-gateway/api build",
+    "typecheck": "pnpm --filter @agent-safety-gateway/shared typecheck && pnpm --filter @agent-safety-gateway/api typecheck",
     "test": "node scripts/workspace-placeholder.mjs test",
     "lint": "node scripts/workspace-placeholder.mjs lint",
     "format": "node scripts/workspace-placeholder.mjs format",
