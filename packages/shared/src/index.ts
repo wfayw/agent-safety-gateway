@@ -179,3 +179,65 @@ export type ImpactPath = {
   depth: number;
   environment: Environment;
 };
+
+export const RiskFactorCategory = {
+  Operation: "operation",
+  Environment: "environment",
+  ResourceCriticality: "resource_criticality",
+  DependencyImpact: "dependency_impact",
+  ValidationState: "validation_state",
+  Reversibility: "reversibility",
+} as const;
+
+export type RiskFactorCategory =
+  (typeof RiskFactorCategory)[keyof typeof RiskFactorCategory];
+
+export const RiskFactorSeverity = {
+  Informational: "informational",
+  Warning: "warning",
+  Critical: "critical",
+} as const;
+
+export type RiskFactorSeverity =
+  (typeof RiskFactorSeverity)[keyof typeof RiskFactorSeverity];
+
+export type RiskFactor = {
+  category: RiskFactorCategory;
+  label: string;
+  severity: RiskFactorSeverity;
+  score: number;
+  reason: string;
+};
+
+export type ExecutionDecision = {
+  type: DecisionType;
+  code: string;
+  reason: string;
+  recommendedAction: string;
+  rewrittenRequest: ToolCallRequest | null;
+};
+
+export type AuditRecord = {
+  id: string;
+  request: ToolCallRequest;
+  actionTuple: ActionTuple;
+  directResources: AffectedResource[];
+  indirectResources: AffectedResource[];
+  impactPaths: ImpactPath[];
+  riskFactors: RiskFactor[];
+  riskLevel: RiskLevel;
+  decision: ExecutionDecision;
+  createdAt: IsoTimestamp;
+};
+
+export type Scenario = {
+  id: string;
+  title: string;
+  description: string;
+  request: ToolCallRequest;
+  expectedActionTuple: ActionTuple;
+  expectedRiskLevel: RiskLevel;
+  expectedDecisionType: DecisionType;
+  evidenceRequirements: string[];
+  fixtures: JsonObject;
+};
