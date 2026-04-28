@@ -1,8 +1,8 @@
 import { Alert, Button, Card, ConfigProvider, Flex, Form, Input, Layout, Menu, Select, Space, Table, Typography } from 'antd';
 import type { FormProps, MenuProps, TableProps } from 'antd';
-import type { AuditRecord, DecisionType, Environment, RiskLevel, ToolType } from '@agent-safety-gateway/shared';
+import type { AuditRecord, DecisionType, Environment, JsonValue, RiskLevel, ToolCallRequest, ToolType } from '@agent-safety-gateway/shared';
 import { useEffect, useMemo, useState } from 'react';
-import { listAudits, normalizeApiError, type ApiErrorPayload } from './api';
+import { listAudits, listScenarios, normalizeApiError, type ApiErrorPayload, type ScenarioSummary } from './api';
 import { safetyGatewayTheme } from './theme';
 import { EmptyState, ErrorState, LoadingState, SectionHeader } from './ui/states';
 import { DecisionStatusTag, RiskStatusTag } from './ui/status-tags';
@@ -95,6 +95,13 @@ const environmentOptions = (Object.keys(environmentLabels) as Environment[]).map
   value: environment,
 }));
 
+const scenarioButtonLabels: Record<string, string> = {
+  'sql-delete-orders-production': '高风险 SQL 删除',
+  'sql-read-orders-production': '低风险 SQL 查询',
+  'cicd-deploy-payment-service-production': '生产发布',
+  'config-payment-timeout-production': '关键配置更新',
+};
+
 const isBlockingDecision = (audit: AuditRecord) => audit.decision.type === 'block';
 
 const needsHumanOrSandboxControl = (audit: AuditRecord) => {
@@ -124,6 +131,49 @@ const formatTimestamp = (value: string) => {
     dateStyle: 'short',
     timeStyle: 'short',
   }).format(timestamp);
+};
+
+const toStringValue = (value: JsonValue | undefined) => {
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+
+  return '';
+};
+
+const toSimulatorFormValues = (request: ToolCallRequest): SimulatorFormValues => {
+  const baseValues: SimulatorFormValues = {
+    actor: request.actor,
+    environment: request.environment,
+    taskPurpose: request.taskPurpose,
+    toolType: request.toolType,
+  };
+
+  switch (request.toolType) {
+    case 'sql':
+      return {
+        ...baseValues,
+        sqlText: toStringValue(request.rawPayload.sql),
+      };
+    case 'ci_cd':
+      return {
+        ...baseValues,
+        cicdService: toStringValue(request.rawPayload.service),
+        cicdTestStatus: toStringValue(request.rawPayload.testStatus),
+        cicdVersion: toStringValue(request.rawPayload.version),
+      };
+    case 'config':
+      return {
+        ...baseValues,
+        configKey: toStringValue(request.rawPayload.key),
+        configService: toStringValue(request.rawPayload.service),
+        configValue: toStringValue(request.rawPayload.value),
+      };
+  }
 };
 
 const createDashboardMetrics = (audits: AuditRecord[]) => [
@@ -333,14 +383,58 @@ function DashboardPage({ navigateToAudit }: DashboardPageProps) {
 
 function SimulatorPage() {
   const [form] = Form.useForm<SimulatorFormValues>();
+  const [scenarios, setScenarios] = useState<ScenarioSummary[]>([]);
+  const [isLoadingScenarios, setIsLoadingScenarios] = useState(true);
+  const [scenarioError, setScenarioError] = useState<ApiErrorPayload | null>(null);
+  const [activeScenario, setActiveScenario] = useState<ScenarioSummary | null>(null);
   const [submittedRequest, setSubmittedRequest] = useState<SimulatorFormValues | null>(null);
   const selectedToolType = Form.useWatch('toolType', form);
 
+  useEffect(() => {
+    let isCurrent = true;
+
+    const loadScenarios = async () => {
+      setIsLoadingScenarios(true);
+      setScenarioError(null);
+
+      try {
+        const nextScenarios = await listScenarios();
+
+        if (isCurrent) {
+          setScenarios(nextScenarios);
+        }
+      } catch (loadError: unknown) {
+        if (isCurrent) {
+          setScenarioError(normalizeApiError(loadError, '无法加载种子场景'));
+        }
+      } finally {
+        if (isCurrent) {
+          setIsLoadingScenarios(false);
+        }
+      }
+    };
+
+    void loadScenarios();
+
+    return () => {
+      isCurrent = false;
+    };
+  }, []);
+
   const handleValuesChange: FormProps<SimulatorFormValues>['onValuesChange'] = (changedValues) => {
+    setActiveScenario(null);
+
     if (Object.hasOwn(changedValues, 'toolType')) {
       form.resetFields(toolParameterFieldNames);
       setSubmittedRequest(null);
     }
+  };
+
+  const handleApplyScenario = (scenario: ScenarioSummary) => {
+    form.resetFields();
+    form.setFieldsValue(toSimulatorFormValues(scenario.toolCallRequest));
+    setActiveScenario(scenario);
+    setSubmittedRequest(null);
   };
 
   const handleSubmit: FormProps<SimulatorFormValues>['onFinish'] = (values) => {
@@ -461,7 +555,7 @@ function SimulatorPage() {
         <Space orientation="vertical" size="middle">
           <Title level={2}>提交工具调用草稿</Title>
           <Paragraph type="secondary">
-            先收集工具类型、执行人、任务目的和目标环境。后续故事会补充工具参数、种子场景和真实网关分析结果。
+            先收集工具类型、执行人、任务目的和目标环境。可从种子场景一键填充典型风险链路，后续再提交网关分析。
           </Paragraph>
           <Alert
             showIcon
@@ -470,6 +564,53 @@ function SimulatorPage() {
             description="此表单只生成待分析请求草稿；在网关返回允许、沙箱、审批、改写或阻断决策前，不会启用真实工具执行。"
           />
         </Space>
+      </Card>
+      <Card>
+        <Flex vertical gap="middle">
+          <SectionHeader
+            title="种子场景启动器"
+            description="从 GET /api/scenarios 读取四个演示场景，一键填充模拟器表单用于后续安全网关分析。"
+          />
+          {isLoadingScenarios ? (
+            <LoadingState title="正在加载种子场景" description="等待 API 返回 SQL、发布和配置变更示例。" />
+          ) : null}
+          {scenarioError ? (
+            <ErrorState
+              title="无法加载种子场景"
+              description={`${scenarioError.message}。请确认 API 服务已启动并执行过 pnpm seed。`}
+            />
+          ) : null}
+          {!isLoadingScenarios && !scenarioError && scenarios.length === 0 ? (
+            <EmptyState title="暂无种子场景" description="运行 pnpm seed 后会写入四个默认演示场景。" />
+          ) : null}
+          {!isLoadingScenarios && !scenarioError && scenarios.length > 0 ? (
+            <Flex gap="middle" wrap>
+              {scenarios.map((scenario) => (
+                <Card className="simulator-scenario-card" key={scenario.id} size="small">
+                  <Space orientation="vertical" size="small">
+                    <Space wrap>
+                      <RiskStatusTag status={scenario.expectedRiskLevel} />
+                      <DecisionStatusTag status={scenario.expectedDecision} />
+                    </Space>
+                    <Text strong>{scenarioButtonLabels[scenario.id] ?? scenario.name}</Text>
+                    <Text type="secondary">{scenario.description}</Text>
+                    <Button onClick={() => handleApplyScenario(scenario)} type={activeScenario?.id === scenario.id ? 'primary' : 'default'}>
+                      填充{scenarioButtonLabels[scenario.id] ?? scenario.name}
+                    </Button>
+                  </Space>
+                </Card>
+              ))}
+            </Flex>
+          ) : null}
+          {activeScenario ? (
+            <Alert
+              showIcon
+              type="success"
+              title={`已填充：${scenarioButtonLabels[activeScenario.id] ?? activeScenario.name}`}
+              description="请复核字段后提交待分析请求；填充动作不会触发 executor。"
+            />
+          ) : null}
+        </Flex>
       </Card>
       <Card title="基础工具调用信息">
         <Form
@@ -524,6 +665,7 @@ function SimulatorPage() {
             </Button>
             <Button onClick={() => {
               form.resetFields();
+              setActiveScenario(null);
               setSubmittedRequest(null);
             }}>
               清空表单

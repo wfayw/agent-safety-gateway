@@ -8,7 +8,6 @@ import type {
   ImpactPath,
   RiskFactor,
   RiskLevel,
-  Scenario,
   ToolCallRequest,
   ToolType,
 } from '@agent-safety-gateway/shared';
@@ -38,7 +37,16 @@ export type AnalyzeToolCallResponse = {
 };
 
 export type ListScenariosResponse = {
-  scenarios: Scenario[];
+  scenarios: ScenarioSummary[];
+};
+
+export type ScenarioSummary = {
+  id: string;
+  name: string;
+  description: string;
+  toolCallRequest: ToolCallRequest;
+  expectedRiskLevel: RiskLevel;
+  expectedDecision: DecisionType;
 };
 
 export type AuditFilters = {
