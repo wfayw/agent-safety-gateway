@@ -2,9 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  ActionTupleSchema,
+  DecisionType,
   Environment,
+  OperationType,
+  RiskLevel,
+  SqlScenarioFixtureId,
   ToolCallRequestSchema,
   ToolType,
+  sqlScenarioFixtures,
 } from "../dist/index.js";
 
 test("validates a SQL tool call request", () => {
@@ -45,4 +51,52 @@ test("rejects invalid SQL tool call request fields", () => {
     result.issues.map((issue) => issue.path),
     ["$.toolType", "$.rawPayload", "$.environment"],
   );
+});
+
+test("exports SQL scenario fixtures for blocked delete and allowed query", () => {
+  assert.equal(sqlScenarioFixtures.length, 2);
+
+  const deleteFixture = sqlScenarioFixtures.find(
+    (fixture) => fixture.id === SqlScenarioFixtureId.HighRiskDeleteOrders,
+  );
+  const readFixture = sqlScenarioFixtures.find(
+    (fixture) => fixture.id === SqlScenarioFixtureId.LowRiskReadOrders,
+  );
+
+  assert.ok(deleteFixture);
+  assert.ok(readFixture);
+
+  assert.equal(
+    deleteFixture.request.rawPayload.sql,
+    "DELETE FROM orders WHERE status='PENDING'",
+  );
+  assert.equal(
+    deleteFixture.expectedActionTuple.operation,
+    OperationType.Delete,
+  );
+  assert.equal(
+    deleteFixture.expectedActionTuple.environment,
+    Environment.Production,
+  );
+  assert.equal(deleteFixture.expectedRiskLevel, RiskLevel.Prohibited);
+  assert.equal(deleteFixture.expectedDecisionType, DecisionType.Block);
+
+  assert.match(readFixture.request.rawPayload.sql, /^SELECT /);
+  assert.equal(readFixture.expectedActionTuple.operation, OperationType.Read);
+  assert.equal(
+    readFixture.expectedActionTuple.environment,
+    Environment.Production,
+  );
+  assert.equal(readFixture.expectedRiskLevel, RiskLevel.Low);
+  assert.equal(readFixture.expectedDecisionType, DecisionType.Allow);
+});
+
+test("SQL scenario fixture requests and action tuples match runtime schemas", () => {
+  for (const fixture of sqlScenarioFixtures) {
+    assert.equal(ToolCallRequestSchema.safeParse(fixture.request).success, true);
+    assert.equal(
+      ActionTupleSchema.safeParse(fixture.expectedActionTuple).success,
+      true,
+    );
+  }
 });

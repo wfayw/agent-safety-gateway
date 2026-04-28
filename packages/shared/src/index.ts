@@ -242,6 +242,129 @@ export type Scenario = {
   fixtures: JsonObject;
 };
 
+export const SqlScenarioFixtureId = {
+  HighRiskDeleteOrders: "sql-delete-orders-production",
+  LowRiskReadOrders: "sql-read-orders-production",
+} as const;
+
+export type SqlScenarioFixtureId =
+  (typeof SqlScenarioFixtureId)[keyof typeof SqlScenarioFixtureId];
+
+export const sqlScenarioFixtures = [
+  {
+    id: SqlScenarioFixtureId.HighRiskDeleteOrders,
+    title: "Block production DELETE on pending orders",
+    description:
+      "A production SQL DELETE against the critical orders table must be prohibited before executor invocation.",
+    request: {
+      id: "req-sql-delete-orders-production",
+      actor: "agent:ralph",
+      taskPurpose: "Clean pending orders after a failed validation run",
+      toolType: ToolType.Sql,
+      rawPayload: {
+        sql: "DELETE FROM orders WHERE status='PENDING'",
+        database: "orders-prod",
+      },
+      environment: Environment.Production,
+      createdAt: "2026-04-28T06:10:00.000Z",
+    },
+    expectedActionTuple: {
+      actor: "agent:ralph",
+      taskPurpose: "Clean pending orders after a failed validation run",
+      toolType: ToolType.Sql,
+      operation: OperationType.Delete,
+      target: "orders",
+      parameters: {
+        sql: "DELETE FROM orders WHERE status='PENDING'",
+        database: "orders-prod",
+      },
+      environment: Environment.Production,
+      timestamp: "2026-04-28T06:10:00.000Z",
+    },
+    expectedRiskLevel: RiskLevel.Prohibited,
+    expectedDecisionType: DecisionType.Block,
+    evidenceRequirements: [
+      "Gateway response explains destructive production SQL risk.",
+      "Executor log proves the SQL executor was not invoked.",
+      "Audit record preserves the original DELETE statement and blocked decision.",
+    ],
+    fixtures: {
+      resources: [
+        {
+          id: "resource-db-table-orders-prod",
+          name: "orders",
+          type: ResourceType.DatabaseTable,
+          system: "commerce",
+          environment: Environment.Production,
+          sensitivityLevel: SensitivityLevel.Restricted,
+          criticalityLevel: CriticalityLevel.Critical,
+          owner: "payments-platform",
+          rollbackCapability: RollbackCapability.Manual,
+        },
+      ],
+      expectedRiskFactors: [
+        "production_environment",
+        "destructive_sql",
+        "critical_orders_table",
+      ],
+    },
+  },
+  {
+    id: SqlScenarioFixtureId.LowRiskReadOrders,
+    title: "Allow bounded production SELECT on orders",
+    description:
+      "A read-only SQL SELECT with a bounded result set may continue as the low-risk SQL control case.",
+    request: {
+      id: "req-sql-read-orders-production",
+      actor: "agent:ralph",
+      taskPurpose: "Inspect pending order volume before planning cleanup",
+      toolType: ToolType.Sql,
+      rawPayload: {
+        sql: "SELECT COUNT(*) FROM orders WHERE status='PENDING'",
+        database: "orders-prod-readonly",
+      },
+      environment: Environment.Production,
+      createdAt: "2026-04-28T06:15:00.000Z",
+    },
+    expectedActionTuple: {
+      actor: "agent:ralph",
+      taskPurpose: "Inspect pending order volume before planning cleanup",
+      toolType: ToolType.Sql,
+      operation: OperationType.Read,
+      target: "orders",
+      parameters: {
+        sql: "SELECT COUNT(*) FROM orders WHERE status='PENDING'",
+        database: "orders-prod-readonly",
+      },
+      environment: Environment.Production,
+      timestamp: "2026-04-28T06:15:00.000Z",
+    },
+    expectedRiskLevel: RiskLevel.Low,
+    expectedDecisionType: DecisionType.Allow,
+    evidenceRequirements: [
+      "Gateway response identifies the SQL statement as read-only.",
+      "Executor log proves the SQL executor was invoked once for the read query.",
+      "Audit record preserves the original SELECT statement and allow decision.",
+    ],
+    fixtures: {
+      resources: [
+        {
+          id: "resource-db-table-orders-prod",
+          name: "orders",
+          type: ResourceType.DatabaseTable,
+          system: "commerce",
+          environment: Environment.Production,
+          sensitivityLevel: SensitivityLevel.Restricted,
+          criticalityLevel: CriticalityLevel.Critical,
+          owner: "payments-platform",
+          rollbackCapability: RollbackCapability.Manual,
+        },
+      ],
+      expectedRiskFactors: ["read_only_sql", "bounded_aggregate_query"],
+    },
+  },
+] as const satisfies readonly Scenario[];
+
 export type ValidationIssue = {
   path: string;
   code: string;
