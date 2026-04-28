@@ -1,16 +1,29 @@
 import Fastify from "fastify";
 
-const DEFAULT_HOST = "127.0.0.1";
-const DEFAULT_PORT = 4310;
+import { ApiLogLevel, createApiConfig, type ApiConfig } from "./config.js";
+
+export type ApiLoggerOption = boolean | { level: ApiLogLevel };
 
 export type ApiServerOptions = {
-  logger?: boolean;
+  config?: ApiConfig;
+  logger?: ApiLoggerOption;
+};
+
+const createLoggerOption = (config: ApiConfig): ApiLoggerOption => {
+  if (config.logLevel === ApiLogLevel.Silent) {
+    return false;
+  }
+
+  return { level: config.logLevel };
 };
 
 export const buildServer = (options: ApiServerOptions = {}) => {
+  const config = options.config ?? createApiConfig();
   const server = Fastify({
-    logger: options.logger ?? true,
+    logger: options.logger ?? createLoggerOption(config),
   });
+
+  server.decorate("apiConfig", config);
 
   server.get("/health", async () => ({
     status: "ok",
@@ -20,25 +33,11 @@ export const buildServer = (options: ApiServerOptions = {}) => {
   return server;
 };
 
-const parsePort = (value: string | undefined): number => {
-  if (!value) {
-    return DEFAULT_PORT;
-  }
-
-  const port = Number.parseInt(value, 10);
-  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-    throw new Error(`Invalid API_PORT: ${value}`);
-  }
-
-  return port;
-};
-
 export const startServer = async () => {
-  const server = buildServer();
-  const host = process.env.API_HOST ?? DEFAULT_HOST;
-  const port = parsePort(process.env.API_PORT);
+  const config = createApiConfig();
+  const server = buildServer({ config });
 
-  await server.listen({ host, port });
+  await server.listen({ host: config.host, port: config.port });
   return server;
 };
 
