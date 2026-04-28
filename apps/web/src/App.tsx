@@ -1,6 +1,8 @@
-import { Alert, Card, ConfigProvider, Flex, Layout, Menu, Space, Typography } from 'antd';
-import type { MenuProps } from 'antd';
+import { Alert, Button, Card, ConfigProvider, Flex, Layout, Menu, Space, Table, Typography } from 'antd';
+import type { MenuProps, TableProps } from 'antd';
+import type { AuditRecord, DecisionType, Environment, RiskLevel, ToolType } from '@agent-safety-gateway/shared';
 import { useEffect, useMemo, useState } from 'react';
+import { listAudits, normalizeApiError, type ApiErrorPayload } from './api';
 import { safetyGatewayTheme } from './theme';
 import { EmptyState, ErrorState, LoadingState, SectionHeader } from './ui/states';
 import { DecisionStatusTag, RiskStatusTag } from './ui/status-tags';
@@ -46,6 +48,77 @@ const appRoutes: AppRoute[] = [
 
 const defaultRoute = dashboardRoute;
 
+const toolTypeLabels: Record<ToolType, string> = {
+  sql: 'SQL',
+  ci_cd: 'CI/CD',
+  config: 'Config',
+};
+
+const environmentLabels: Record<Environment, string> = {
+  development: '开发',
+  test: '测试',
+  staging: '预发',
+  production: '生产',
+};
+
+const isBlockingDecision = (audit: AuditRecord) => audit.decision.type === 'block';
+
+const needsHumanOrSandboxControl = (audit: AuditRecord) => {
+  return audit.decision.type === 'require_approval' || audit.decision.type === 'sandbox';
+};
+
+const isProhibitedRisk = (audit: AuditRecord) => audit.riskLevel === 'prohibited';
+
+const isHighRiskAudit = (audit: AuditRecord) => {
+  return audit.riskLevel === 'high' || audit.riskLevel === 'prohibited';
+};
+
+const toTimestamp = (value: string) => {
+  const timestamp = Date.parse(value);
+
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+};
+
+const formatTimestamp = (value: string) => {
+  const timestamp = toTimestamp(value);
+
+  if (timestamp === 0) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat('zh-CN', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+  }).format(timestamp);
+};
+
+const createDashboardMetrics = (audits: AuditRecord[]) => [
+  {
+    key: 'total',
+    label: '分析总数',
+    value: audits.length,
+    description: '已进入网关分析的工具调用',
+  },
+  {
+    key: 'blocked',
+    label: '阻断数量',
+    value: audits.filter(isBlockingDecision).length,
+    description: 'executor 不应被调用',
+  },
+  {
+    key: 'controlled',
+    label: '审批或沙箱数量',
+    value: audits.filter(needsHumanOrSandboxControl).length,
+    description: '需要人工或隔离执行',
+  },
+  {
+    key: 'prohibited',
+    label: '禁止风险数量',
+    value: audits.filter(isProhibitedRisk).length,
+    description: '命中最高风险等级',
+  },
+];
+
 function resolveRoute(pathname: string): AppRoute {
   if (pathname === '/' || pathname === '') {
     return defaultRoute;
@@ -58,73 +131,166 @@ function resolveRoute(pathname: string): AppRoute {
   return appRoutes.find((route) => route.path === pathname) ?? defaultRoute;
 }
 
-function DashboardPage() {
+type DashboardPageProps = {
+  navigateToAudit: (auditId: string) => void;
+};
+
+function DashboardPage({ navigateToAudit }: DashboardPageProps) {
+  const [audits, setAudits] = useState<AuditRecord[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<ApiErrorPayload | null>(null);
+
+  useEffect(() => {
+    let isCurrent = true;
+
+    const loadAudits = async () => {
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        const nextAudits = await listAudits();
+
+        if (isCurrent) {
+          setAudits(nextAudits);
+        }
+      } catch (loadError: unknown) {
+        if (isCurrent) {
+          setError(normalizeApiError(loadError, '无法加载审计数据'));
+        }
+      } finally {
+        if (isCurrent) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    void loadAudits();
+
+    return () => {
+      isCurrent = false;
+    };
+  }, []);
+
+  const metrics = useMemo(() => createDashboardMetrics(audits), [audits]);
+  const latestHighRiskAudits = useMemo(
+    () => audits.filter(isHighRiskAudit).sort((left, right) => toTimestamp(right.createdAt) - toTimestamp(left.createdAt)).slice(0, 8),
+    [audits],
+  );
+
+  const columns: TableProps<AuditRecord>['columns'] = [
+    {
+      title: '时间',
+      dataIndex: 'createdAt',
+      key: 'createdAt',
+      render: (createdAt: string) => formatTimestamp(createdAt),
+      width: 160,
+    },
+    {
+      title: '工具与环境',
+      key: 'tool',
+      render: (_, audit) => (
+        <Space orientation="vertical" size={0}>
+          <Text>{toolTypeLabels[audit.request.toolType]}</Text>
+          <Text type="secondary">{environmentLabels[audit.request.environment]}</Text>
+        </Space>
+      ),
+      width: 140,
+    },
+    {
+      title: '动作目标',
+      key: 'target',
+      render: (_, audit) => (
+        <Space orientation="vertical" size={0}>
+          <Text code>{audit.actionTuple.target}</Text>
+          <Text type="secondary">{audit.actionTuple.operation}</Text>
+        </Space>
+      ),
+    },
+    {
+      title: '风险',
+      dataIndex: 'riskLevel',
+      key: 'riskLevel',
+      render: (riskLevel: RiskLevel) => <RiskStatusTag status={riskLevel} />,
+      width: 120,
+    },
+    {
+      title: '决策',
+      key: 'decision',
+      render: (_, audit) => <DecisionStatusTag status={audit.decision.type as DecisionType} />,
+      width: 120,
+    },
+    {
+      title: '原因摘要',
+      key: 'reason',
+      render: (_, audit) => <Text type="secondary">{audit.decision.reason}</Text>,
+    },
+  ];
+
   return (
     <Flex vertical gap="large">
       <Card>
         <Space orientation="vertical" size="middle">
           <Title level={2}>Agent 动手前，先判断会不会出事</Title>
           <Paragraph type="secondary">
-            首版 Web 应用已接入 Vite、React、TypeScript 与 Ant Design，当前应用外壳可稳定导航到仪表盘、工具调用模拟器和审计回放。
+            仪表盘从审计 API 汇总网关分析、阻断、审批/沙箱和禁止风险数据，帮助研发负责人快速判断安全网关是否正在拦截高风险操作。
           </Paragraph>
           <Alert
             showIcon
             type="info"
-            title="应用外壳已就绪"
-            description="使用左侧导航切换核心页面；当前路由会在导航中高亮，后续故事会逐步接入真实数据和交互。"
+            title="执行默认受网关保护"
+            description="当审计数据不可用或尚未产生时，页面会显示安全空状态，不会暗示工具可直接执行。"
           />
         </Space>
       </Card>
-      <Card title="MVP 页面占位">
-        <Space orientation="vertical">
-          <Text>仪表盘：展示风险拦截概览。</Text>
-          <Text>工具调用模拟器：提交 SQL、CI/CD 与配置变更请求。</Text>
-          <Text>审计回放：复盘网关决策和 executor 结果。</Text>
-        </Space>
-      </Card>
-      <Card title="安全状态标签">
-        <Flex vertical gap="middle">
-          <Space wrap>
-            <DecisionStatusTag status="allow" />
-            <DecisionStatusTag status="block" />
-            <DecisionStatusTag status="require_approval" />
-            <DecisionStatusTag status="sandbox" />
-            <DecisionStatusTag status="rewrite" />
-          </Space>
-          <Space wrap>
-            <RiskStatusTag status="low" />
-            <RiskStatusTag status="medium" />
-            <RiskStatusTag status="high" />
-            <RiskStatusTag status="prohibited" />
-          </Space>
+      {isLoading ? (
+        <LoadingState title="正在加载审计汇总" description="保持执行判断谨慎，等待审计 API 返回最新网关证据。" />
+      ) : null}
+      {error ? (
+        <ErrorState
+          title="无法加载仪表盘审计数据"
+          description={`${error.message}。请确认 API 服务可访问后再复盘风险拦截情况。`}
+        />
+      ) : null}
+      {!isLoading && !error ? (
+        <Flex gap="middle" wrap>
+          {metrics.map((metric) => (
+            <Card className="dashboard-metric-card" key={metric.key}>
+              <Space orientation="vertical" size={4}>
+                <Text type="secondary">{metric.label}</Text>
+                <Text className="dashboard-metric-value">{metric.value}</Text>
+                <Text type="secondary">{metric.description}</Text>
+              </Space>
+            </Card>
+          ))}
         </Flex>
-      </Card>
+      ) : null}
       <Card>
         <Flex vertical gap="middle">
           <SectionHeader
-            title="共享 UI 状态组件"
-            description="加载、错误和空状态统一说明当前网关证据是否可用，避免在结果缺失时误导用户继续执行。"
+            title="最新高风险审计记录"
+            description="展示最近的高风险或禁止风险分析记录，点击行可跳转到审计详情回放。"
+            extra={<Button onClick={() => window.location.assign('/audits')}>查看全部审计</Button>}
           />
-          <Flex gap="middle" wrap>
-            <div className="ui-state-example">
-              <LoadingState
-                title="正在请求网关分析"
-                description="保持工具执行禁用，等待安全决策返回。"
-              />
-            </div>
-            <div className="ui-state-example">
-              <ErrorState
-                title="分析请求失败，执行已阻止"
-                description="请检查 API 服务或请求参数；不要在没有网关决策时调用 executor。"
-              />
-            </div>
-            <div className="ui-state-example">
-              <EmptyState
-                title="暂无审计证据"
-                description="运行种子场景后，可在这里回放风险、决策和 executor 结果。"
-              />
-            </div>
-          </Flex>
+          {!isLoading && !error && audits.length === 0 ? (
+            <EmptyState
+              title="暂无审计数据"
+              description="运行工具调用模拟器或种子场景后，仪表盘会展示拦截、审批、沙箱和禁止风险证据。"
+            />
+          ) : null}
+          {!isLoading && !error && audits.length > 0 ? (
+            <Table
+              columns={columns}
+              dataSource={latestHighRiskAudits}
+              locale={{ emptyText: '暂无高风险审计记录' }}
+              onRow={(audit) => ({
+                className: 'dashboard-audit-row',
+                onClick: () => navigateToAudit(audit.id),
+              })}
+              pagination={false}
+              rowKey="id"
+              scroll={{ x: 860 }}
+            />
+          ) : null}
         </Flex>
       </Card>
     </Flex>
@@ -176,10 +342,10 @@ function AuditPage() {
   );
 }
 
-function renderRouteContent(routeKey: RouteKey) {
+function renderRouteContent(routeKey: RouteKey, navigateToAudit: (auditId: string) => void) {
   switch (routeKey) {
     case 'dashboard':
-      return <DashboardPage />;
+      return <DashboardPage navigateToAudit={navigateToAudit} />;
     case 'simulator':
       return <SimulatorPage />;
     case 'audit':
@@ -219,6 +385,13 @@ export function App() {
     setCurrentPath(nextRoute.path);
   };
 
+  const navigateToAudit = (auditId: string) => {
+    const nextPath = `/audits/${encodeURIComponent(auditId)}`;
+
+    window.history.pushState(null, '', nextPath);
+    setCurrentPath(nextPath);
+  };
+
   return (
     <ConfigProvider theme={safetyGatewayTheme}>
       <Layout className="app-shell">
@@ -243,7 +416,9 @@ export function App() {
               <Text type="secondary">{currentRoute.description}</Text>
             </Space>
           </Header>
-          <Content className="app-content">{renderRouteContent(currentRoute.key)}</Content>
+          <Content className="app-content">
+            {renderRouteContent(currentRoute.key, navigateToAudit)}
+          </Content>
         </Layout>
       </Layout>
     </ConfigProvider>

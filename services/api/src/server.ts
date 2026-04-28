@@ -69,6 +69,19 @@ export const buildServer = (options: ApiServerOptions = {}) => {
   server.decorate("apiConfig", config);
   registerErrorHandlers(server);
 
+  server.addHook("onRequest", (request, reply, done) => {
+    reply.header("Access-Control-Allow-Origin", "*");
+    reply.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    reply.header("Access-Control-Allow-Headers", "Content-Type,Accept");
+
+    if (request.method === "OPTIONS") {
+      void reply.code(204).send();
+      return;
+    }
+
+    done();
+  });
+
   server.get(
     "/health",
     {

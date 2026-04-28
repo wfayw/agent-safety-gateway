@@ -1,7 +1,13 @@
 import { Tag } from 'antd';
 import type { ReactNode } from 'react';
 
-export type DecisionStatus = 'allow' | 'block' | 'require_approval' | 'sandbox' | 'rewrite';
+export type DecisionStatus =
+  | 'allow'
+  | 'block'
+  | 'require_approval'
+  | 'sandbox'
+  | 'rewrite'
+  | 'readonly';
 
 export type RiskStatus = 'low' | 'medium' | 'high' | 'prohibited';
 
@@ -33,6 +39,10 @@ const decisionStatusConfig = {
   rewrite: {
     color: 'processing',
     label: '改写',
+  },
+  readonly: {
+    color: 'success',
+    label: '只读',
   },
 } satisfies StatusConfig<DecisionStatus>;
 

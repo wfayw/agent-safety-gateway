@@ -82,6 +82,22 @@ body {
   text-align: center;
 }
 
+.dashboard-metric-card {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.dashboard-metric-value {
+  color: #0f172a;
+  font-size: 34px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.dashboard-audit-row {
+  cursor: pointer;
+}
+
 @media (max-width: 1024px) {
   .app-brand {
     padding-inline: 12px;
