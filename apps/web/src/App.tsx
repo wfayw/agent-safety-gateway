@@ -1,5 +1,5 @@
-import { Alert, Button, Card, ConfigProvider, Flex, Layout, Menu, Space, Table, Typography } from 'antd';
-import type { MenuProps, TableProps } from 'antd';
+import { Alert, Button, Card, ConfigProvider, Flex, Form, Input, Layout, Menu, Select, Space, Table, Typography } from 'antd';
+import type { FormProps, MenuProps, TableProps } from 'antd';
 import type { AuditRecord, DecisionType, Environment, RiskLevel, ToolType } from '@agent-safety-gateway/shared';
 import { useEffect, useMemo, useState } from 'react';
 import { listAudits, normalizeApiError, type ApiErrorPayload } from './api';
@@ -60,6 +60,23 @@ const environmentLabels: Record<Environment, string> = {
   staging: '预发',
   production: '生产',
 };
+
+type SimulatorFormValues = {
+  toolType: ToolType;
+  actor: string;
+  taskPurpose: string;
+  environment: Environment;
+};
+
+const toolTypeOptions = (Object.keys(toolTypeLabels) as ToolType[]).map((toolType) => ({
+  label: toolTypeLabels[toolType],
+  value: toolType,
+}));
+
+const environmentOptions = (Object.keys(environmentLabels) as Environment[]).map((environment) => ({
+  label: environmentLabels[environment],
+  value: environment,
+}));
 
 const isBlockingDecision = (audit: AuditRecord) => audit.decision.type === 'block';
 
@@ -298,24 +315,110 @@ function DashboardPage({ navigateToAudit }: DashboardPageProps) {
 }
 
 function SimulatorPage() {
+  const [form] = Form.useForm<SimulatorFormValues>();
+  const [submittedRequest, setSubmittedRequest] = useState<SimulatorFormValues | null>(null);
+
+  const handleSubmit: FormProps<SimulatorFormValues>['onFinish'] = (values) => {
+    setSubmittedRequest(values);
+  };
+
   return (
-    <Card title="工具执行前检查">
-      <Space orientation="vertical" size="middle">
-        <Paragraph type="secondary">
-          模拟器页面将用于加载种子场景、提交工具调用请求，并在 executor 调用前展示允许、阻断、审批、沙箱或改写决策。
-        </Paragraph>
-        <Alert
-          showIcon
-          type="warning"
-          title="执行控制默认保持关闭"
-          description="在后续交互故事接入网关响应前，生产工具执行入口不会在此页面启用。"
-        />
-        <Space wrap>
-          <DecisionStatusTag status="block" />
-          <RiskStatusTag status="high" />
+    <Flex vertical gap="large">
+      <Card>
+        <Space orientation="vertical" size="middle">
+          <Title level={2}>提交工具调用草稿</Title>
+          <Paragraph type="secondary">
+            先收集工具类型、执行人、任务目的和目标环境。后续故事会补充工具参数、种子场景和真实网关分析结果。
+          </Paragraph>
+          <Alert
+            showIcon
+            type="warning"
+            title="尚未触发 executor"
+            description="此表单只生成待分析请求草稿；在网关返回允许、沙箱、审批、改写或阻断决策前，不会启用真实工具执行。"
+          />
         </Space>
-      </Space>
-    </Card>
+      </Card>
+      <Card title="基础工具调用信息">
+        <Form
+          form={form}
+          layout="vertical"
+          onFinish={handleSubmit}
+          requiredMark="optional"
+          validateMessages={{ required: '请填写${label}' }}
+        >
+          <Flex gap="middle" wrap>
+            <Form.Item
+              label="工具类型"
+              name="toolType"
+              rules={[{ required: true, message: '请选择工具类型' }]}
+              style={{ flex: '1 1 240px' }}
+            >
+              <Select options={toolTypeOptions} placeholder="选择 SQL、CI/CD 或 Config" />
+            </Form.Item>
+            <Form.Item
+              label="目标环境"
+              name="environment"
+              rules={[{ required: true, message: '请选择目标环境' }]}
+              style={{ flex: '1 1 240px' }}
+            >
+              <Select options={environmentOptions} placeholder="选择开发、测试、预发或生产" />
+            </Form.Item>
+          </Flex>
+          <Form.Item
+            label="Actor"
+            name="actor"
+            rules={[{ required: true }, { whitespace: true, message: '请填写Actor' }]}
+          >
+            <Input placeholder="例如：agent.release-bot" />
+          </Form.Item>
+          <Form.Item
+            label="Task purpose"
+            name="taskPurpose"
+            rules={[{ required: true }, { whitespace: true, message: '请填写Task purpose' }]}
+          >
+            <Input.TextArea
+              autoSize={{ minRows: 3, maxRows: 6 }}
+              placeholder="描述 Agent 为什么要调用该工具，以及它希望达成的业务目标。"
+            />
+          </Form.Item>
+          <Space wrap>
+            <Button htmlType="submit" type="primary">
+              提交待分析请求
+            </Button>
+            <Button onClick={() => {
+              form.resetFields();
+              setSubmittedRequest(null);
+            }}>
+              清空表单
+            </Button>
+          </Space>
+        </Form>
+      </Card>
+      {submittedRequest ? (
+        <Card title="已生成待分析请求">
+          <Space orientation="vertical" size="middle">
+            <Alert
+              showIcon
+              type="success"
+              title="基础字段校验通过"
+              description="请求草稿已准备好进入后续工具参数填写和网关分析步骤，executor 仍保持关闭。"
+            />
+            <Flex gap="middle" wrap>
+              <Text>
+                工具类型：<Text strong>{toolTypeLabels[submittedRequest.toolType]}</Text>
+              </Text>
+              <Text>
+                目标环境：<Text strong>{environmentLabels[submittedRequest.environment]}</Text>
+              </Text>
+              <Text>
+                Actor：<Text code>{submittedRequest.actor}</Text>
+              </Text>
+            </Flex>
+            <Text type="secondary">Task purpose：{submittedRequest.taskPurpose}</Text>
+          </Space>
+        </Card>
+      ) : null}
+    </Flex>
   );
 }
 
