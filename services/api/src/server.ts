@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 
 import { ApiLogLevel, createApiConfig, type ApiConfig } from "./config.js";
+import { registerErrorHandlers } from "./errors.js";
 
 export type ApiLoggerOption = boolean | { level: ApiLogLevel };
 
@@ -24,11 +25,28 @@ export const buildServer = (options: ApiServerOptions = {}) => {
   });
 
   server.decorate("apiConfig", config);
+  registerErrorHandlers(server);
 
-  server.get("/health", async () => ({
-    status: "ok",
-    service: "agent-safety-gateway-api",
-  }));
+  server.get(
+    "/health",
+    {
+      schema: {
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            format: {
+              type: "string",
+              enum: ["json"],
+            },
+          },
+        },
+      },
+    },
+    async () => ({
+      status: "ok",
+    }),
+  );
 
   return server;
 };
