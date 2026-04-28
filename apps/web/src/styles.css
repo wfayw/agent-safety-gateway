@@ -14,9 +14,39 @@ body {
   background: #f5f7fb;
 }
 
+.app-sider {
+  min-height: 100vh;
+  background: #0f172a;
+}
+
+.app-brand {
+  width: 100%;
+  padding: 24px 20px 18px;
+}
+
+.app-brand-title {
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.app-brand-subtitle {
+  color: rgb(255 255 255 / 65%);
+  font-size: 12px;
+}
+
+.app-menu {
+  border-inline-end: 0;
+  background: #0f172a;
+}
+
 .app-header {
   display: flex;
   align-items: center;
+  min-height: 72px;
+  height: auto;
+  padding-block: 12px;
   border-bottom: 1px solid #dbe3ef;
   background: #ffffff;
 }
@@ -33,7 +63,27 @@ body {
 }
 
 .app-content {
-  width: min(100%, 1120px);
+  width: min(100%, 1160px);
   margin: 0 auto;
   padding: 32px 24px;
+}
+
+@media (max-width: 1024px) {
+  .app-brand {
+    padding-inline: 12px;
+  }
+
+  .app-brand-title,
+  .app-brand-subtitle {
+    display: none;
+  }
+
+  .app-header {
+    min-height: 80px;
+    padding-inline: 20px;
+  }
+
+  .app-content {
+    padding: 24px 20px;
+  }
 }
