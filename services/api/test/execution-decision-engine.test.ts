@@ -96,6 +96,9 @@ describe("execution decision engine", () => {
     assert.equal(decision.type, DecisionType.Sandbox);
     assert.equal(decision.code, "risk.medium.sandbox_production_config");
     assert.match(decision.recommendedAction, /sandbox/i);
+    assert.equal(decision.rewrittenRequest?.environment, Environment.Staging);
+    assert.equal(decision.rewrittenRequest?.rawPayload.rolloutStrategy, "canary");
+    assert.equal(decision.rewrittenRequest?.rawPayload.requireApproval, true);
   });
 
   it("maps other medium risk to approval", () => {
@@ -137,6 +140,9 @@ describe("execution decision engine", () => {
       actionTuple: createActionTuple({
         operation: OperationType.Delete,
         target: "orders",
+        parameters: {
+          filter: "status = 'PENDING'",
+        },
       }),
       riskScore: createRiskScore({
         riskLevel: RiskLevel.High,
@@ -148,7 +154,16 @@ describe("execution decision engine", () => {
     assert.equal(decision.type, DecisionType.Rewrite);
     assert.equal(decision.code, "risk.high.rewrite_destructive_sql");
     assert.match(decision.recommendedAction, /safer read-only/);
-    assert.equal(decision.rewrittenRequest, null);
+    assert.equal(
+      decision.rewrittenRequest?.rawPayload.sql,
+      "SELECT COUNT(*) FROM orders WHERE status = 'PENDING'",
+    );
+    assert.equal(decision.rewrittenRequest?.rawPayload.operation, "select");
+    assert.equal(
+      decision.rewrittenRequest?.rawPayload.rewriteReason,
+      "destructive_sql_delete_to_select_count",
+    );
+    assert.equal(decision.rewrittenRequest?.rawPayload.sourceRequestId, "req-decision-test");
   });
 
   it("maps other high risk to approval", () => {
@@ -176,6 +191,9 @@ describe("execution decision engine", () => {
     assert.equal(decision.type, DecisionType.RequireApproval);
     assert.equal(decision.code, "risk.high.require_approval");
     assert.match(decision.recommendedAction, /human approval/);
+    assert.equal(decision.rewrittenRequest?.environment, Environment.Staging);
+    assert.equal(decision.rewrittenRequest?.rawPayload.deploymentStrategy, "canary");
+    assert.equal(decision.rewrittenRequest?.rawPayload.canaryPercentage, 10);
   });
 
   it("maps prohibited risk to block", () => {
@@ -198,5 +216,6 @@ describe("execution decision engine", () => {
     assert.equal(decision.code, "risk.prohibited.block");
     assert.match(decision.reason, /hard blocking rules/);
     assert.match(decision.recommendedAction, /do not invoke/i);
+    assert.equal(decision.rewrittenRequest?.rawPayload.sql, "SELECT COUNT(*) FROM orders");
   });
 });

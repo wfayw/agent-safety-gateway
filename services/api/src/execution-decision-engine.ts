@@ -11,6 +11,9 @@ import {
 } from "@agent-safety-gateway/shared";
 
 import type { RiskLevelScore } from "./risk-level-scorer.js";
+import { createParameterRewriteSuggester } from "./parameter-rewrite-suggester.js";
+
+const parameterRewriteSuggester = createParameterRewriteSuggester();
 
 export type ExecutionDecisionInput = {
   request: ToolCallRequest;
@@ -37,12 +40,13 @@ const createDecision = (
   type: ExecutionDecision["type"],
   code: string,
   recommendedAction: string,
+  rewrittenRequest = parameterRewriteSuggester.suggestRewrite(input),
 ): ExecutionDecision => ({
   type,
   code,
   reason: toReason(input),
   recommendedAction,
-  rewrittenRequest: null,
+  rewrittenRequest,
 });
 
 const isConfigProductionUpdate = ({ actionTuple }: ExecutionDecisionInput) =>
