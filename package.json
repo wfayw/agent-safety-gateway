@@ -6,6 +6,10 @@
   "type": "module",
   "scripts": {
     "dev": "pnpm --filter @agent-safety-gateway/api dev",
+    "local:start": "bash scripts/local-start.sh",
+    "local:verify": "bash scripts/local-start.sh --verify-only",
+    "local:status": "bash scripts/local-start.sh --status",
+    "local:stop": "bash scripts/local-start.sh --stop",
     "build": "pnpm --filter @agent-safety-gateway/shared build && pnpm --filter @agent-safety-gateway/api build && pnpm --filter @agent-safety-gateway/web build",
     "typecheck": "pnpm --filter @agent-safety-gateway/shared typecheck && pnpm --filter @agent-safety-gateway/api typecheck && pnpm --filter @agent-safety-gateway/web typecheck",
     "test": "node scripts/workspace-placeholder.mjs test",

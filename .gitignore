@@ -1,6 +1,8 @@
 node_modules/
 dist/
 coverage/
+.local/
+docs/evidence/local-start/
 
 .env
 .env.*
