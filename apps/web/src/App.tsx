@@ -525,7 +525,7 @@ function AnalysisResultDetails({ result }: { result: AnalyzeToolCallResponse }) 
   }));
 
   return (
-    <Flex vertical gap="middle">
+    <Flex className="simulator-result-details" vertical gap="middle">
       <Card size="small" title="动作元组">
         <Descriptions bordered column={{ xs: 1, md: 2, xl: 3 }} items={actionTupleDescriptionItems(result)} size="small" />
       </Card>
@@ -563,7 +563,7 @@ function AnalysisResultDetails({ result }: { result: AnalyzeToolCallResponse }) 
         />
       </Card>
       <Card size="small" title="执行决策与建议">
-        <Space orientation="vertical" size="middle">
+        <Space className="simulator-result-stack" orientation="vertical" size="middle">
           <Space wrap>
             <Text strong>风险等级</Text>
             <RiskStatusTag status={result.riskLevel} />
@@ -1404,7 +1404,7 @@ function SimulatorPage() {
         </Form>
       </Card>
       <Card title="网关分析结果">
-        <Space orientation="vertical" size="middle">
+        <Space className="simulator-result-stack" orientation="vertical" size="middle">
           {!submittedRequest && !isAnalyzing && !analysisError && !analysisResult ? (
             <EmptyState
               title="暂无分析结果"

@@ -115,6 +115,19 @@ body {
   white-space: pre-wrap;
 }
 
+.simulator-result-stack,
+.simulator-result-details {
+  width: 100%;
+  min-width: 0;
+}
+
+.simulator-result-stack > .ant-space-item,
+.simulator-result-details > .ant-flex,
+.simulator-result-details > .ant-card {
+  width: 100%;
+  min-width: 0;
+}
+
 @media (max-width: 1024px) {
   .app-brand {
     padding-inline: 12px;
