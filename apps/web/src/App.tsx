@@ -2,7 +2,7 @@ import { Alert, Button, Card, ConfigProvider, Descriptions, Flex, Form, Input, L
 import type { FormProps, MenuProps, TableProps } from 'antd';
 import type { AffectedResource, AuditRecord, DecisionType, Environment, ImpactPath, JsonObject, JsonValue, RiskFactor, RiskFactorSeverity, RiskLevel, ToolCallRequest, ToolType } from '@agent-safety-gateway/shared';
 import { useEffect, useMemo, useState } from 'react';
-import { analyzeToolCall, listAudits, listScenarios, normalizeApiError, type AnalyzeToolCallResponse, type ApiErrorPayload, type ScenarioSummary } from './api';
+import { analyzeToolCall, listAudits, listScenarios, normalizeApiError, type AnalyzeToolCallResponse, type ApiErrorPayload, type AuditFilters, type ScenarioSummary } from './api';
 import { safetyGatewayTheme } from './theme';
 import { EmptyState, ErrorState, LoadingState, SectionHeader } from './ui/states';
 import { DecisionStatusTag, RiskStatusTag } from './ui/status-tags';
@@ -61,6 +61,22 @@ const environmentLabels: Record<Environment, string> = {
   production: '生产',
 };
 
+const riskLevelLabels: Record<RiskLevel, string> = {
+  low: '低风险',
+  medium: '中风险',
+  high: '高风险',
+  prohibited: '禁止风险',
+};
+
+const decisionLabels: Record<DecisionType, string> = {
+  allow: '允许',
+  block: '阻断',
+  require_approval: '审批',
+  sandbox: '沙箱',
+  rewrite: '改写',
+  readonly: '只读',
+};
+
 const riskFactorSeverityConfig: Record<RiskFactorSeverity, { color: string; label: string }> = {
   informational: {
     color: 'blue',
@@ -90,6 +106,8 @@ type SimulatorFormValues = {
   configValue?: string;
 };
 
+type AuditFilterFormValues = AuditFilters;
+
 const toolParameterFieldNames: (keyof SimulatorFormValues)[] = [
   'sqlText',
   'cicdService',
@@ -108,6 +126,16 @@ const toolTypeOptions = (Object.keys(toolTypeLabels) as ToolType[]).map((toolTyp
 const environmentOptions = (Object.keys(environmentLabels) as Environment[]).map((environment) => ({
   label: environmentLabels[environment],
   value: environment,
+}));
+
+const riskLevelOptions = (Object.keys(riskLevelLabels) as RiskLevel[]).map((riskLevel) => ({
+  label: riskLevelLabels[riskLevel],
+  value: riskLevel,
+}));
+
+const decisionOptions = (Object.keys(decisionLabels) as DecisionType[]).map((decision) => ({
+  label: decisionLabels[decision],
+  value: decision,
 }));
 
 const scenarioButtonLabels: Record<string, string> = {
@@ -567,6 +595,32 @@ const createDashboardMetrics = (audits: AuditRecord[]) => [
     description: '命中最高风险等级',
   },
 ];
+
+const normalizeAuditFilters = (values: AuditFilterFormValues): AuditFilters => {
+  const filters: AuditFilters = {};
+
+  if (values.decision) {
+    filters.decision = values.decision;
+  }
+
+  if (values.riskLevel) {
+    filters.riskLevel = values.riskLevel;
+  }
+
+  if (values.toolType) {
+    filters.toolType = values.toolType;
+  }
+
+  if (values.environment) {
+    filters.environment = values.environment;
+  }
+
+  return filters;
+};
+
+const countActiveAuditFilters = (filters: AuditFilters) => {
+  return Object.values(filters).filter((value) => value !== undefined).length;
+};
 
 function resolveRoute(pathname: string): AppRoute {
   if (pathname === '/' || pathname === '') {
@@ -1139,26 +1193,209 @@ function SimulatorPage() {
   );
 }
 
-function AuditPage() {
-  return (
-    <Card title="审计证据回放">
-      <Space orientation="vertical" size="middle">
-        <Paragraph type="secondary">
-          审计回放页面将集中呈现 Agent 原始输出、ToolCallRequest、网关决策、executor 日志和结论，支持复盘每一次执行控制。
-        </Paragraph>
-        <Alert
-          showIcon
-          type="info"
-          title="等待审计 API 数据接入"
-          description="当前路由已可访问，后续故事会接入审计列表、筛选和详情回放。"
-        />
-        <Space wrap>
-          <DecisionStatusTag status="allow" />
-          <DecisionStatusTag status="sandbox" />
-          <RiskStatusTag status="medium" />
+type AuditPageProps = {
+  navigateToAudit: (auditId: string) => void;
+};
+
+function AuditPage({ navigateToAudit }: AuditPageProps) {
+  const [form] = Form.useForm<AuditFilterFormValues>();
+  const [filters, setFilters] = useState<AuditFilters>({});
+  const [audits, setAudits] = useState<AuditRecord[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<ApiErrorPayload | null>(null);
+  const activeFilterCount = countActiveAuditFilters(filters);
+
+  useEffect(() => {
+    let isCurrent = true;
+
+    const loadAudits = async () => {
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        const nextAudits = await listAudits(filters);
+
+        if (isCurrent) {
+          setAudits(nextAudits);
+        }
+      } catch (loadError: unknown) {
+        if (isCurrent) {
+          setError(normalizeApiError(loadError, '无法加载审计记录'));
+        }
+      } finally {
+        if (isCurrent) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    void loadAudits();
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [filters]);
+
+  const columns: TableProps<AuditRecord>['columns'] = [
+    {
+      title: '时间',
+      dataIndex: 'createdAt',
+      key: 'createdAt',
+      render: (createdAt: string) => formatTimestamp(createdAt),
+      width: 160,
+    },
+    {
+      title: 'Audit ID',
+      dataIndex: 'id',
+      key: 'id',
+      render: (auditId: string) => <Text code>{auditId}</Text>,
+      width: 220,
+    },
+    {
+      title: '工具与环境',
+      key: 'tool',
+      render: (_, audit) => (
+        <Space orientation="vertical" size={0}>
+          <Text>{toolTypeLabels[audit.request.toolType]}</Text>
+          <Text type="secondary">{environmentLabels[audit.request.environment]}</Text>
         </Space>
-      </Space>
-    </Card>
+      ),
+      width: 140,
+    },
+    {
+      title: '动作目标',
+      key: 'target',
+      render: (_, audit) => (
+        <Space orientation="vertical" size={0}>
+          <Text code>{audit.actionTuple.target}</Text>
+          <Text type="secondary">{audit.actionTuple.operation}</Text>
+        </Space>
+      ),
+      width: 180,
+    },
+    {
+      title: '风险',
+      dataIndex: 'riskLevel',
+      key: 'riskLevel',
+      render: (riskLevel: RiskLevel) => <RiskStatusTag status={riskLevel} />,
+      width: 120,
+    },
+    {
+      title: '决策',
+      key: 'decision',
+      render: (_, audit) => <DecisionStatusTag status={audit.decision.type as DecisionType} />,
+      width: 120,
+    },
+    {
+      title: '原因摘要',
+      key: 'reason',
+      render: (_, audit) => <Text type="secondary">{audit.decision.reason}</Text>,
+    },
+    {
+      title: '详情',
+      key: 'detail',
+      render: (_, audit) => (
+        <Button onClick={() => navigateToAudit(audit.id)} type="link">
+          打开详情
+        </Button>
+      ),
+      width: 110,
+    },
+  ];
+
+  const handleFilterChange: FormProps<AuditFilterFormValues>['onValuesChange'] = (_, allValues) => {
+    setFilters(normalizeAuditFilters(allValues));
+  };
+
+  const handleResetFilters = () => {
+    form.resetFields();
+    setFilters({});
+  };
+
+  return (
+    <Flex vertical gap="large">
+      <Card>
+        <Space orientation="vertical" size="middle">
+          <Title level={2}>审计证据回放</Title>
+          <Paragraph type="secondary">
+            列出每一次安全网关分析记录，可按决策、风险等级、工具类型和目标环境筛选，点击行进入后续审计详情回放。
+          </Paragraph>
+          <Alert
+            showIcon
+            type="info"
+            title="只读审计检索，不触发 executor"
+            description="筛选仅调用审计查询 API 更新表格，不会重新分析请求或执行任何工具。"
+          />
+        </Space>
+      </Card>
+      <Card>
+        <Flex vertical gap="middle">
+          <SectionHeader
+            title="审计记录筛选"
+            description="选择过滤条件后表格会局部刷新，便于快速定位阻断、沙箱、审批和低风险对照记录。"
+            extra={<Tag color="blue">当前过滤 {activeFilterCount} 项</Tag>}
+          />
+          <Form form={form} layout="vertical" onValuesChange={handleFilterChange}>
+            <Flex gap="middle" wrap>
+              <Form.Item label="Decision" name="decision" style={{ flex: '1 1 180px' }}>
+                <Select allowClear options={decisionOptions} placeholder="全部决策" />
+              </Form.Item>
+              <Form.Item label="Risk level" name="riskLevel" style={{ flex: '1 1 180px' }}>
+                <Select allowClear options={riskLevelOptions} placeholder="全部风险等级" />
+              </Form.Item>
+              <Form.Item label="Tool type" name="toolType" style={{ flex: '1 1 180px' }}>
+                <Select allowClear options={toolTypeOptions} placeholder="全部工具" />
+              </Form.Item>
+              <Form.Item label="Environment" name="environment" style={{ flex: '1 1 180px' }}>
+                <Select allowClear options={environmentOptions} placeholder="全部环境" />
+              </Form.Item>
+              <Form.Item label="操作" style={{ flex: '0 0 120px' }}>
+                <Button block onClick={handleResetFilters}>
+                  清空筛选
+                </Button>
+              </Form.Item>
+            </Flex>
+          </Form>
+        </Flex>
+      </Card>
+      <Card>
+        <Flex vertical gap="middle">
+          <SectionHeader
+            title="审计记录列表"
+            description="行内展示请求、动作目标、风险和执行决策；点击行或“打开详情”可进入该 audit id 的回放页。"
+            extra={<Text type="secondary">共 {audits.length} 条</Text>}
+          />
+          {isLoading ? (
+            <LoadingState title="正在加载审计记录" description="等待审计 API 返回查询结果，期间不会默认放行任何执行。" />
+          ) : null}
+          {error ? (
+            <ErrorState
+              title="无法加载审计记录"
+              description={`${error.message}。请确认 API 服务可访问；审计不可用时不要根据空表判断执行安全。`}
+            />
+          ) : null}
+          {!isLoading && !error && audits.length === 0 ? (
+            <EmptyState
+              title="没有匹配的审计记录"
+              description="请清空筛选或先在工具调用模拟器运行种子场景，生成可复盘的网关审计证据。"
+            />
+          ) : null}
+          {!isLoading && !error && audits.length > 0 ? (
+            <Table
+              columns={columns}
+              dataSource={audits}
+              onRow={(audit) => ({
+                className: 'audit-table-row',
+                onClick: () => navigateToAudit(audit.id),
+              })}
+              pagination={{ pageSize: 10, showSizeChanger: false }}
+              rowKey="id"
+              scroll={{ x: 1160 }}
+            />
+          ) : null}
+        </Flex>
+      </Card>
+    </Flex>
   );
 }
 
@@ -1169,7 +1406,7 @@ function renderRouteContent(routeKey: RouteKey, navigateToAudit: (auditId: strin
     case 'simulator':
       return <SimulatorPage />;
     case 'audit':
-      return <AuditPage />;
+      return <AuditPage navigateToAudit={navigateToAudit} />;
   }
 }
 

@@ -98,6 +98,10 @@ body {
   cursor: pointer;
 }
 
+.audit-table-row {
+  cursor: pointer;
+}
+
 .simulator-scenario-card {
   flex: 1 1 240px;
   min-width: 0;
