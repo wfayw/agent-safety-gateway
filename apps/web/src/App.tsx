@@ -2,7 +2,7 @@ import { Alert, Button, Card, ConfigProvider, Descriptions, Flex, Form, Input, L
 import type { FormProps, MenuProps, TableProps } from 'antd';
 import type { AffectedResource, AuditRecord, DecisionType, Environment, ImpactPath, JsonObject, JsonValue, RiskFactor, RiskFactorSeverity, RiskLevel, ToolCallRequest, ToolType } from '@agent-safety-gateway/shared';
 import { useEffect, useMemo, useState } from 'react';
-import { analyzeToolCall, listAudits, listScenarios, normalizeApiError, type AnalyzeToolCallResponse, type ApiErrorPayload, type AuditFilters, type ScenarioSummary } from './api';
+import { analyzeToolCall, getAudit, listAudits, listScenarios, normalizeApiError, type AnalyzeToolCallResponse, type ApiErrorPayload, type AuditFilters, type ScenarioSummary } from './api';
 import { safetyGatewayTheme } from './theme';
 import { EmptyState, ErrorState, LoadingState, SectionHeader } from './ui/states';
 import { DecisionStatusTag, RiskStatusTag } from './ui/status-tags';
@@ -90,6 +90,30 @@ const riskFactorSeverityConfig: Record<RiskFactorSeverity, { color: string; labe
     color: 'error',
     label: '严重',
   },
+};
+
+const riskFactorCategoryLabels: Record<RiskFactor['category'], string> = {
+  operation: '操作风险',
+  environment: '环境风险',
+  resource_criticality: '资源关键性',
+  dependency_impact: '依赖影响',
+  validation_state: '验证状态',
+  reversibility: '可回滚性',
+};
+
+const riskFactorCategoryOrder: Record<RiskFactor['category'], number> = {
+  operation: 10,
+  environment: 20,
+  resource_criticality: 30,
+  dependency_impact: 40,
+  validation_state: 50,
+  reversibility: 60,
+};
+
+const riskFactorSeverityOrder: Record<RiskFactorSeverity, number> = {
+  critical: 10,
+  warning: 20,
+  informational: 30,
 };
 
 type SimulatorFormValues = {
@@ -194,6 +218,24 @@ const renderSeverityTag = (severity: RiskFactorSeverity) => {
   const severityConfig = riskFactorSeverityConfig[severity];
 
   return <Tag color={severityConfig.color}>{severityConfig.label}</Tag>;
+};
+
+const sortRiskFactorsForReplay = (riskFactors: RiskFactor[]) => {
+  return [...riskFactors].sort((left, right) => {
+    const categoryDiff = riskFactorCategoryOrder[left.category] - riskFactorCategoryOrder[right.category];
+
+    if (categoryDiff !== 0) {
+      return categoryDiff;
+    }
+
+    const severityDiff = riskFactorSeverityOrder[left.severity] - riskFactorSeverityOrder[right.severity];
+
+    if (severityDiff !== 0) {
+      return severityDiff;
+    }
+
+    return right.score - left.score;
+  });
 };
 
 const findImpactPath = (impactPaths: ImpactPath[], resource: AffectedResource) => {
@@ -320,7 +362,7 @@ const getAnalysisAlertTitle = (result: AnalyzeToolCallResponse) => {
   return '网关已返回允许执行结果';
 };
 
-const actionTupleDescriptionItems = (result: AnalyzeToolCallResponse) => [
+const actionTupleDescriptionItems = (result: Pick<AnalyzeToolCallResponse, 'actionTuple'>) => [
   {
     key: 'toolType',
     label: '工具类型',
@@ -431,7 +473,7 @@ const riskFactorColumns: TableColumns<RiskFactor> = [
     render: (_, riskFactor) => (
       <Space orientation="vertical" size={0}>
         <Text strong>{riskFactor.label}</Text>
-        <Text type="secondary">{riskFactor.category}</Text>
+        <Text type="secondary">{riskFactorCategoryLabels[riskFactor.category]}</Text>
       </Space>
     ),
     width: 240,
@@ -565,6 +607,230 @@ function AnalysisResultDetails({ result }: { result: AnalyzeToolCallResponse }) 
           />
         </Space>
       </Card>
+    </Flex>
+  );
+}
+
+type AuditDetailPageProps = {
+  auditId: string;
+  navigateToAuditList: () => void;
+};
+
+const auditActionTupleDescriptionItems = (audit: AuditRecord) => actionTupleDescriptionItems({
+  actionTuple: audit.actionTuple,
+}).map(({ span: _span, ...item }) => item);
+
+const auditRequestDescriptionItems = (audit: AuditRecord) => [
+  {
+    key: 'requestId',
+    label: 'Request ID',
+    children: <Text code>{audit.request.id}</Text>,
+  },
+  {
+    key: 'toolType',
+    label: '工具类型',
+    children: toolTypeLabels[audit.request.toolType],
+  },
+  {
+    key: 'environment',
+    label: '目标环境',
+    children: environmentLabels[audit.request.environment],
+  },
+  {
+    key: 'actor',
+    label: 'Actor',
+    children: <Text code>{audit.request.actor}</Text>,
+  },
+  {
+    key: 'createdAt',
+    label: '请求时间',
+    children: formatTimestamp(audit.request.createdAt),
+  },
+  {
+    key: 'taskPurpose',
+    label: '任务目的',
+    children: audit.request.taskPurpose,
+  },
+  {
+    key: 'rawPayload',
+    label: '原始参数',
+    children: <pre className="simulator-json-preview">{formatJsonObject(audit.request.rawPayload)}</pre>,
+  },
+];
+
+function AuditDetailPage({ auditId, navigateToAuditList }: AuditDetailPageProps) {
+  const [audit, setAudit] = useState<AuditRecord | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<ApiErrorPayload | null>(null);
+
+  useEffect(() => {
+    let isCurrent = true;
+
+    const loadAudit = async () => {
+      if (!auditId) {
+        setAudit(null);
+        setError({
+          code: 'MISSING_AUDIT_ID',
+          details: null,
+          message: '缺少 audit id，无法加载审计详情。',
+        });
+        setIsLoading(false);
+        return;
+      }
+
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        const nextAudit = await getAudit(auditId);
+
+        if (isCurrent) {
+          setAudit(nextAudit);
+        }
+      } catch (loadError: unknown) {
+        if (isCurrent) {
+          setError(normalizeApiError(loadError, '无法加载审计详情'));
+          setAudit(null);
+        }
+      } finally {
+        if (isCurrent) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    void loadAudit();
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [auditId]);
+
+  const indirectResourceRows = useMemo(
+    () => audit?.indirectResources.map((resource) => ({
+      ...resource,
+      impactPath: findImpactPath(audit.impactPaths, resource),
+    })) ?? [],
+    [audit],
+  );
+  const sortedRiskFactors = useMemo(
+    () => audit ? sortRiskFactorsForReplay(audit.riskFactors) : [],
+    [audit],
+  );
+
+  return (
+    <Flex vertical gap="large">
+      <Card>
+        <Space orientation="vertical" size="middle">
+          <Title level={2}>审计详情回放</Title>
+          <Paragraph type="secondary">
+            读取单条 audit id 的原始请求、动作元组、资源影响、风险因子和最终执行决策；此页面只读，不会重新触发 executor。
+          </Paragraph>
+          <Space wrap>
+            <Text type="secondary">Audit ID：{auditId ? <Text code>{auditId}</Text> : '未提供'}</Text>
+            <Button onClick={navigateToAuditList}>返回审计列表</Button>
+          </Space>
+        </Space>
+      </Card>
+      {isLoading ? (
+        <LoadingState title="正在加载审计详情" description="等待审计 API 返回完整回放证据，期间不会默认放行任何执行。" />
+      ) : null}
+      {error ? (
+        <ErrorState
+          title="无法加载审计详情"
+          description={`${error.message} 请从审计列表选择一条有效记录；缺少审计证据时不要复用旧决策执行工具。`}
+        />
+      ) : null}
+      {!isLoading && !error && audit ? (
+        <Flex vertical gap="large">
+          <Card>
+            <Space orientation="vertical" size="middle">
+              <SectionHeader
+                title="执行决策摘要"
+                description="决策原因保持首屏可见，用于判断 executor 是否必须阻断、审批、沙箱或允许。"
+                extra={<Text type="secondary">记录时间：{formatTimestamp(audit.createdAt)}</Text>}
+              />
+              <Alert
+                showIcon
+                type={audit.decision.type === 'block' || audit.riskLevel === 'prohibited' ? 'error' : audit.decision.type === 'sandbox' || audit.decision.type === 'require_approval' ? 'warning' : 'success'}
+                title={audit.decision.reason}
+                description={audit.decision.recommendedAction}
+              />
+              <Descriptions
+                bordered
+                column={{ xs: 1, md: 2, xl: 3 }}
+                items={[
+                  {
+                    key: 'riskLevel',
+                    label: '风险等级',
+                    children: <RiskStatusTag status={audit.riskLevel} />,
+                  },
+                  {
+                    key: 'decision',
+                    label: '执行决策',
+                    children: <DecisionStatusTag status={audit.decision.type as DecisionType} />,
+                  },
+                  {
+                    key: 'decisionCode',
+                    label: '决策代码',
+                    children: <Text code>{audit.decision.code}</Text>,
+                  },
+                  {
+                    key: 'decisionReason',
+                    label: 'Decision reason',
+                    children: audit.decision.reason,
+                  },
+                ]}
+                size="small"
+              />
+            </Space>
+          </Card>
+          <Card size="small" title="原始请求">
+            <Descriptions bordered column={{ xs: 1, md: 2, xl: 3 }} items={auditRequestDescriptionItems(audit)} size="small" />
+          </Card>
+          <Card size="small" title="动作元组">
+            <Descriptions bordered column={{ xs: 1, md: 2, xl: 3 }} items={auditActionTupleDescriptionItems(audit)} size="small" />
+          </Card>
+          <Card size="small" title="直接受影响资源">
+            <Table
+              columns={resourceColumns}
+              dataSource={audit.directResources}
+              locale={{ emptyText: '未记录直接受影响资源' }}
+              pagination={false}
+              rowKey="id"
+              scroll={{ x: 900 }}
+              size="small"
+            />
+          </Card>
+          <Card size="small" title="间接受影响资源">
+            <Table
+              columns={indirectResourceColumns}
+              dataSource={indirectResourceRows}
+              locale={{ emptyText: '未记录间接受影响资源' }}
+              pagination={false}
+              rowKey="id"
+              scroll={{ x: 1120 }}
+              size="small"
+            />
+          </Card>
+          <Card size="small" title="风险因子（按类别与严重度排序）">
+            <Table
+              columns={riskFactorColumns}
+              dataSource={sortedRiskFactors}
+              locale={{ emptyText: '未记录风险因子' }}
+              pagination={false}
+              rowKey={(riskFactor) => `${riskFactor.category}-${riskFactor.label}`}
+              scroll={{ x: 760 }}
+              size="small"
+            />
+          </Card>
+          {audit.decision.rewrittenRequest ? (
+            <Card size="small" title="安全改写请求">
+              <pre className="simulator-json-preview">{formatJsonObject(audit.decision.rewrittenRequest.rawPayload)}</pre>
+            </Card>
+          ) : null}
+        </Flex>
+      ) : null}
     </Flex>
   );
 }
@@ -1399,7 +1665,26 @@ function AuditPage({ navigateToAudit }: AuditPageProps) {
   );
 }
 
-function renderRouteContent(routeKey: RouteKey, navigateToAudit: (auditId: string) => void) {
+const getAuditIdFromPath = (pathname: string) => {
+  if (!pathname.startsWith('/audits/')) {
+    return null;
+  }
+
+  return decodeURIComponent(pathname.slice('/audits/'.length));
+};
+
+function renderRouteContent(
+  routeKey: RouteKey,
+  currentPath: string,
+  navigateToAudit: (auditId: string) => void,
+  navigateToAuditList: () => void,
+) {
+  const detailAuditId = getAuditIdFromPath(currentPath);
+
+  if (detailAuditId !== null) {
+    return <AuditDetailPage auditId={detailAuditId} navigateToAuditList={navigateToAuditList} />;
+  }
+
   switch (routeKey) {
     case 'dashboard':
       return <DashboardPage navigateToAudit={navigateToAudit} />;
@@ -1449,6 +1734,11 @@ export function App() {
     setCurrentPath(nextPath);
   };
 
+  const navigateToAuditList = () => {
+    window.history.pushState(null, '', '/audits');
+    setCurrentPath('/audits');
+  };
+
   return (
     <ConfigProvider theme={safetyGatewayTheme}>
       <Layout className="app-shell">
@@ -1474,7 +1764,7 @@ export function App() {
             </Space>
           </Header>
           <Content className="app-content">
-            {renderRouteContent(currentRoute.key, navigateToAudit)}
+            {renderRouteContent(currentRoute.key, currentPath, navigateToAudit, navigateToAuditList)}
           </Content>
         </Layout>
       </Layout>
