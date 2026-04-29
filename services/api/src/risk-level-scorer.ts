@@ -4,6 +4,7 @@ import {
   OperationType,
   RiskFactorCategory,
   RiskLevel,
+  ToolType,
   type ActionTuple,
   type AffectedResource,
   type RiskFactor,
@@ -97,17 +98,26 @@ const getHardBlockingRules = ({
   const isProductionDelete =
     actionTuple.environment === Environment.Production &&
     actionTuple.operation === OperationType.Delete;
+  const isFailedProductionDeploy =
+    actionTuple.toolType === ToolType.CiCd &&
+    actionTuple.environment === Environment.Production &&
+    actionTuple.operation === OperationType.Deploy &&
+    actionTuple.parameters.testStatus === "failed";
   const touchesCriticalResource = affectedResources.some(
     (resource) => resource.criticalityLevel === CriticalityLevel.Critical,
   );
 
-  if (!isProductionDelete || !touchesCriticalResource) {
-    return [];
+  const hardRules: string[] = [];
+
+  if (isProductionDelete && touchesCriticalResource) {
+    hardRules.push("production_delete_on_critical_resource");
   }
 
-  return [
-    "production_delete_on_critical_resource",
-  ];
+  if (isFailedProductionDeploy && touchesCriticalResource) {
+    hardRules.push("production_deploy_with_failed_tests");
+  }
+
+  return hardRules;
 };
 
 const createReasons = (

@@ -155,4 +155,30 @@ describe("risk level scorer", () => {
     ]);
     assert.match(result.explanation, /hard blocking rules/);
   });
+
+  it("applies hard block for failed production deploys on critical resources", () => {
+    const scorer = createRiskLevelScorer();
+    const result = scorer.scoreRiskLevel({
+      actionTuple: createActionTuple({
+        toolType: ToolType.CiCd,
+        operation: OperationType.Deploy,
+        target: "payment-service",
+        parameters: { testStatus: "failed" },
+      }),
+      directResources: [
+        createResource({
+          name: "payment-service",
+          type: ResourceType.Service,
+        }),
+      ],
+      riskFactors: [createFactor({ score: 10 })],
+    });
+
+    assert.equal(result.riskLevel, RiskLevel.Prohibited);
+    assert.equal(result.score, 10);
+    assert.deepEqual(result.appliedHardRules, [
+      "production_deploy_with_failed_tests",
+    ]);
+    assert.match(result.explanation, /hard blocking rules/);
+  });
 });

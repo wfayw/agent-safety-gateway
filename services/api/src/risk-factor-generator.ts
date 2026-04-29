@@ -2,6 +2,7 @@ import {
   CriticalityLevel,
   Environment,
   OperationType,
+  ToolType,
   RiskFactorCategory,
   RiskFactorSeverity,
   RollbackCapability,
@@ -139,6 +140,51 @@ const createEnvironmentFactor = (actionTuple: ActionTuple): RiskFactor => {
       actionTuple.environment === Environment.Production
         ? "The request targets production, where mistakes affect live users."
         : `The request targets ${actionTuple.environment}, which has lower blast radius than production.`,
+  };
+};
+
+const getStringParameter = (actionTuple: ActionTuple, key: string) => {
+  const value = actionTuple.parameters[key];
+
+  return typeof value === "string" ? value : null;
+};
+
+const createValidationFactor = (actionTuple: ActionTuple): RiskFactor | null => {
+  if (
+    actionTuple.toolType !== ToolType.CiCd ||
+    actionTuple.operation !== OperationType.Deploy
+  ) {
+    return null;
+  }
+
+  const testStatus = getStringParameter(actionTuple, "testStatus");
+
+  if (testStatus === "failed") {
+    return {
+      category: RiskFactorCategory.ValidationState,
+      label: "Failed pre-deployment tests",
+      severity: RiskFactorSeverity.Critical,
+      score: 35,
+      reason: `${actionTuple.target} has failed tests, so production deploy must not reach the executor.`,
+    };
+  }
+
+  if (testStatus === "passed") {
+    return {
+      category: RiskFactorCategory.ValidationState,
+      label: "Passed pre-deployment tests",
+      severity: RiskFactorSeverity.Informational,
+      score: 0,
+      reason: `${actionTuple.target} has passed tests before deployment.`,
+    };
+  }
+
+  return {
+    category: RiskFactorCategory.ValidationState,
+    label: "Unknown pre-deployment test status",
+    severity: RiskFactorSeverity.Warning,
+    score: 15,
+    reason: `${actionTuple.target} deployment did not include a passed test status.`,
   };
 };
 
@@ -310,10 +356,12 @@ const createRollbackFactor = (
 export const createRiskFactorGenerator = (): RiskFactorGenerator => ({
   generateRiskFactors({ actionTuple, directResources, indirectResources = [] }) {
     const allResources = [...directResources, ...indirectResources];
+    const validationFactor = createValidationFactor(actionTuple);
 
     return [
       createOperationFactor(actionTuple),
       createEnvironmentFactor(actionTuple),
+      ...(validationFactor ? [validationFactor] : []),
       createResourceFactor(allResources, actionTuple),
       createScopeFactor(directResources, indirectResources),
       createRollbackFactor(allResources, actionTuple),

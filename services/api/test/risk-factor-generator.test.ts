@@ -174,4 +174,31 @@ describe("risk factor generator", () => {
       RiskFactorSeverity.Critical,
     );
   });
+
+  it("adds failed test validation evidence for CI/CD deploys", () => {
+    const generator = createRiskFactorGenerator();
+    const factors = generator.generateRiskFactors({
+      actionTuple: createActionTuple({
+        toolType: ToolType.CiCd,
+        operation: OperationType.Deploy,
+        target: "payment-service",
+        parameters: { testStatus: "failed" },
+      }),
+      directResources: [
+        createResource({
+          name: "payment-service",
+          type: ResourceType.Service,
+        }),
+      ],
+    });
+
+    const validationFactor = findFactor(
+      factors,
+      RiskFactorCategory.ValidationState,
+    );
+
+    assert.equal(validationFactor?.label, "Failed pre-deployment tests");
+    assert.equal(validationFactor?.severity, RiskFactorSeverity.Critical);
+    assert.match(validationFactor?.reason ?? "", /failed tests/);
+  });
 });
