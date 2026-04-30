@@ -2,7 +2,7 @@ import { Alert, Button, Card, ConfigProvider, Descriptions, Flex, Form, Input, L
 import type { FormProps, MenuProps, TableProps } from 'antd';
 import type { AffectedResource, AuditRecord, DecisionType, Environment, ImpactPath, JsonObject, JsonValue, RiskFactor, RiskFactorSeverity, RiskLevel, ToolCallRequest, ToolType } from '@agent-safety-gateway/shared';
 import { useEffect, useMemo, useState } from 'react';
-import { analyzeToolCall, getAudit, listAudits, listScenarios, normalizeApiError, type AnalyzeToolCallResponse, type ApiErrorPayload, type AuditFilters, type ScenarioSummary } from './api';
+import { analyzeToolCall, getAudit, listAudits, listExecutionLogs, listHookDecisions, listScenarios, normalizeApiError, type AnalyzeToolCallResponse, type ApiErrorPayload, type AuditFilters, type ExecutionLogEntry, type HookDecisionRecord, type ScenarioSummary } from './api';
 import { safetyGatewayTheme } from './theme';
 import { EmptyState, ErrorState, LoadingState, SectionHeader } from './ui/states';
 import { DecisionStatusTag, RiskStatusTag } from './ui/status-tags';
@@ -213,6 +213,92 @@ const toStringValue = (value: JsonValue | undefined) => {
 };
 
 const formatJsonObject = (value: JsonObject) => JSON.stringify(value, null, 2);
+
+type HookDecisionTableRow = HookDecisionRecord & {
+  matchSources?: Array<'auditId' | 'requestId'>;
+};
+
+const renderBooleanTag = (value: boolean, labels: { trueLabel: string; falseLabel: string }) => (
+  <Tag color={value ? 'error' : 'success'}>{value ? labels.trueLabel : labels.falseLabel}</Tag>
+);
+
+const executionLogRowKey = (entry: ExecutionLogEntry) => [
+  entry.scenarioId,
+  entry.requestId,
+  entry.auditId ?? 'no-audit',
+  entry.timestamp,
+].join(':');
+
+const hookDecisionRowKey = (record: HookDecisionRecord) => record.id;
+
+const mergeExecutionLogs = (...entryGroups: ExecutionLogEntry[][]) => {
+  const entriesByKey = new Map<string, ExecutionLogEntry>();
+
+  for (const entry of entryGroups.flat()) {
+    entriesByKey.set(executionLogRowKey(entry), entry);
+  }
+
+  return [...entriesByKey.values()].sort((left, right) => toTimestamp(right.timestamp) - toTimestamp(left.timestamp));
+};
+
+const getHookDecisionMatchSources = (audit: AuditRecord, record: HookDecisionRecord) => {
+  const matchSources: Array<'auditId' | 'requestId'> = [];
+
+  if (record.auditId === audit.id) {
+    matchSources.push('auditId');
+  }
+
+  if (record.adaptedRequest?.id === audit.request.id) {
+    matchSources.push('requestId');
+  }
+
+  return matchSources;
+};
+
+const mergeHookDecisionMatches = (
+  audit: AuditRecord,
+  ...recordGroups: HookDecisionRecord[][]
+) => {
+  const recordsById = new Map<string, HookDecisionTableRow>();
+
+  for (const record of recordGroups.flat()) {
+    const existingRecord = recordsById.get(record.id);
+    const matchSources = getHookDecisionMatchSources(audit, record);
+
+    recordsById.set(record.id, {
+      ...record,
+      matchSources: existingRecord
+        ? [...new Set([...(existingRecord.matchSources ?? []), ...matchSources])]
+        : matchSources,
+    });
+  }
+
+  return [...recordsById.values()].sort((left, right) => toTimestamp(right.createdAt) - toTimestamp(left.createdAt));
+};
+
+const summarizeExecutorInvocation = (executionLogs: ExecutionLogEntry[]) => {
+  if (executionLogs.length === 0) {
+    return {
+      label: '未记录',
+      description: '没有找到匹配的 executor 日志，不能用空日志证明已执行。',
+      color: 'default',
+    };
+  }
+
+  if (executionLogs.some((entry) => entry.called)) {
+    return {
+      label: 'true',
+      description: `找到 ${executionLogs.filter((entry) => entry.called).length} 条 executorInvoked=true 日志。`,
+      color: 'success',
+    };
+  }
+
+  return {
+    label: 'false',
+    description: `找到 ${executionLogs.length} 条 executorInvoked=false 日志。`,
+    color: 'error',
+  };
+};
 
 const renderSeverityTag = (severity: RiskFactorSeverity) => {
   const severityConfig = riskFactorSeverityConfig[severity];
@@ -660,6 +746,9 @@ const auditRequestDescriptionItems = (audit: AuditRecord) => [
 
 function AuditDetailPage({ auditId, navigateToAuditList }: AuditDetailPageProps) {
   const [audit, setAudit] = useState<AuditRecord | null>(null);
+  const [executionLogs, setExecutionLogs] = useState<ExecutionLogEntry[]>([]);
+  const [matchingHookDecisions, setMatchingHookDecisions] = useState<HookDecisionTableRow[]>([]);
+  const [localHookBlocks, setLocalHookBlocks] = useState<HookDecisionRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<ApiErrorPayload | null>(null);
 
@@ -669,6 +758,9 @@ function AuditDetailPage({ auditId, navigateToAuditList }: AuditDetailPageProps)
     const loadAudit = async () => {
       if (!auditId) {
         setAudit(null);
+        setExecutionLogs([]);
+        setMatchingHookDecisions([]);
+        setLocalHookBlocks([]);
         setError({
           code: 'MISSING_AUDIT_ID',
           details: null,
@@ -683,14 +775,27 @@ function AuditDetailPage({ auditId, navigateToAuditList }: AuditDetailPageProps)
 
       try {
         const nextAudit = await getAudit(auditId);
+        const [logsByAuditId, logsByRequestId, hooksByAuditId, hooksByRequestId, localBlocks] = await Promise.all([
+          listExecutionLogs({ auditId: nextAudit.id }),
+          listExecutionLogs({ requestId: nextAudit.request.id }),
+          listHookDecisions({ auditId: nextAudit.id }),
+          listHookDecisions({ requestId: nextAudit.request.id }),
+          listHookDecisions({ shouldBlock: true }),
+        ]);
 
         if (isCurrent) {
           setAudit(nextAudit);
+          setExecutionLogs(mergeExecutionLogs(logsByAuditId, logsByRequestId));
+          setMatchingHookDecisions(mergeHookDecisionMatches(nextAudit, hooksByAuditId, hooksByRequestId));
+          setLocalHookBlocks(localBlocks.filter((record) => record.auditId === null && record.adaptedRequest === null));
         }
       } catch (loadError: unknown) {
         if (isCurrent) {
           setError(normalizeApiError(loadError, '无法加载审计详情'));
           setAudit(null);
+          setExecutionLogs([]);
+          setMatchingHookDecisions([]);
+          setLocalHookBlocks([]);
         }
       } finally {
         if (isCurrent) {
@@ -717,6 +822,140 @@ function AuditDetailPage({ auditId, navigateToAuditList }: AuditDetailPageProps)
     () => audit ? sortRiskFactorsForReplay(audit.riskFactors) : [],
     [audit],
   );
+  const executorInvocationSummary = useMemo(
+    () => summarizeExecutorInvocation(executionLogs),
+    [executionLogs],
+  );
+
+  const executionLogColumns: TableProps<ExecutionLogEntry>['columns'] = [
+    {
+      title: '时间',
+      dataIndex: 'timestamp',
+      key: 'timestamp',
+      render: (timestamp: string) => formatTimestamp(timestamp),
+      width: 160,
+    },
+    {
+      title: 'Executor invoked',
+      dataIndex: 'called',
+      key: 'called',
+      render: (called: boolean) => renderBooleanTag(called, { trueLabel: 'true', falseLabel: 'false' }),
+      width: 150,
+    },
+    {
+      title: '关联证据',
+      key: 'linkage',
+      render: (_, entry) => (
+        <Space orientation="vertical" size={0}>
+          <Text>Request：<Text code>{entry.requestId}</Text></Text>
+          <Text type="secondary">Audit：{entry.auditId ? <Text code>{entry.auditId}</Text> : '未记录'}</Text>
+        </Space>
+      ),
+      width: 280,
+    },
+    {
+      title: '工具/决策',
+      key: 'decision',
+      render: (_, entry) => (
+        <Space orientation="vertical" size={0}>
+          <Text>{toolTypeLabels[entry.toolType]}</Text>
+          <Text type="secondary">{entry.decision ? decisionLabels[entry.decision] : '未记录决策'}</Text>
+        </Space>
+      ),
+      width: 140,
+    },
+    {
+      title: '场景',
+      dataIndex: 'scenarioId',
+      key: 'scenarioId',
+      render: (scenarioId: string) => <Text code>{scenarioId}</Text>,
+    },
+  ];
+
+  const hookDecisionColumns: TableProps<HookDecisionTableRow>['columns'] = [
+    {
+      title: '时间',
+      dataIndex: 'createdAt',
+      key: 'createdAt',
+      render: (createdAt: string) => formatTimestamp(createdAt),
+      width: 160,
+    },
+    {
+      title: '工具',
+      key: 'tool',
+      render: (_, record) => (
+        <Space orientation="vertical" size={0}>
+          <Text>{record.toolName}</Text>
+          <Text type="secondary">{record.cwd ?? '未记录 cwd'}</Text>
+        </Space>
+      ),
+      width: 180,
+    },
+    {
+      title: '命令摘要',
+      dataIndex: 'commandSummary',
+      key: 'commandSummary',
+      render: (commandSummary: string) => <Text code>{commandSummary}</Text>,
+    },
+    {
+      title: 'Should block',
+      dataIndex: 'shouldBlock',
+      key: 'shouldBlock',
+      render: (shouldBlock: boolean) => renderBooleanTag(shouldBlock, { trueLabel: 'block', falseLabel: 'allow' }),
+      width: 130,
+    },
+    {
+      title: '关联方式',
+      key: 'matchSources',
+      render: (_, record) => record.matchSources && record.matchSources.length > 0 ? (
+        <Space wrap>
+          {record.matchSources.map((matchSource) => <Tag key={matchSource}>{matchSource}</Tag>)}
+        </Space>
+      ) : <Text type="secondary">未匹配当前 audit</Text>,
+      width: 150,
+    },
+    {
+      title: '阻断原因',
+      dataIndex: 'blockReason',
+      key: 'blockReason',
+      render: (blockReason: string) => <Text type="secondary">{blockReason}</Text>,
+    },
+  ];
+
+  const localHookBlockColumns: TableProps<HookDecisionRecord>['columns'] = [
+    {
+      title: '时间',
+      dataIndex: 'createdAt',
+      key: 'createdAt',
+      render: (createdAt: string) => formatTimestamp(createdAt),
+      width: 160,
+    },
+    {
+      title: '工具',
+      dataIndex: 'toolName',
+      key: 'toolName',
+      width: 150,
+    },
+    {
+      title: '命令摘要',
+      dataIndex: 'commandSummary',
+      key: 'commandSummary',
+      render: (commandSummary: string) => <Text code>{commandSummary}</Text>,
+    },
+    {
+      title: 'Should block',
+      dataIndex: 'shouldBlock',
+      key: 'shouldBlock',
+      render: (shouldBlock: boolean) => renderBooleanTag(shouldBlock, { trueLabel: 'block', falseLabel: 'allow' }),
+      width: 130,
+    },
+    {
+      title: '阻断原因',
+      dataIndex: 'blockReason',
+      key: 'blockReason',
+      render: (blockReason: string) => <Text type="secondary">{blockReason}</Text>,
+    },
+  ];
 
   return (
     <Flex vertical gap="large">
@@ -780,10 +1019,64 @@ function AuditDetailPage({ auditId, navigateToAuditList }: AuditDetailPageProps)
                     label: 'Decision reason',
                     children: audit.decision.reason,
                   },
+                  {
+                    key: 'executorInvoked',
+                    label: 'Executor invoked',
+                    children: (
+                      <Space orientation="vertical" size={0}>
+                        <Tag color={executorInvocationSummary.color}>{executorInvocationSummary.label}</Tag>
+                        <Text type="secondary">{executorInvocationSummary.description}</Text>
+                      </Space>
+                    ),
+                  },
+                  {
+                    key: 'hookDecisionLinks',
+                    label: 'Hook decision links',
+                    children: (
+                      <Space direction="vertical" size={0}>
+                        <Text>auditId：<Text code>{audit.id}</Text></Text>
+                        <Text>requestId：<Text code>{audit.request.id}</Text></Text>
+                        <Text type="secondary">下方 Codex Hook 表按 auditId 或 requestId 展示匹配证据。</Text>
+                      </Space>
+                    ),
+                  },
                 ]}
                 size="small"
               />
             </Space>
+          </Card>
+          <Card size="small" title="Executor 调用证据">
+            <Table
+              columns={executionLogColumns}
+              dataSource={executionLogs}
+              locale={{ emptyText: '未找到与当前 auditId 或 requestId 匹配的 executor 日志' }}
+              pagination={false}
+              rowKey={executionLogRowKey}
+              scroll={{ x: 960 }}
+              size="small"
+            />
+          </Card>
+          <Card size="small" title="Codex Hook 匹配决策">
+            <Table
+              columns={hookDecisionColumns}
+              dataSource={matchingHookDecisions}
+              locale={{ emptyText: '未找到与当前 auditId 或 requestId 匹配的 hook decision' }}
+              pagination={false}
+              rowKey={hookDecisionRowKey}
+              scroll={{ x: 1120 }}
+              size="small"
+            />
+          </Card>
+          <Card size="small" title="本地-only Codex Hook 阻断">
+            <Table
+              columns={localHookBlockColumns}
+              dataSource={localHookBlocks}
+              locale={{ emptyText: '暂无未绑定 gateway auditId 的本地 hook 阻断' }}
+              pagination={false}
+              rowKey={hookDecisionRowKey}
+              scroll={{ x: 900 }}
+              size="small"
+            />
           </Card>
           <Card size="small" title="原始请求">
             <Descriptions bordered column={{ xs: 1, md: 2, xl: 3 }} items={auditRequestDescriptionItems(audit)} size="small" />
@@ -1467,6 +1760,7 @@ function AuditPage({ navigateToAudit }: AuditPageProps) {
   const [form] = Form.useForm<AuditFilterFormValues>();
   const [filters, setFilters] = useState<AuditFilters>({});
   const [audits, setAudits] = useState<AuditRecord[]>([]);
+  const [hookDecisions, setHookDecisions] = useState<HookDecisionRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<ApiErrorPayload | null>(null);
   const activeFilterCount = countActiveAuditFilters(filters);
@@ -1479,10 +1773,14 @@ function AuditPage({ navigateToAudit }: AuditPageProps) {
       setError(null);
 
       try {
-        const nextAudits = await listAudits(filters);
+        const [nextAudits, nextHookDecisions] = await Promise.all([
+          listAudits(filters),
+          listHookDecisions(),
+        ]);
 
         if (isCurrent) {
           setAudits(nextAudits);
+          setHookDecisions(nextHookDecisions);
         }
       } catch (loadError: unknown) {
         if (isCurrent) {
@@ -1566,6 +1864,57 @@ function AuditPage({ navigateToAudit }: AuditPageProps) {
         </Button>
       ),
       width: 110,
+    },
+  ];
+
+  const hookDecisionColumns: TableProps<HookDecisionRecord>['columns'] = [
+    {
+      title: '时间',
+      dataIndex: 'createdAt',
+      key: 'createdAt',
+      render: (createdAt: string) => formatTimestamp(createdAt),
+      width: 160,
+    },
+    {
+      title: '工具',
+      key: 'tool',
+      render: (_, record) => (
+        <Space orientation="vertical" size={0}>
+          <Text>{record.toolName}</Text>
+          <Text type="secondary">{record.cwd ?? '未记录 cwd'}</Text>
+        </Space>
+      ),
+      width: 180,
+    },
+    {
+      title: '命令摘要',
+      dataIndex: 'commandSummary',
+      key: 'commandSummary',
+      render: (commandSummary: string) => <Text code>{commandSummary}</Text>,
+    },
+    {
+      title: 'Should block',
+      dataIndex: 'shouldBlock',
+      key: 'shouldBlock',
+      render: (shouldBlock: boolean) => renderBooleanTag(shouldBlock, { trueLabel: 'block', falseLabel: 'allow' }),
+      width: 130,
+    },
+    {
+      title: '关联 Audit/Request',
+      key: 'linkage',
+      render: (_, record) => (
+        <Space orientation="vertical" size={0}>
+          <Text>Audit：{record.auditId ? <Text code>{record.auditId}</Text> : 'local-only'}</Text>
+          <Text type="secondary">Request：{record.adaptedRequest?.id ? <Text code>{record.adaptedRequest.id}</Text> : '未适配为 gateway 请求'}</Text>
+        </Space>
+      ),
+      width: 280,
+    },
+    {
+      title: '阻断原因',
+      dataIndex: 'blockReason',
+      key: 'blockReason',
+      render: (blockReason: string) => <Text type="secondary">{blockReason}</Text>,
     },
   ];
 
@@ -1657,6 +2006,33 @@ function AuditPage({ navigateToAudit }: AuditPageProps) {
               pagination={{ pageSize: 10, showSizeChanger: false }}
               rowKey="id"
               scroll={{ x: 1160 }}
+            />
+          ) : null}
+        </Flex>
+      </Card>
+      <Card>
+        <Flex vertical gap="middle">
+          <SectionHeader
+            title="Codex Hook 决策证据"
+            description="展示 hook 拦截留下的工具名、命令摘要、shouldBlock、阻断原因和时间；local-only 阻断即使没有 gateway auditId 也会保留在表格中。"
+            extra={<Text type="secondary">共 {hookDecisions.length} 条</Text>}
+          />
+          {isLoading ? (
+            <LoadingState title="正在加载 Codex Hook 决策" description="等待只读 hook evidence API 返回拦截证据。" />
+          ) : null}
+          {!isLoading && !error && hookDecisions.length === 0 ? (
+            <EmptyState
+              title="暂无 Codex Hook 决策证据"
+              description="执行 Codex PreToolUse hook 后，gateway-backed 和 local-only 阻断都会显示在这里。"
+            />
+          ) : null}
+          {!isLoading && !error && hookDecisions.length > 0 ? (
+            <Table
+              columns={hookDecisionColumns}
+              dataSource={hookDecisions}
+              pagination={{ pageSize: 8, showSizeChanger: false }}
+              rowKey={hookDecisionRowKey}
+              scroll={{ x: 1120 }}
             />
           ) : null}
         </Flex>

@@ -11,6 +11,8 @@ import {
   getAudit,
   getHealth,
   listAudits,
+  listExecutionLogs,
+  listHookDecisions,
   listScenarios,
   normalizeApiError,
   resolveApiBaseUrl,
@@ -153,6 +155,62 @@ describe('web API client requests', () => {
     });
 
     assert.deepEqual(await getAudit('audit/1', client), { id: 'audit/1' });
+  });
+
+  it('lists execution logs with evidence filters as query parameters', async () => {
+    const client = createApiClient({
+      baseUrl: 'http://api.local',
+      fetchImpl: async (url, init) => {
+        assert.equal(
+          String(url),
+          'http://api.local/api/execution-logs?requestId=req-1&auditId=audit-1&toolType=sql&decision=allow&environment=production',
+        );
+        assert.equal(init?.method, 'GET');
+        return jsonResponse({ executionLogs: [{ requestId: 'req-1', called: true }] });
+      },
+    });
+
+    assert.deepEqual(
+      await listExecutionLogs(
+        {
+          requestId: 'req-1',
+          auditId: 'audit-1',
+          toolType: 'sql',
+          decision: 'allow',
+          environment: 'production',
+        },
+        client,
+      ),
+      [{ requestId: 'req-1', called: true }],
+    );
+  });
+
+  it('lists hook decisions and serializes boolean filters', async () => {
+    const client = createApiClient({
+      baseUrl: 'http://api.local',
+      fetchImpl: async (url, init) => {
+        assert.equal(
+          String(url),
+          'http://api.local/api/hook-decisions?requestId=req-1&auditId=audit-1&shouldBlock=true&toolName=Bash&environment=production',
+        );
+        assert.equal(init?.method, 'GET');
+        return jsonResponse({ hookDecisions: [{ id: 'hook-1', shouldBlock: true }] });
+      },
+    });
+
+    assert.deepEqual(
+      await listHookDecisions(
+        {
+          requestId: 'req-1',
+          auditId: 'audit-1',
+          shouldBlock: true,
+          toolName: 'Bash',
+          environment: 'production',
+        },
+        client,
+      ),
+      [{ id: 'hook-1', shouldBlock: true }],
+    );
   });
 
   it('normalizes API error responses to message, code, and details', async () => {

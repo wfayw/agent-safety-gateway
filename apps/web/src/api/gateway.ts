@@ -6,6 +6,7 @@ import type {
   Environment,
   ExecutionDecision,
   ImpactPath,
+  JsonValue,
   RiskFactor,
   RiskLevel,
   ToolCallRequest,
@@ -56,6 +57,46 @@ export type AuditFilters = {
   environment?: Environment;
 };
 
+export type ExecutionLogFilters = {
+  requestId?: string;
+  auditId?: string;
+  toolType?: ToolType;
+  decision?: DecisionType;
+  environment?: Environment;
+};
+
+export type ExecutionLogEntry = {
+  scenarioId: string;
+  toolType: ToolType;
+  requestId: string;
+  called: boolean;
+  auditId?: string;
+  decision?: DecisionType;
+  environment?: Environment;
+  timestamp: string;
+  result: JsonValue;
+};
+
+export type HookDecisionFilters = {
+  requestId?: string;
+  auditId?: string;
+  shouldBlock?: boolean;
+  toolName?: string;
+  environment?: Environment;
+};
+
+export type HookDecisionRecord = {
+  id: string;
+  toolName: string;
+  commandSummary: string;
+  cwd: string | null;
+  adaptedRequest: ToolCallRequest | null;
+  blockReason: string;
+  shouldBlock: boolean;
+  createdAt: string;
+  auditId: string | null;
+};
+
 export type ListAuditsResponse = {
   audits: AuditRecord[];
 };
@@ -64,12 +105,20 @@ export type GetAuditResponse = {
   audit: AuditRecord;
 };
 
-const createQueryString = (filters: AuditFilters = {}) => {
+export type ListExecutionLogsResponse = {
+  executionLogs: ExecutionLogEntry[];
+};
+
+export type ListHookDecisionsResponse = {
+  hookDecisions: HookDecisionRecord[];
+};
+
+const createQueryString = (filters: object = {}) => {
   const query = new URLSearchParams();
 
   for (const [key, value] of Object.entries(filters)) {
     if (value !== undefined) {
-      query.set(key, value);
+      query.set(key, String(value));
     }
   }
 
@@ -105,4 +154,26 @@ export const getAudit = async (auditId: string, client: ApiClient = apiClient) =
   );
 
   return response.audit;
+};
+
+export const listExecutionLogs = async (
+  filters: ExecutionLogFilters = {},
+  client: ApiClient = apiClient,
+) => {
+  const response = await client.get<ListExecutionLogsResponse>(
+    `/api/execution-logs${createQueryString(filters)}`,
+  );
+
+  return response.executionLogs;
+};
+
+export const listHookDecisions = async (
+  filters: HookDecisionFilters = {},
+  client: ApiClient = apiClient,
+) => {
+  const response = await client.get<ListHookDecisionsResponse>(
+    `/api/hook-decisions${createQueryString(filters)}`,
+  );
+
+  return response.hookDecisions;
 };
