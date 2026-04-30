@@ -17,7 +17,14 @@ import {
 
 import { runToolGuardDemo } from "../../../scripts/tool-guard-demo.js";
 import { createFileApprovalAdapter } from "../src/approval-adapter.js";
-import { ApprovalRequestStatus } from "../src/real-component-adapters.js";
+import {
+  createFileExternalAuditSinkAdapter,
+  readExternalAuditSinkRecords,
+} from "../src/audit-sink-adapter.js";
+import {
+  ApprovalRequestStatus,
+  createNotConfiguredExternalAuditSinkAdapter,
+} from "../src/real-component-adapters.js";
 import type {
   ToolCallAnalysisResult,
   ToolCallAnalysisService,
@@ -112,6 +119,77 @@ const createApprovalAnalysisResult = (
 const createApprovalAnalysisService = (): ToolCallAnalysisService => ({
   async analyzeToolCall(request) {
     return createApprovalAnalysisResult(request);
+  },
+});
+
+const allowedRequest: ToolCallRequest = {
+  id: "req-sql-readonly-orders",
+  actor: "agent:analyst",
+  taskPurpose: "Read recent orders",
+  toolType: ToolType.Sql,
+  rawPayload: {
+    sql: "SELECT * FROM orders LIMIT 10",
+  },
+  environment: Environment.Production,
+  createdAt: "2026-04-29T08:10:00.000Z",
+};
+
+const createAllowedAnalysisResult = (
+  request: ToolCallRequest,
+): ToolCallAnalysisResult => {
+  const actionTuple: ActionTuple = {
+    actor: request.actor,
+    taskPurpose: request.taskPurpose,
+    toolType: request.toolType,
+    operation: OperationType.Read,
+    target: "orders",
+    parameters: request.rawPayload,
+    environment: request.environment,
+    timestamp: request.createdAt,
+  };
+  const executionDecision: ExecutionDecision = {
+    type: DecisionType.Allow,
+    code: "risk.low.allow",
+    reason: "Read-only SQL is allowed.",
+    recommendedAction: "Execute with a readonly adapter.",
+    rewrittenRequest: null,
+  };
+
+  return {
+    request,
+    actionTuple,
+    directResources: [],
+    indirectResources: [],
+    impactPaths: [],
+    riskFactors: [],
+    riskScore: {
+      riskLevel: RiskLevel.Low,
+      score: 10,
+      explanation: "Risk level is low from weighted score 10.",
+      reasons: ["Read-only operation."],
+      appliedHardRules: [],
+    },
+    riskLevel: RiskLevel.Low,
+    executionDecision,
+    auditRecordId: "audit-sql-readonly-orders",
+    auditRecord: {
+      id: "audit-sql-readonly-orders",
+      request,
+      actionTuple,
+      directResources: [],
+      indirectResources: [],
+      impactPaths: [],
+      riskFactors: [],
+      riskLevel: RiskLevel.Low,
+      decision: executionDecision,
+      createdAt: "2026-04-29T08:10:01.000Z",
+    },
+  };
+};
+
+const createAllowedAnalysisService = (): ToolCallAnalysisService => ({
+  async analyzeToolCall(request) {
+    return createAllowedAnalysisResult(request);
   },
 });
 
@@ -215,6 +293,104 @@ describe("tool execution guard approval control", () => {
     assert.deepEqual(result.executorResult, {
       ok: true,
       requestId: "req-approval-production-deploy",
+    });
+  });
+});
+
+describe("tool execution guard external audit sink", () => {
+  it("continues local execution when the audit sink is not configured outside strict mode", async () => {
+    let executorCallCount = 0;
+    const guard = createToolExecutionGuard({
+      analysisService: createAllowedAnalysisService(),
+      async executor(request) {
+        executorCallCount += 1;
+        return { ok: true, requestId: request.id };
+      },
+      now: () => new Date("2026-04-29T08:10:02.000Z"),
+    });
+
+    const result = await guard.execute(allowedRequest);
+
+    assert.equal(result.status, "executed");
+    assert.equal(result.executorInvoked, true);
+    assert.equal(executorCallCount, 1);
+    assert.deepEqual(result.executorResult, {
+      ok: true,
+      requestId: "req-sql-readonly-orders",
+    });
+    assert.equal(result.auditSinkResult.status, "not_configured");
+    assert.equal(result.auditSinkResult.ok, false);
+  });
+
+  it("appends request, analysis, executor outcome, and evidence after execution", async () => {
+    const filePath = join(await createTempDataDir(), "external-audit.jsonl");
+    const auditSinkAdapter = createFileExternalAuditSinkAdapter({
+      filePath,
+      sinkName: "company-audit-log-sandbox",
+      now: () => new Date("2026-04-29T08:10:03.000Z"),
+    });
+    const guard = createToolExecutionGuard({
+      analysisService: createAllowedAnalysisService(),
+      auditSinkAdapter,
+      async executor(request) {
+        return { ok: true, requestId: request.id, rowCount: 10 };
+      },
+      now: () => new Date("2026-04-29T08:10:02.000Z"),
+    });
+
+    const result = await guard.execute(allowedRequest);
+    const records = await readExternalAuditSinkRecords(filePath);
+
+    assert.equal(result.status, "executed");
+    assert.deepEqual(result.auditSinkResult, {
+      ok: true,
+      status: "appended",
+      externalAuditId: "external-audit-sql-readonly-orders",
+      evidenceUri: null,
+    });
+    assert.equal(records.length, 1);
+    assert.deepEqual(records[0]?.request, allowedRequest);
+    assert.equal(records[0]?.analysisResult.auditRecordId, result.auditId);
+    assert.equal(records[0]?.executorInvoked, true);
+    assert.deepEqual(records[0]?.executorResult, result.executorResult);
+    assert.deepEqual(records[0]?.evidence, {
+      environmentName: Environment.Production,
+      runId: "audit-sql-readonly-orders",
+      sourceSystem: "agent-safety-gateway",
+      startedAt: "2026-04-29T08:10:01.000Z",
+      completedAt: "2026-04-29T08:10:02.000Z",
+      artifactUris: [],
+      notes: "decision=allow; executorInvoked=true",
+    });
+  });
+
+  it("fails closed before executor invocation when strict audit sink is unavailable", async () => {
+    let executorCallCount = 0;
+    const guard = createToolExecutionGuard({
+      analysisService: createAllowedAnalysisService(),
+      auditSinkAdapter: createNotConfiguredExternalAuditSinkAdapter([
+        "ASG_AUDIT_SINK_URL",
+      ]),
+      auditSinkStrict: true,
+      async executor() {
+        executorCallCount += 1;
+        return { ok: true };
+      },
+    });
+
+    const result = await guard.execute(allowedRequest);
+
+    assert.equal(result.status, "not_configured");
+    assert.equal(result.executorInvoked, false);
+    assert.equal(result.executorResult, null);
+    assert.equal(executorCallCount, 0);
+    assert.deepEqual(result.auditSinkResult, {
+      ok: false,
+      status: "not_configured",
+      externalAuditId: null,
+      evidenceUri: null,
+      missingRequirements: ["ASG_AUDIT_SINK_URL"],
+      message: "External audit sink is not configured: ASG_AUDIT_SINK_URL",
     });
   });
 });

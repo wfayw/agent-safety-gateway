@@ -40,6 +40,7 @@ import {
 } from "./tool-call-analysis-service.js";
 import type {
   ExternalApprovalAdapter,
+  ExternalAuditSinkAdapter,
   SqlDryRunExecutorResult,
 } from "./real-component-adapters.js";
 import {
@@ -64,6 +65,11 @@ export type ApiServerOptions = {
     ExternalApprovalAdapter,
     "createApprovalRequest" | "getApprovalRequest"
   >;
+  auditSinkAdapter?: Pick<
+    ExternalAuditSinkAdapter,
+    "appendControlEvidence" | "health"
+  >;
+  auditSinkStrict?: boolean;
   defaultApproverGroup?: string;
 };
 
@@ -93,6 +99,7 @@ const createGuardedExecutionResponse = <ExecutorResult>(
   executorInvoked: result.executorInvoked,
   executorResult: result.executorResult,
   approvalRequest: result.approvalRequest,
+  auditSinkResult: result.auditSinkResult,
   analysisResult: result.analysisResult,
 });
 
@@ -379,6 +386,12 @@ export const buildServer = (options: ApiServerOptions = {}) => {
         ...(options.approvalAdapter
           ? { approvalAdapter: options.approvalAdapter }
           : {}),
+        ...(options.auditSinkAdapter
+          ? { auditSinkAdapter: options.auditSinkAdapter }
+          : {}),
+        ...(options.auditSinkStrict === undefined
+          ? {}
+          : { auditSinkStrict: options.auditSinkStrict }),
         ...(options.defaultApproverGroup
           ? { defaultApproverGroup: options.defaultApproverGroup }
           : {}),

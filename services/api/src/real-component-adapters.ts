@@ -1,6 +1,7 @@
 import type {
   Environment,
   JsonObject,
+  JsonValue,
   RiskLevel,
   ToolCallRequest,
   ToolType,
@@ -107,8 +108,22 @@ export type CreateApprovalRequestInput = {
 
 export type ExternalAuditSinkResult = {
   ok: true;
+  status: "appended";
   externalAuditId: string;
   evidenceUri: string | null;
+} | {
+  ok: false;
+  status: "not_configured";
+  externalAuditId: null;
+  evidenceUri: null;
+  missingRequirements: string[];
+  message: string;
+} | {
+  ok: false;
+  status: "failed";
+  externalAuditId: null;
+  evidenceUri: null;
+  message: string;
 };
 
 export type RealAgentRuntimeAdapter = {
@@ -156,7 +171,7 @@ export type ExternalAuditSinkInput = {
   request: ToolCallRequest;
   analysisResult: ToolCallAnalysisResult;
   executorInvoked: boolean;
-  executorResult: JsonObject | null;
+  executorResult: JsonValue | null;
   evidence: RealComponentEvidence;
 };
 
@@ -257,6 +272,32 @@ export const createNotConfiguredAgentRuntimeAdapter = (
   async health() {
     return createNotConfiguredHealth(
       RealComponentAdapterKind.AgentRuntime,
+      missingRequirements,
+    );
+  },
+});
+
+export const createNotConfiguredExternalAuditSinkResult = (
+  missingRequirements: string[],
+): ExternalAuditSinkResult => ({
+  ok: false,
+  status: "not_configured",
+  externalAuditId: null,
+  evidenceUri: null,
+  missingRequirements,
+  message: `External audit sink is not configured: ${missingRequirements.join(", ")}`,
+});
+
+export const createNotConfiguredExternalAuditSinkAdapter = (
+  missingRequirements: string[],
+): ExternalAuditSinkAdapter => ({
+  kind: RealComponentAdapterKind.AuditSink,
+  async appendControlEvidence() {
+    return createNotConfiguredExternalAuditSinkResult(missingRequirements);
+  },
+  async health() {
+    return createNotConfiguredHealth(
+      RealComponentAdapterKind.AuditSink,
       missingRequirements,
     );
   },

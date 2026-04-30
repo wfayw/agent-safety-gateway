@@ -219,7 +219,7 @@ cd services/api && node --import tsx --test test/agent-production-config-real-va
 - 复验报告模板：`docs/evidence/real-validation/templates/RV-real-component-report.template.md`
 - 代码契约：`services/api/src/real-component-adapters.ts`
 
-Codex MCP 已提供 SQL readonly/dry-run、CI/CD dry-run 和配置 sandbox/canary 命令 adapter；配置中心 adapter 通过 `ASG_CONFIG_SANDBOX_COMMAND`、`ASG_CONFIG_SANDBOX_NAMESPACE` 和 `ASG_CONFIG_CANARY_NAMESPACE` 路由到隔离 namespace，显式生产 target namespace 会 fail-closed。真实 adapter 未配置时必须 fail-closed，不调用真实 executor；`require_approval` 决策会先创建 held 审批请求，只有审批 adapter 返回 `approved` 才能进入 executor。后续拿到真实环境信息后，优先按 Agent/Ralph 输出协议、审批系统、审计平台、SQL dry-run、CI/CD dry-run、配置中心 sandbox 的顺序接入。
+Codex MCP 已提供 SQL readonly/dry-run、CI/CD dry-run 和配置 sandbox/canary 命令 adapter；配置中心 adapter 通过 `ASG_CONFIG_SANDBOX_COMMAND`、`ASG_CONFIG_SANDBOX_NAMESPACE` 和 `ASG_CONFIG_CANARY_NAMESPACE` 路由到隔离 namespace，显式生产 target namespace 会 fail-closed。真实 adapter 未配置时必须 fail-closed，不调用真实 executor；`require_approval` 决策会先创建 held 审批请求，只有审批 adapter 返回 `approved` 才能进入 executor。API guard 还支持外部审计 sink adapter：默认未配置时返回 `not_configured` 但不阻断本地成功分析，开启 strict 模式后会在可执行路径上因外部审计不可用而 fail-closed。后续拿到真实环境信息后，优先按 Agent/Ralph 输出协议、审批系统、审计平台、SQL dry-run、CI/CD dry-run、配置中心 sandbox 的顺序接入。
 
 ## 未完成能力
 

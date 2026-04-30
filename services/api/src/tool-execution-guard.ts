@@ -1,13 +1,20 @@
 import {
   DecisionType,
+  type JsonValue,
   RiskLevel,
   type ToolCallRequest,
 } from "@agent-safety-gateway/shared";
 
 import {
+  AdapterHealthStatus,
   ApprovalRequestStatus,
+  createNotConfiguredExternalAuditSinkResult,
   type ApprovalRequest,
   type ExternalApprovalAdapter,
+  type ExternalAuditSinkAdapter,
+  type ExternalAuditSinkInput,
+  type ExternalAuditSinkResult,
+  type RealComponentEvidence,
 } from "./real-component-adapters.js";
 import type {
   ToolCallAnalysisResult,
@@ -35,6 +42,7 @@ export type GuardedExecutionResult<ExecutorResult> = {
   analysisResult: ToolCallAnalysisResult;
   executorResult: ExecutorResult | null;
   approvalRequest: ApprovalRequest | null;
+  auditSinkResult: ExternalAuditSinkResult;
 };
 
 export type ToolExecutionGuard<ExecutorResult> = {
@@ -50,7 +58,13 @@ export type ToolExecutionGuardDependencies<ExecutorResult> = {
     ExternalApprovalAdapter,
     "createApprovalRequest" | "getApprovalRequest"
   >;
+  auditSinkAdapter?: Pick<
+    ExternalAuditSinkAdapter,
+    "appendControlEvidence" | "health"
+  >;
+  auditSinkStrict?: boolean;
   defaultApproverGroup?: string;
+  now?: () => Date;
 };
 
 const DEFAULT_APPROVER_GROUP = "risk-owners";
@@ -72,6 +86,72 @@ const requiresApproval = (analysisResult: ToolCallAnalysisResult) =>
 const isApproved = (approvalRequest: ApprovalRequest | null) =>
   approvalRequest?.status === ApprovalRequestStatus.Approved;
 
+const DEFAULT_AUDIT_SINK_REQUIREMENTS = [
+  "external audit sink adapter",
+  "durable external audit write target",
+];
+
+const createExternalAuditSinkFailure = (message: string): ExternalAuditSinkResult => ({
+  ok: false,
+  status: "failed",
+  externalAuditId: null,
+  evidenceUri: null,
+  message,
+});
+
+const createAuditEvidence = ({
+  request,
+  analysisResult,
+  executorInvoked,
+  completedAt,
+}: {
+  request: ToolCallRequest;
+  analysisResult: ToolCallAnalysisResult;
+  executorInvoked: boolean;
+  completedAt: string;
+}): RealComponentEvidence => ({
+  environmentName: request.environment,
+  runId: analysisResult.auditRecordId,
+  sourceSystem: "agent-safety-gateway",
+  startedAt: analysisResult.auditRecord.createdAt,
+  completedAt,
+  artifactUris: [],
+  notes: `decision=${analysisResult.executionDecision.type}; executorInvoked=${executorInvoked}`,
+});
+
+const toJsonValue = (value: unknown): JsonValue | null => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  return JSON.parse(JSON.stringify(value)) as JsonValue;
+};
+
+const createAuditSinkInput = <ExecutorResult>({
+  request,
+  analysisResult,
+  executorInvoked,
+  executorResult,
+  completedAt,
+}: {
+  request: ToolCallRequest;
+  analysisResult: ToolCallAnalysisResult;
+  executorInvoked: boolean;
+  executorResult: ExecutorResult | null;
+  completedAt: string;
+}): ExternalAuditSinkInput => ({
+  request,
+  analysisResult,
+  executorInvoked,
+  executorResult: toJsonValue(executorResult),
+  evidence: createAuditEvidence({
+    request,
+    analysisResult,
+    executorInvoked,
+    completedAt,
+  }),
+});
+
 const createResult = <ExecutorResult>({
   status,
   request,
@@ -79,6 +159,7 @@ const createResult = <ExecutorResult>({
   executorInvoked,
   executorResult,
   approvalRequest,
+  auditSinkResult,
 }: {
   status: GuardedExecutionStatus;
   request: ToolCallRequest;
@@ -86,6 +167,7 @@ const createResult = <ExecutorResult>({
   executorInvoked: boolean;
   executorResult: ExecutorResult | null;
   approvalRequest: ApprovalRequest | null;
+  auditSinkResult: ExternalAuditSinkResult;
 }): GuardedExecutionResult<ExecutorResult> => ({
   status,
   requestId: request.id,
@@ -96,94 +178,226 @@ const createResult = <ExecutorResult>({
   analysisResult,
   executorResult,
   approvalRequest,
+  auditSinkResult,
 });
 
 export const createToolExecutionGuard = <ExecutorResult>({
   analysisService,
   executor,
   approvalAdapter,
+  auditSinkAdapter,
+  auditSinkStrict = false,
   defaultApproverGroup = DEFAULT_APPROVER_GROUP,
-}: ToolExecutionGuardDependencies<ExecutorResult>): ToolExecutionGuard<ExecutorResult> => ({
-  async execute(request) {
-    const analysisResult = await analysisService.analyzeToolCall(request);
+  now = () => new Date(),
+}: ToolExecutionGuardDependencies<ExecutorResult>): ToolExecutionGuard<ExecutorResult> => {
+  const appendAuditSinkEvidence = async ({
+    request,
+    analysisResult,
+    executorInvoked,
+    executorResult,
+  }: {
+    request: ToolCallRequest;
+    analysisResult: ToolCallAnalysisResult;
+    executorInvoked: boolean;
+    executorResult: ExecutorResult | null;
+  }) => {
+    if (!auditSinkAdapter) {
+      return createNotConfiguredExternalAuditSinkResult(
+        DEFAULT_AUDIT_SINK_REQUIREMENTS,
+      );
+    }
 
-    if (requiresApproval(analysisResult)) {
-      const existingApprovalRequest =
-        (await approvalAdapter?.getApprovalRequest(request.id)) ?? null;
-      const approvalRequest =
-        existingApprovalRequest ??
-        (await approvalAdapter?.createApprovalRequest({
+    try {
+      return await auditSinkAdapter.appendControlEvidence(
+        createAuditSinkInput({
           request,
           analysisResult,
-          approverGroup: defaultApproverGroup,
-        })) ??
-        null;
+          executorInvoked,
+          executorResult,
+          completedAt: now().toISOString(),
+        }),
+      );
+    } catch (error: unknown) {
+      return createExternalAuditSinkFailure(
+        error instanceof Error ? error.message : "External audit sink write failed.",
+      );
+    }
+  };
 
-      if (!isApproved(approvalRequest)) {
-        return createResult<ExecutorResult>({
-          status: "held",
+  const createFinalResult = async ({
+    status,
+    request,
+    analysisResult,
+    executorInvoked,
+    executorResult,
+    approvalRequest,
+  }: {
+    status: GuardedExecutionStatus;
+    request: ToolCallRequest;
+    analysisResult: ToolCallAnalysisResult;
+    executorInvoked: boolean;
+    executorResult: ExecutorResult | null;
+    approvalRequest: ApprovalRequest | null;
+  }) =>
+    createResult({
+      status,
+      request,
+      analysisResult,
+      executorInvoked,
+      executorResult,
+      approvalRequest,
+      auditSinkResult: await appendAuditSinkEvidence({
+        request,
+        analysisResult,
+        executorInvoked,
+        executorResult,
+      }),
+    });
+
+  const ensureStrictAuditSinkReady = async () => {
+    if (!auditSinkStrict) {
+      return null;
+    }
+
+    if (!auditSinkAdapter) {
+      return createNotConfiguredExternalAuditSinkResult(
+        DEFAULT_AUDIT_SINK_REQUIREMENTS,
+      );
+    }
+
+    const health = await auditSinkAdapter.health();
+
+    if (health.status === AdapterHealthStatus.Ready) {
+      return null;
+    }
+
+    if (health.status === AdapterHealthStatus.NotConfigured) {
+      const missingRequirements = Array.isArray(
+        health.details.missingRequirements,
+      )
+        ? health.details.missingRequirements.filter(
+            (requirement): requirement is string => typeof requirement === "string",
+          )
+        : DEFAULT_AUDIT_SINK_REQUIREMENTS;
+
+      return createNotConfiguredExternalAuditSinkResult(missingRequirements);
+    }
+
+    return createExternalAuditSinkFailure(
+      "External audit sink is unavailable in strict mode.",
+    );
+  };
+
+  return {
+    async execute(request) {
+      const analysisResult = await analysisService.analyzeToolCall(request);
+
+      if (requiresApproval(analysisResult)) {
+        const existingApprovalRequest =
+          (await approvalAdapter?.getApprovalRequest(request.id)) ?? null;
+        const approvalRequest =
+          existingApprovalRequest ??
+          (await approvalAdapter?.createApprovalRequest({
+            request,
+            analysisResult,
+            approverGroup: defaultApproverGroup,
+          })) ??
+          null;
+
+        if (!isApproved(approvalRequest)) {
+          return createFinalResult({
+            status: "held",
+            request,
+            analysisResult,
+            executorInvoked: false,
+            executorResult: null,
+            approvalRequest,
+          });
+        }
+
+        if (!executor) {
+          return createFinalResult({
+            status: "not_configured",
+            request,
+            analysisResult,
+            executorInvoked: false,
+            executorResult: null,
+            approvalRequest,
+          });
+        }
+
+        const strictAuditSinkResult = await ensureStrictAuditSinkReady();
+
+        if (strictAuditSinkResult) {
+          return createResult<ExecutorResult>({
+            status: "not_configured",
+            request,
+            analysisResult,
+            executorInvoked: false,
+            executorResult: null,
+            approvalRequest,
+            auditSinkResult: strictAuditSinkResult,
+          });
+        }
+
+        const executorResult = await executor(request, analysisResult);
+
+        return createFinalResult({
+          status: "executed",
           request,
           analysisResult,
-          executorInvoked: false,
-          executorResult: null,
+          executorInvoked: true,
+          executorResult,
           approvalRequest,
         });
       }
 
+      if (!canInvokeExecutor(analysisResult)) {
+        return createFinalResult({
+          status: getPreventedStatus(analysisResult),
+          request,
+          analysisResult,
+          executorInvoked: false,
+          executorResult: null,
+          approvalRequest: null,
+        });
+      }
+
       if (!executor) {
+        return createFinalResult({
+          status: "not_configured",
+          request,
+          analysisResult,
+          executorInvoked: false,
+          executorResult: null,
+          approvalRequest: null,
+        });
+      }
+
+      const strictAuditSinkResult = await ensureStrictAuditSinkReady();
+
+      if (strictAuditSinkResult) {
         return createResult<ExecutorResult>({
           status: "not_configured",
           request,
           analysisResult,
           executorInvoked: false,
           executorResult: null,
-          approvalRequest,
+          approvalRequest: null,
+          auditSinkResult: strictAuditSinkResult,
         });
       }
 
       const executorResult = await executor(request, analysisResult);
 
-      return createResult<ExecutorResult>({
+      return createFinalResult({
         status: "executed",
         request,
         analysisResult,
         executorInvoked: true,
         executorResult,
-        approvalRequest,
-      });
-    }
-
-    if (!canInvokeExecutor(analysisResult)) {
-      return createResult<ExecutorResult>({
-        status: getPreventedStatus(analysisResult),
-        request,
-        analysisResult,
-        executorInvoked: false,
-        executorResult: null,
         approvalRequest: null,
       });
-    }
-
-    if (!executor) {
-      return createResult<ExecutorResult>({
-        status: "not_configured",
-        request,
-        analysisResult,
-        executorInvoked: false,
-        executorResult: null,
-        approvalRequest: null,
-      });
-    }
-
-    const executorResult = await executor(request, analysisResult);
-
-    return createResult<ExecutorResult>({
-      status: "executed",
-      request,
-      analysisResult,
-      executorInvoked: true,
-      executorResult,
-      approvalRequest: null,
-    });
-  },
-});
+    },
+  };
+};

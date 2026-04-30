@@ -36,9 +36,11 @@ services/api/src/real-component-adapters.ts
 - `CiCdDryRunAdapter`：只允许 CI/CD dry-run executor。
 - `ConfigSandboxAdapter`：只允许 sandbox 或 canary 配置 executor。
 - `ExternalApprovalAdapter`：为 `require_approval` 决策创建并读取 durable 审批请求。
-- `ExternalAuditSinkAdapter`：把控制证据写入外部审计平台。
+- `ExternalAuditSinkAdapter`：把请求、分析结果、executor 调用状态、executor 结果和证据包写入外部审计平台。
 
 未配置 adapter 时使用 `createNotConfiguredHealth`、`createNotConfiguredToolExecutor` 或 `createNotConfiguredAgentRuntimeAdapter`，保持 fail-closed，不允许误以为已经接入真实系统。
+
+外部审计 sink 的本地 adapter 位于 `services/api/src/audit-sink-adapter.ts`，用于以 JSONL 形式证明写入契约。`ToolExecutionGuard` 默认会把未配置 sink 记录为 `not_configured`，但不阻断本地分析或已允许的 executor；当调用方启用 `auditSinkStrict` 时，允许执行的路径会在审计 sink 未配置或健康检查不可用时 fail-closed，并保持 `executorInvoked=false`。
 
 ## 推荐接入顺序
 
