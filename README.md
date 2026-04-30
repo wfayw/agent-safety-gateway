@@ -208,6 +208,7 @@ cd services/api && node --import tsx --test test/agent-production-config-real-va
 - SQL 沙箱或 dry-run 数据库、只读账号、可回滚测试数据和禁止写入生产的网络边界。
 - CI/CD dry-run 环境、pipeline 状态 API、失败测试 fixture 和不会触发真实发布的 deploy executor。
 - 配置中心沙箱、staging/canary 命名规则、审批 API、回滚策略和审计字段要求。
+- 人工审批系统的请求创建/查询接口、审批组、状态枚举和审计回查路径。
 - 审计/日志平台的写入接口、查询方式、保留周期、脱敏规则和证据归档位置。
 
 当前已补充真实组件接入契约、配置模板和复验报告模板：
@@ -218,7 +219,7 @@ cd services/api && node --import tsx --test test/agent-production-config-real-va
 - 复验报告模板：`docs/evidence/real-validation/templates/RV-real-component-report.template.md`
 - 代码契约：`services/api/src/real-component-adapters.ts`
 
-Codex MCP 已提供 SQL readonly/dry-run、CI/CD dry-run 和配置 sandbox/canary 命令 adapter；配置中心 adapter 通过 `ASG_CONFIG_SANDBOX_COMMAND`、`ASG_CONFIG_SANDBOX_NAMESPACE` 和 `ASG_CONFIG_CANARY_NAMESPACE` 路由到隔离 namespace，显式生产 target namespace 会 fail-closed。真实 adapter 未配置时必须 fail-closed，不调用真实 executor。后续拿到真实环境信息后，优先按 Agent/Ralph 输出协议、审计平台、SQL dry-run、CI/CD dry-run、配置中心 sandbox 的顺序接入。
+Codex MCP 已提供 SQL readonly/dry-run、CI/CD dry-run 和配置 sandbox/canary 命令 adapter；配置中心 adapter 通过 `ASG_CONFIG_SANDBOX_COMMAND`、`ASG_CONFIG_SANDBOX_NAMESPACE` 和 `ASG_CONFIG_CANARY_NAMESPACE` 路由到隔离 namespace，显式生产 target namespace 会 fail-closed。真实 adapter 未配置时必须 fail-closed，不调用真实 executor；`require_approval` 决策会先创建 held 审批请求，只有审批 adapter 返回 `approved` 才能进入 executor。后续拿到真实环境信息后，优先按 Agent/Ralph 输出协议、审批系统、审计平台、SQL dry-run、CI/CD dry-run、配置中心 sandbox 的顺序接入。
 
 ## 未完成能力
 

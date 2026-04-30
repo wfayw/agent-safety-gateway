@@ -18,6 +18,7 @@
 | SQL 沙箱或 dry-run | 连接名、只读账号、dry-run 能力、测试数据、网络边界 | 高风险写入不接触生产；只读查询可执行并保存行数或执行计划 |
 | CI/CD dry-run | pipeline 状态 API、dry-run executor、失败测试 fixture、禁止真实发布的边界 | 测试失败的生产发布请求不会触发真实发布 executor |
 | 配置中心沙箱 | sandbox/canary 命名规则、审批 API、回滚策略、配置读取接口 | 生产配置变更不直接写生产命名空间 |
+| 审批系统 | 请求创建接口、请求查询接口、审批组、状态枚举、审计回查路径 | `require_approval` 决策先形成 held 审批请求，`approved` 前不调用 executor |
 | 审计/日志平台 | 写入接口、查询方式、保留周期、脱敏规则、证据归档位置 | 可用外部审计 ID 回查一次完整控制链路 |
 
 ## Adapter 契约
@@ -34,6 +35,7 @@ services/api/src/real-component-adapters.ts
 - `SqlDryRunAdapter`：只允许只读或 dry-run SQL executor。
 - `CiCdDryRunAdapter`：只允许 CI/CD dry-run executor。
 - `ConfigSandboxAdapter`：只允许 sandbox 或 canary 配置 executor。
+- `ExternalApprovalAdapter`：为 `require_approval` 决策创建并读取 durable 审批请求。
 - `ExternalAuditSinkAdapter`：把控制证据写入外部审计平台。
 
 未配置 adapter 时使用 `createNotConfiguredHealth`、`createNotConfiguredToolExecutor` 或 `createNotConfiguredAgentRuntimeAdapter`，保持 fail-closed，不允许误以为已经接入真实系统。
@@ -41,11 +43,12 @@ services/api/src/real-component-adapters.ts
 ## 推荐接入顺序
 
 1. 接入真实 Agent/Ralph 输出协议，只做 `ToolCallRequest` 转换，不调用任何真实 executor。
-2. 接入审计平台写入接口，确认审计 ID、脱敏字段和证据归档路径。
-3. 接入 SQL 只读或 dry-run，用 RV-001 和 RV-002 复验 executor 调用次数。
-4. 接入 CI/CD dry-run，用 RV-003 复验失败测试下的生产发布阻断。
-5. 接入配置中心 sandbox/canary，用 RV-004 复验生产配置不被直接写入。
-6. 形成真实组件复验报告，并同步更新专利预审研发证明材料。
+2. 接入审批系统请求创建/查询接口，确认 held/approved 状态会进入控制链路。
+3. 接入审计平台写入接口，确认审计 ID、脱敏字段和证据归档路径。
+4. 接入 SQL 只读或 dry-run，用 RV-001 和 RV-002 复验 executor 调用次数。
+5. 接入 CI/CD dry-run，用 RV-003 复验失败测试下的生产发布阻断。
+6. 接入配置中心 sandbox/canary，用 RV-004 复验生产配置不被直接写入。
+7. 形成真实组件复验报告，并同步更新专利预审研发证明材料。
 
 ## RV 复验标准
 

@@ -38,7 +38,10 @@ import {
   ToolCallAnalysisError,
   type ToolCallAnalysisService,
 } from "./tool-call-analysis-service.js";
-import type { SqlDryRunExecutorResult } from "./real-component-adapters.js";
+import type {
+  ExternalApprovalAdapter,
+  SqlDryRunExecutorResult,
+} from "./real-component-adapters.js";
 import {
   createToolExecutionGuard,
   type GuardedExecutionResult,
@@ -57,6 +60,11 @@ export type ApiServerOptions = {
   scenarioRepository?: ScenarioRepository;
   toolCallAnalysisService?: ToolCallAnalysisService;
   sqlExecutor?: ToolExecutor<SqlDryRunExecutorResult>;
+  approvalAdapter?: Pick<
+    ExternalApprovalAdapter,
+    "createApprovalRequest" | "getApprovalRequest"
+  >;
+  defaultApproverGroup?: string;
 };
 
 type HookDecisionQuery = Omit<HookDecisionFilters, "shouldBlock"> & {
@@ -84,6 +92,7 @@ const createGuardedExecutionResponse = <ExecutorResult>(
   decision: result.decision,
   executorInvoked: result.executorInvoked,
   executorResult: result.executorResult,
+  approvalRequest: result.approvalRequest,
   analysisResult: result.analysisResult,
 });
 
@@ -367,6 +376,12 @@ export const buildServer = (options: ApiServerOptions = {}) => {
       const guard = createToolExecutionGuard<SqlDryRunExecutorResult>({
         analysisService: toolCallAnalysisService,
         ...(options.sqlExecutor ? { executor: options.sqlExecutor } : {}),
+        ...(options.approvalAdapter
+          ? { approvalAdapter: options.approvalAdapter }
+          : {}),
+        ...(options.defaultApproverGroup
+          ? { defaultApproverGroup: options.defaultApproverGroup }
+          : {}),
       });
       const result = await guard.execute(parseResult.data);
 

@@ -1,6 +1,7 @@
 import type {
   Environment,
   JsonObject,
+  RiskLevel,
   ToolCallRequest,
   ToolType,
 } from "@agent-safety-gateway/shared";
@@ -17,6 +18,7 @@ export const RealComponentAdapterKind = {
   SqlDryRun: "sql_dry_run",
   CiCdDryRun: "cicd_dry_run",
   ConfigSandbox: "config_sandbox",
+  Approval: "approval",
   AuditSink: "audit_sink",
 } as const;
 
@@ -75,6 +77,34 @@ export type ConfigSandboxExecutorResult = {
   evidence: RealComponentEvidence;
 };
 
+export const ApprovalRequestStatus = {
+  Held: "held",
+  Approved: "approved",
+  Rejected: "rejected",
+  Expired: "expired",
+} as const;
+
+export type ApprovalRequestStatus =
+  (typeof ApprovalRequestStatus)[keyof typeof ApprovalRequestStatus];
+
+export type ApprovalRequest = {
+  requestId: string;
+  auditId: string;
+  actor: string;
+  target: string;
+  riskLevel: RiskLevel;
+  decisionReason: string;
+  approverGroup: string;
+  status: ApprovalRequestStatus;
+  createdAt: string;
+};
+
+export type CreateApprovalRequestInput = {
+  request: ToolCallRequest;
+  analysisResult: ToolCallAnalysisResult;
+  approverGroup: string;
+};
+
 export type ExternalAuditSinkResult = {
   ok: true;
   externalAuditId: string;
@@ -102,6 +132,15 @@ export type CiCdDryRunAdapter = {
 export type ConfigSandboxAdapter = {
   kind: typeof RealComponentAdapterKind.ConfigSandbox;
   execute: ToolExecutor<ConfigSandboxExecutorResult>;
+  health: () => Promise<AdapterHealth>;
+};
+
+export type ExternalApprovalAdapter = {
+  kind: typeof RealComponentAdapterKind.Approval;
+  createApprovalRequest: (
+    input: CreateApprovalRequestInput,
+  ) => Promise<ApprovalRequest>;
+  getApprovalRequest: (requestId: string) => Promise<ApprovalRequest | null>;
   health: () => Promise<AdapterHealth>;
 };
 
@@ -149,6 +188,11 @@ export type RealComponentProfile = {
     sandboxNamespacePattern: string;
     canaryNamespacePattern: string;
     productionWriteBlocked: boolean;
+  };
+  approval: {
+    enabled: boolean;
+    approvalSystemName: string;
+    defaultApproverGroup: string;
   };
   auditSink: {
     enabled: boolean;

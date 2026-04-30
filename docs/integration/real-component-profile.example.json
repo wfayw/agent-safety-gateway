@@ -27,6 +27,11 @@
     "canaryNamespacePattern": "{service}.canary",
     "productionWriteBlocked": true
   },
+  "approval": {
+    "enabled": true,
+    "approvalSystemName": "company-approval-sandbox",
+    "defaultApproverGroup": "release-risk-owners"
+  },
   "auditSink": {
     "enabled": true,
     "sinkName": "company-audit-log-sandbox",
