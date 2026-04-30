@@ -1,0 +1,13 @@
+{
+  "name": "@agent-safety-gateway/codex",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "mcp": "node src/mcp-server.mjs",
+    "codex:install": "node src/install.mjs",
+    "codex:uninstall": "node src/uninstall.mjs",
+    "hook": "node src/pretool-hook.mjs",
+    "test": "node --test test/*.test.mjs"
+  }
+}

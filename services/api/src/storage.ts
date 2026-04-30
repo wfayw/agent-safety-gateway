@@ -7,6 +7,7 @@ export const LocalStoreName = {
   Audits: "audits",
   Scenarios: "scenarios",
   ExecutionLogs: "executionLogs",
+  HookDecisions: "hookDecisions",
 } as const;
 
 export type LocalStoreName = (typeof LocalStoreName)[keyof typeof LocalStoreName];
@@ -22,6 +23,7 @@ const LOCAL_STORE_FILES = {
   [LocalStoreName.Audits]: "audits.jsonl",
   [LocalStoreName.Scenarios]: "scenarios.json",
   [LocalStoreName.ExecutionLogs]: "execution-log.jsonl",
+  [LocalStoreName.HookDecisions]: "hook-decisions.jsonl",
 } as const satisfies Record<LocalStoreName, string>;
 
 const INITIAL_STORE_CONTENT = {
@@ -30,6 +32,7 @@ const INITIAL_STORE_CONTENT = {
   [LocalStoreName.Audits]: "",
   [LocalStoreName.Scenarios]: "[]\n",
   [LocalStoreName.ExecutionLogs]: "",
+  [LocalStoreName.HookDecisions]: "",
 } as const satisfies Record<LocalStoreName, string>;
 
 type NodeError = Error & { code?: string };
@@ -59,6 +62,10 @@ export const createLocalStorageLayout = (dataDir: string): LocalStorageLayout =>
       [LocalStoreName.ExecutionLogs]: join(
         absoluteDataDir,
         LOCAL_STORE_FILES[LocalStoreName.ExecutionLogs],
+      ),
+      [LocalStoreName.HookDecisions]: join(
+        absoluteDataDir,
+        LOCAL_STORE_FILES[LocalStoreName.HookDecisions],
       ),
     },
   };
@@ -106,6 +113,10 @@ export const initializeLocalStorage = async (
     createStoreFileIfMissing(
       layout.stores.executionLogs,
       INITIAL_STORE_CONTENT[LocalStoreName.ExecutionLogs],
+    ),
+    createStoreFileIfMissing(
+      layout.stores.hookDecisions,
+      INITIAL_STORE_CONTENT[LocalStoreName.HookDecisions],
     ),
   ]);
 

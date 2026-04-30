@@ -43,7 +43,7 @@ pnpm install
 pnpm seed
 ```
 
-`pnpm seed` 会写入 `.data/` 下的本地 JSON/JSONL 存储，包括资源目录、依赖关系、四个模拟场景和后续分析产生的审计/执行日志。默认路径可通过 `API_DATA_DIR=/path/to/data pnpm seed` 覆盖。
+`pnpm seed` 会写入 `.data/` 下的本地 JSON/JSONL 存储，包括资源目录、依赖关系、四个模拟场景，以及后续分析产生的审计、执行日志和 Codex hook 阻断决策。默认路径可通过 `API_DATA_DIR=/path/to/data pnpm seed` 覆盖。
 
 样例输入位于：
 
@@ -213,6 +213,7 @@ cd services/api && node --import tsx --test test/agent-production-config-real-va
 当前已补充真实组件接入契约、配置模板和复验报告模板：
 
 - 接入说明：`docs/integration/real-component-onboarding.md`
+- Codex 接入说明：`docs/integration/codex-integration.md`
 - 配置模板：`docs/integration/real-component-profile.example.json`
 - 复验报告模板：`docs/evidence/real-validation/templates/RV-real-component-report.template.md`
 - 代码契约：`services/api/src/real-component-adapters.ts`

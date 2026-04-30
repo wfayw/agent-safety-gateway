@@ -61,6 +61,8 @@ importers:
         specifier: ^4.21.0
         version: 4.21.0
 
+  services/codex: {}
+
 packages:
 
   '@ant-design/colors@8.0.1':

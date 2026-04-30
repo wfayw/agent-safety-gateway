@@ -18,7 +18,10 @@
     "seed": "pnpm --filter @agent-safety-gateway/api seed",
     "dev:web": "pnpm --filter @agent-safety-gateway/web dev",
     "build:web": "pnpm --filter @agent-safety-gateway/web build",
-    "typecheck:web": "pnpm --filter @agent-safety-gateway/web typecheck"
+    "typecheck:web": "pnpm --filter @agent-safety-gateway/web typecheck",
+    "codex:mcp": "node services/codex/src/mcp-server.mjs",
+    "codex:install": "node services/codex/src/install.mjs",
+    "codex:uninstall": "node services/codex/src/uninstall.mjs"
   },
   "devDependencies": {
     "typescript": "^5.9.3"
