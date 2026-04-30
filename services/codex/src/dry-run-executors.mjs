@@ -370,6 +370,107 @@ const getArtifactUris = (payload) => {
 const getDryRunRunId = (payload) =>
   typeof payload?.runId === "string" && payload.runId.trim() ? payload.runId : null;
 
+const getConfigValue = (request, key, fallback) =>
+  String(request.rawPayload[key] ?? fallback);
+
+const normalizeNamespace = (value) => String(value ?? "").trim();
+
+const isProductionNamespace = (value) =>
+  ["prod", "production"].includes(normalizeNamespace(value).toLowerCase());
+
+const getConfigTargetMode = (request, analysis) => {
+  const rewrittenPayload = analysis.executionDecision?.rewrittenRequest?.rawPayload ?? {};
+  const candidates = [
+    rewrittenPayload.rolloutStrategy,
+    rewrittenPayload.mode,
+    request.rawPayload.rolloutStrategy,
+    request.rawPayload.mode,
+  ];
+
+  if (candidates.some((value) => String(value ?? "").toLowerCase() === "canary")) {
+    return "canary";
+  }
+
+  return "sandbox";
+};
+
+const getConfigTargetNamespace = (request, targetMode) => {
+  const explicitNamespaceKey = request.rawPayload.targetNamespace
+    ? "targetNamespace"
+    : targetMode === "canary" && request.rawPayload.canaryNamespace
+      ? "canaryNamespace"
+      : request.rawPayload.sandboxNamespace
+        ? "sandboxNamespace"
+        : request.rawPayload.canaryNamespace
+          ? "canaryNamespace"
+          : null;
+  const explicitTargetNamespace = normalizeNamespace(
+    explicitNamespaceKey ? request.rawPayload[explicitNamespaceKey] : null,
+  );
+
+  if (explicitTargetNamespace) {
+    return {
+      targetNamespace: explicitTargetNamespace,
+      source: `rawPayload.${explicitNamespaceKey}`,
+    };
+  }
+
+  const envName =
+    targetMode === "canary" ? "ASG_CONFIG_CANARY_NAMESPACE" : "ASG_CONFIG_SANDBOX_NAMESPACE";
+  const envNamespace = normalizeNamespace(process.env[envName]);
+
+  if (envNamespace) {
+    return {
+      targetNamespace: envNamespace,
+      source: envName,
+    };
+  }
+
+  return {
+    targetNamespace: `${request.environment}-codex-${targetMode}`,
+    source: "codex-default-target-namespace",
+  };
+};
+
+const validateConfigTargetNamespace = ({ targetNamespace, source }) => {
+  if (!isProductionNamespace(targetNamespace)) {
+    return null;
+  }
+
+  return makeDiagnostic({
+    adapterKind: "config_sandbox",
+    envName: source,
+    status: "production_namespace_refused",
+    message: "Config sandbox adapter refused a direct production namespace write.",
+    reason: `Target namespace '${targetNamespace}' must be a sandbox or canary namespace, never production.`,
+  });
+};
+
+const getConfigRollbackPlan = ({
+  request,
+  service,
+  key,
+  targetMode,
+  sourceNamespace,
+  targetNamespace,
+}) => {
+  const previousValue = request.rawPayload.previousValue ?? request.rawPayload.currentValue ?? null;
+
+  return {
+    service,
+    key,
+    targetMode,
+    sourceNamespace,
+    targetNamespace,
+    previousValue,
+    steps: [
+      previousValue === null
+        ? `Review ${service}.${key} before promoting changes from ${targetNamespace}.`
+        : `Restore ${service}.${key} in ${sourceNamespace} to ${String(previousValue)} before promoting changes from ${targetNamespace}.`,
+    ],
+  };
+};
+
 export const executeSqlDryRun = async (request, analysis) => {
   if (!canExecuteDecision(analysis)) {
     return {
@@ -517,6 +618,23 @@ export const executeConfigSandbox = async (request, analysis) => {
     };
   }
 
+  const targetMode = getConfigTargetMode(request, analysis);
+  const { targetNamespace, source: targetNamespaceSource } = getConfigTargetNamespace(
+    request,
+    targetMode,
+  );
+  const namespaceDiagnostic = validateConfigTargetNamespace({
+    targetNamespace,
+    source: targetNamespaceSource,
+  });
+
+  if (namespaceDiagnostic) {
+    return failClosedEvidence(
+      namespaceDiagnostic,
+      "config-sandbox-production-namespace-refused",
+    );
+  }
+
   const diagnostic = await validateExecutorCommand("ASG_CONFIG_SANDBOX_COMMAND", "config_sandbox");
 
   if (diagnostic.executorStatus !== "configured") {
@@ -524,33 +642,63 @@ export const executeConfigSandbox = async (request, analysis) => {
   }
 
   const [binary, ...baseArgs] = diagnostic.command;
-  const targetNamespace =
-    process.env.ASG_CONFIG_SANDBOX_NAMESPACE ??
-    `${request.environment}-codex-sandbox`;
+  const service = getConfigValue(request, "service", "unknown-service");
+  const key = getConfigValue(request, "key", "unknown.key");
+  const value = getConfigValue(request, "value", "");
+  const sourceNamespace = getConfigValue(
+    request,
+    "namespace",
+    request.environment ?? "unknown-environment",
+  );
+  const operation = getConfigValue(request, "operation", "update");
   const args = [
     ...baseArgs,
     "--service",
-    String(request.rawPayload.service ?? "unknown-service"),
+    service,
     "--key",
-    String(request.rawPayload.key ?? "unknown.key"),
+    key,
     "--value",
-    String(request.rawPayload.value ?? ""),
+    value,
+    "--operation",
+    operation,
+    "--source-namespace",
+    sourceNamespace,
     "--namespace",
     targetNamespace,
+    "--mode",
+    targetMode,
   ];
   const result = await runCommand(binary, args, "");
+  const parsedOutput = parseStdoutJson(result.stdout);
+  const artifactUris = getArtifactUris(parsedOutput);
+  const evidence = makeEvidence(`config-${targetMode}-command`, artifactUris);
+  const runId = getDryRunRunId(parsedOutput) ?? evidence.runId;
+  evidence.runId = runId;
+  const rollbackPlan =
+    parsedOutput?.rollbackPlan ??
+    getConfigRollbackPlan({
+      request,
+      service,
+      key,
+      targetMode,
+      sourceNamespace,
+      targetNamespace,
+    });
 
   return {
     ok: result.code === 0,
-    mode: "sandbox",
+    mode: targetMode,
     executorStatus: "configured",
     adapterKind: "config_sandbox",
     executorInvoked: true,
+    service,
+    key,
+    sourceNamespace,
     targetNamespace,
-    rollbackPlan: {
-      previousValue: request.rawPayload.previousValue ?? null,
-    },
+    rollbackPlan,
+    artifactUris,
+    runId,
     rawResult: result,
-    evidence: makeEvidence("config-sandbox-command"),
+    evidence,
   };
 };

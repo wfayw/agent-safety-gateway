@@ -94,6 +94,11 @@ const toolSchemas = [
         key: { type: "string" },
         value: { type: ["string", "number", "boolean"] },
         previousValue: { type: ["string", "number", "boolean", "null"] },
+        namespace: { type: "string" },
+        targetNamespace: { type: "string" },
+        sandboxNamespace: { type: "string" },
+        canaryNamespace: { type: "string" },
+        rolloutStrategy: { type: "string", enum: ["sandbox", "canary"] },
         environment: {
           type: "string",
           enum: ["development", "test", "staging", "production", "dev", "prod"],

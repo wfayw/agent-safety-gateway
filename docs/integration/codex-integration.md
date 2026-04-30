@@ -83,6 +83,8 @@ export ASG_SQL_DRY_RUN_COMMAND='["psql","postgres://dry-run-user@host/db","-X","
 export ASG_SQL_PRODUCTION_WRITE_NETWORK_BLOCKED=true
 export ASG_CICD_DRY_RUN_COMMAND='["/opt/company/bin/deploy-dry-run"]'
 export ASG_CONFIG_SANDBOX_COMMAND='["/opt/company/bin/config-sandbox-write"]'
+export ASG_CONFIG_SANDBOX_NAMESPACE=payment-sandbox
+export ASG_CONFIG_CANARY_NAMESPACE=payment-canary
 ```
 
 SQL adapter 会先验证 `productionWriteNetworkBlocked` 边界：可以在 MCP `safe_sql` 参数或 `ToolCallRequest.rawPayload.productionWriteNetworkBlocked` 中传入 `true`，也可以设置 `ASG_SQL_PRODUCTION_WRITE_NETWORK_BLOCKED=true`。该值为 `false` 或未知时，SQL adapter 会在调用任何 SQL client 前 fail closed。
@@ -100,6 +102,14 @@ CI/CD dry-run executor 约定：
 - executor stdout 如果是 JSON，可返回 `runId`、`artifactUris` 和 `dryRunPlan` / `plan`；这些字段会写入 MCP `executor` 结果与 `evidence`，便于关联真实 CI/CD dry-run 产物。
 - 该 adapter 只调用 dry-run / planning interface，测试覆盖会验证失败测试状态不会触发任何真实发布 executor。
 
+配置 sandbox/canary executor 约定：
+
+- executor profile 通过 `ASG_CONFIG_SANDBOX_COMMAND` 配置，MCP adapter 会传入 `--service`、`--key`、`--value`、`--operation`、`--source-namespace`、`--namespace` 和 `--mode`。
+- `--source-namespace` 表示原始请求所在 namespace，生产配置请求通常为 `production`；`--namespace` 必须是隔离后的 sandbox 或 canary target namespace。
+- `sandbox` 决策默认使用 `ASG_CONFIG_SANDBOX_NAMESPACE`，canary 改写或 `rolloutStrategy=canary` 默认使用 `ASG_CONFIG_CANARY_NAMESPACE`；未设置时会生成 `production-codex-sandbox` 或 `production-codex-canary` 这类本地目标名。
+- 如果 MCP 参数显式传入 `targetNamespace=production` 或 `targetNamespace=prod`，adapter 会在调用任何 executor 前返回 `production_namespace_refused`，证明不会直接写生产配置 namespace。
+- executor stdout 如果是 JSON，可返回 `runId`、`artifactUris` 和 `rollbackPlan`；这些字段会写入 MCP `executor` 结果与 `evidence`。未返回 `rollbackPlan` 时，adapter 会根据 `previousValue` 生成恢复原值的回滚计划。
+
 未配置这些环境变量时，MCP 工具仍会返回网关分析结果，但不会伪造真实 executor 已执行。
 
 MCP executor 会在调用前验证 dry-run profile，并返回以下 `executorStatus` / `mode` 诊断：
@@ -110,6 +120,7 @@ MCP executor 会在调用前验证 dry-run profile，并返回以下 `executorSt
 - `unreachable`：命令格式有效，但首个元素在绝对路径或 `PATH` 中不可执行。
 - `production_write_network_unknown` / `production_write_network_open`：SQL executor profile 虽然可用，但生产写网络边界未知或明确未阻断，因此不会调用 SQL executor。
 - `production_deploy_tests_not_passed`：生产 deploy 的测试状态不是 `passed`，因此 CI/CD dry-run executor 不会被调用。
+- `production_namespace_refused`：配置 sandbox/canary target namespace 指向 `production` 或 `prod`，因此不会调用配置 executor。
 
 `invalid` 和 `unreachable` 都会 fail closed，并在调用任何 dry-run 命令前返回 `executorInvoked=false`。
 

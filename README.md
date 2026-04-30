@@ -218,11 +218,11 @@ cd services/api && node --import tsx --test test/agent-production-config-real-va
 - 复验报告模板：`docs/evidence/real-validation/templates/RV-real-component-report.template.md`
 - 代码契约：`services/api/src/real-component-adapters.ts`
 
-真实 adapter 未配置时必须 fail-closed，不调用真实 executor。后续拿到真实环境信息后，优先按 Agent/Ralph 输出协议、审计平台、SQL dry-run、CI/CD dry-run、配置中心 sandbox 的顺序接入。
+Codex MCP 已提供 SQL readonly/dry-run、CI/CD dry-run 和配置 sandbox/canary 命令 adapter；配置中心 adapter 通过 `ASG_CONFIG_SANDBOX_COMMAND`、`ASG_CONFIG_SANDBOX_NAMESPACE` 和 `ASG_CONFIG_CANARY_NAMESPACE` 路由到隔离 namespace，显式生产 target namespace 会 fail-closed。真实 adapter 未配置时必须 fail-closed，不调用真实 executor。后续拿到真实环境信息后，优先按 Agent/Ralph 输出协议、审计平台、SQL dry-run、CI/CD dry-run、配置中心 sandbox 的顺序接入。
 
 ## 未完成能力
 
-- 真实 Agent、真实数据库、真实 CI/CD、真实配置中心和真实审计平台的具体 adapter 实现。
+- 真实 Agent、真实数据库、真实 CI/CD、企业配置中心专用接入和真实审计平台的具体 adapter 实现。
 - 针对用户提供研发环境的 RV-001 到 RV-004 真实组件复验报告。
 - 后台资源/策略管理系统；当前 MVP 仍使用本地 JSON/JSONL 和 seed 数据。
 

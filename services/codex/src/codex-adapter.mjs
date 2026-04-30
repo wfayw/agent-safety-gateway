@@ -286,6 +286,11 @@ export const adaptConfig = ({
   key,
   value,
   previousValue,
+  namespace,
+  targetNamespace,
+  sandboxNamespace,
+  canaryNamespace,
+  rolloutStrategy,
   operation = "update",
   environment,
   actor,
@@ -302,6 +307,26 @@ export const adaptConfig = ({
 
   if (previousValue !== undefined) {
     payload.previousValue = previousValue;
+  }
+
+  if (namespace) {
+    payload.namespace = namespace;
+  }
+
+  if (targetNamespace) {
+    payload.targetNamespace = targetNamespace;
+  }
+
+  if (sandboxNamespace) {
+    payload.sandboxNamespace = sandboxNamespace;
+  }
+
+  if (canaryNamespace) {
+    payload.canaryNamespace = canaryNamespace;
+  }
+
+  if (rolloutStrategy) {
+    payload.rolloutStrategy = rolloutStrategy;
   }
 
   if (command) {

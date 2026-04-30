@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import { dirname, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -9,6 +12,7 @@ const testDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(testDir, "../../..");
 const mcpPath = resolve(repoRoot, "services/codex/src/mcp-server.mjs");
 const servers = [];
+const tempDirs = [];
 
 const runMcp = ({ messages, env = {} }) =>
   new Promise((resolveRun, reject) => {
@@ -21,7 +25,10 @@ const runMcp = ({ messages, env = {} }) =>
         ASG_SQL_DRY_RUN_COMMAND: "",
         ASG_SQL_PRODUCTION_WRITE_NETWORK_BLOCKED: "",
         ASG_CICD_DRY_RUN_COMMAND: "",
+        ASG_CONFIG_CANARY_NAMESPACE: "",
         ASG_CONFIG_SANDBOX_COMMAND: "",
+        ASG_CONFIG_SANDBOX_NAMESPACE: "",
+        ASG_TEST_EXECUTOR_OUTPUT_PATH: "",
         ...env,
       },
       stdio: ["pipe", "pipe", "pipe"],
@@ -71,6 +78,33 @@ const assertToolResult = (response, id) => {
   assert.equal(response.result.content[0].type, "text");
   assert.equal(typeof response.result.content[0].text, "string");
   assert.ok(response.result.structuredContent);
+};
+
+const makeRecorder = async (name) => {
+  const dir = await mkdtemp(join(tmpdir(), "asg-mcp-test-"));
+  tempDirs.push(dir);
+  const outputPath = join(dir, `${name}.json`);
+  const scriptPath = join(dir, `${name}.mjs`);
+
+  await writeFile(
+    scriptPath,
+    [
+      "#!/usr/bin/env node",
+      "import { writeFileSync } from 'node:fs';",
+      "const outputPath = process.env.ASG_TEST_EXECUTOR_OUTPUT_PATH;",
+      "writeFileSync(outputPath, JSON.stringify({ args: process.argv.slice(2) }));",
+      "console.log(JSON.stringify({ runId: 'config-run-123', artifactUris: ['file:///tmp/config-sandbox.json'], rollbackPlan: { restore: 'payment.timeout=2s' } }));",
+    ].join("\n"),
+    { mode: 0o700 },
+  );
+
+  return { outputPath, scriptPath };
+};
+
+const readRecorderArgs = async (outputPath) => {
+  const raw = await readFile(outputPath, "utf8");
+
+  return JSON.parse(raw).args;
 };
 
 const createGatewayStub = async ({ analyzeResponse, healthResponse = { status: "ok" } }) => {
@@ -140,6 +174,7 @@ afterEach(async () => {
       (server) => new Promise((resolveClose) => server.close(resolveClose)),
     ),
   );
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 describe("Codex MCP server contract", () => {
@@ -362,5 +397,125 @@ describe("Codex MCP server contract", () => {
     assert.equal(response.result.structuredContent.analysis.executionDecision.type, "sandbox");
     assert.equal(response.result.structuredContent.executor.mode, "not_configured");
     assert.equal(response.result.structuredContent.executor.adapterKind, "config_sandbox");
+  });
+
+  it("routes safe_config_update production changes through configured canary executor", async () => {
+    const configRecorder = await makeRecorder("mcp-config-canary");
+    const gateway = await createGatewayStub({
+      analyzeResponse: {
+        riskLevel: "medium",
+        executionDecision: {
+          type: "sandbox",
+          code: "CONFIG_SANDBOX_REQUIRED",
+          reason: "Config updates must be staged through the canary adapter.",
+          rewrittenRequest: {
+            rawPayload: {
+              rolloutStrategy: "canary",
+            },
+          },
+        },
+        auditId: "audit-mcp-config-canary",
+      },
+    });
+    const { responses } = await runMcp({
+      messages: [
+        {
+          jsonrpc: "2.0",
+          id: "config-canary-1",
+          method: "tools/call",
+          params: {
+            name: "safe_config_update",
+            arguments: {
+              service: "payment-service",
+              key: "payment.timeout",
+              value: "100ms",
+              previousValue: "2s",
+              namespace: "production",
+              environment: "production",
+            },
+          },
+        },
+      ],
+      env: {
+        ASG_GATEWAY_URL: gateway.gatewayUrl,
+        ASG_TEST_EXECUTOR_OUTPUT_PATH: configRecorder.outputPath,
+        ASG_CONFIG_SANDBOX_COMMAND: JSON.stringify([process.execPath, configRecorder.scriptPath]),
+        ASG_CONFIG_CANARY_NAMESPACE: "payment-canary",
+      },
+    });
+    const response = byId(responses, "config-canary-1");
+
+    assertToolResult(response, "config-canary-1");
+    assert.equal(gateway.requests[0].body.toolType, "config");
+    assert.equal(gateway.requests[0].body.rawPayload.namespace, "production");
+    assert.equal(response.result.structuredContent.executor.mode, "canary");
+    assert.equal(response.result.structuredContent.executor.executorInvoked, true);
+    assert.equal(response.result.structuredContent.executor.targetNamespace, "payment-canary");
+    assert.equal(response.result.structuredContent.executor.runId, "config-run-123");
+    assert.deepEqual(response.result.structuredContent.executor.rollbackPlan, {
+      restore: "payment.timeout=2s",
+    });
+    assert.deepEqual(await readRecorderArgs(configRecorder.outputPath), [
+      "--service",
+      "payment-service",
+      "--key",
+      "payment.timeout",
+      "--value",
+      "100ms",
+      "--operation",
+      "update",
+      "--source-namespace",
+      "production",
+      "--namespace",
+      "payment-canary",
+      "--mode",
+      "canary",
+    ]);
+  });
+
+  it("refuses safe_config_update direct production target namespaces", async () => {
+    const configRecorder = await makeRecorder("mcp-config-production-refused");
+    const gateway = await createGatewayStub({
+      analyzeResponse: {
+        riskLevel: "medium",
+        executionDecision: {
+          type: "sandbox",
+          code: "CONFIG_SANDBOX_REQUIRED",
+          reason: "Config updates must be staged through the sandbox adapter.",
+        },
+        auditId: "audit-mcp-config-production-refused",
+      },
+    });
+    const { responses } = await runMcp({
+      messages: [
+        {
+          jsonrpc: "2.0",
+          id: "config-refused-1",
+          method: "tools/call",
+          params: {
+            name: "safe_config_update",
+            arguments: {
+              service: "payment-service",
+              key: "payment.timeout",
+              value: "100ms",
+              previousValue: "2s",
+              targetNamespace: "production",
+              environment: "production",
+            },
+          },
+        },
+      ],
+      env: {
+        ASG_GATEWAY_URL: gateway.gatewayUrl,
+        ASG_TEST_EXECUTOR_OUTPUT_PATH: configRecorder.outputPath,
+        ASG_CONFIG_SANDBOX_COMMAND: JSON.stringify([process.execPath, configRecorder.scriptPath]),
+      },
+    });
+    const response = byId(responses, "config-refused-1");
+
+    assertToolResult(response, "config-refused-1");
+    assert.equal(response.result.structuredContent.executor.mode, "production_namespace_refused");
+    assert.equal(response.result.structuredContent.executor.executorInvoked, false);
+    assert.equal(existsSync(configRecorder.outputPath), false);
   });
 });

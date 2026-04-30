@@ -17,6 +17,7 @@ const envNames = [
   "ASG_SQL_DRY_RUN_COMMAND",
   "ASG_SQL_PRODUCTION_WRITE_NETWORK_BLOCKED",
   "ASG_CICD_DRY_RUN_COMMAND",
+  "ASG_CONFIG_CANARY_NAMESPACE",
   "ASG_CONFIG_SANDBOX_COMMAND",
   "ASG_CONFIG_SANDBOX_NAMESPACE",
   "ASG_TEST_EXECUTOR_OUTPUT_PATH",
@@ -39,6 +40,20 @@ const sandboxAnalysis = {
     type: "sandbox",
     code: "CONFIG_SANDBOX_REQUIRED",
     reason: "Sandbox config changes before production.",
+  },
+};
+
+const canaryAnalysis = {
+  riskLevel: "medium",
+  executionDecision: {
+    type: "sandbox",
+    code: "CONFIG_SANDBOX_REQUIRED",
+    reason: "Route production config changes through canary namespace first.",
+    rewrittenRequest: {
+      rawPayload: {
+        rolloutStrategy: "canary",
+      },
+    },
   },
 };
 
@@ -245,9 +260,127 @@ describe("dry-run executor profile validation", () => {
       "payment.timeout_ms",
       "--value",
       "250",
+      "--operation",
+      "update",
+      "--source-namespace",
+      "production",
       "--namespace",
       "payment-sandbox",
+      "--mode",
+      "sandbox",
     ]);
+  });
+
+  it("routes production payment timeout updates to sandbox or canary namespaces", async () => {
+    const sandboxRecorder = await makeRecorder("config-sandbox-route");
+    const canaryRecorder = await makeRecorder("config-canary-route");
+
+    process.env.ASG_TEST_EXECUTOR_OUTPUT_PATH = sandboxRecorder.outputPath;
+    process.env.ASG_CONFIG_SANDBOX_COMMAND = JSON.stringify([
+      process.execPath,
+      sandboxRecorder.scriptPath,
+    ]);
+    process.env.ASG_CONFIG_SANDBOX_NAMESPACE = "payment-sandbox";
+    const sandboxResult = await executeConfigSandbox(
+      {
+        environment: "production",
+        rawPayload: {
+          service: "payment-service",
+          key: "payment.timeout",
+          value: "100ms",
+          previousValue: "2s",
+          namespace: "production",
+        },
+      },
+      sandboxAnalysis,
+    );
+
+    assert.equal(sandboxResult.mode, "sandbox");
+    assert.equal(sandboxResult.executorInvoked, true);
+    assert.equal(sandboxResult.targetNamespace, "payment-sandbox");
+    assert.equal(sandboxResult.sourceNamespace, "production");
+    assert.equal(sandboxResult.rollbackPlan.previousValue, "2s");
+    assert.deepEqual(await readRecorderArgs(sandboxRecorder.outputPath), [
+      "--service",
+      "payment-service",
+      "--key",
+      "payment.timeout",
+      "--value",
+      "100ms",
+      "--operation",
+      "update",
+      "--source-namespace",
+      "production",
+      "--namespace",
+      "payment-sandbox",
+      "--mode",
+      "sandbox",
+    ]);
+
+    process.env.ASG_TEST_EXECUTOR_OUTPUT_PATH = canaryRecorder.outputPath;
+    process.env.ASG_CONFIG_CANARY_NAMESPACE = "payment-canary";
+    const canaryResult = await executeConfigSandbox(
+      {
+        environment: "production",
+        rawPayload: {
+          service: "payment-service",
+          key: "payment.timeout",
+          value: "100ms",
+          previousValue: "2s",
+          namespace: "production",
+        },
+      },
+      canaryAnalysis,
+    );
+
+    assert.equal(canaryResult.mode, "canary");
+    assert.equal(canaryResult.executorInvoked, true);
+    assert.equal(canaryResult.targetNamespace, "payment-canary");
+    assert.deepEqual(await readRecorderArgs(canaryRecorder.outputPath), [
+      "--service",
+      "payment-service",
+      "--key",
+      "payment.timeout",
+      "--value",
+      "100ms",
+      "--operation",
+      "update",
+      "--source-namespace",
+      "production",
+      "--namespace",
+      "payment-canary",
+      "--mode",
+      "canary",
+    ]);
+  });
+
+  it("refuses direct production config namespace writes before invocation", async () => {
+    const configRecorder = await makeRecorder("config-production-refused");
+
+    process.env.ASG_TEST_EXECUTOR_OUTPUT_PATH = configRecorder.outputPath;
+    process.env.ASG_CONFIG_SANDBOX_COMMAND = JSON.stringify([
+      process.execPath,
+      configRecorder.scriptPath,
+    ]);
+    const result = await executeConfigSandbox(
+      {
+        environment: "production",
+        rawPayload: {
+          service: "payment-service",
+          key: "payment.timeout",
+          value: "100ms",
+          previousValue: "2s",
+          targetNamespace: "production",
+        },
+      },
+      sandboxAnalysis,
+    );
+
+    assert.equal(result.mode, "production_namespace_refused");
+    assert.equal(result.executorStatus, "production_namespace_refused");
+    assert.equal(result.executorInvoked, false);
+    assert.match(result.reason, /never production/);
+    assert.equal(existsSync(configRecorder.outputPath), false);
   });
 
   it("parses readonly row counts and invokes dry-run writes through EXPLAIN", async () => {

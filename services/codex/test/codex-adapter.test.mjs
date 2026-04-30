@@ -45,6 +45,9 @@ describe("Codex command adapter", () => {
       service: "payment-service",
       key: "payment.timeout",
       value: "100ms",
+      namespace: "production",
+      canaryNamespace: "payment-canary",
+      rolloutStrategy: "canary",
       environment: "prod",
     });
 
@@ -53,6 +56,9 @@ describe("Codex command adapter", () => {
     assert.equal(request.rawPayload.service, "payment-service");
     assert.equal(request.rawPayload.key, "payment.timeout");
     assert.equal(request.rawPayload.value, "100ms");
+    assert.equal(request.rawPayload.namespace, "production");
+    assert.equal(request.rawPayload.canaryNamespace, "payment-canary");
+    assert.equal(request.rawPayload.rolloutStrategy, "canary");
   });
 
   it("maps safe_sql input directly to SQL ToolCallRequest", () => {
