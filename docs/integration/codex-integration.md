@@ -65,6 +65,16 @@ npm install -g pnpm@10.33.0
 ASG_GATEWAY_URL=http://127.0.0.1:4311 node services/codex/src/install.mjs
 ```
 
+## 本地启动与验证速查
+
+完整本地 runbook 见 `docs/runbooks/local-startup.md`，用于统一 API、Web、Codex MCP 和 hook 验证步骤。关键约束如下：
+
+- Web dev server 使用 Vite 7，需要 Node `20.19+` 或 `22.12+`；如果当前本机仍是 Node `18.19.1`，请升级 Node，或使用已构建的 `apps/web/dist` 静态服务 fallback。
+- 如果 `pnpm` 不在系统 `PATH` 中，本地 Ralph 验证环境可临时使用 `PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm <script>`。
+- API 默认健康检查为 `curl -fsS http://127.0.0.1:4310/health`；管理 UI 默认访问 `http://127.0.0.1:5173`。
+- Codex MCP 可通过 `codex mcp list` 和 `tools/list` JSON-RPC 探测确认；hook 可通过检查 `~/.codex/config.toml` 的 `features.codex_hooks = true` 以及 `~/.codex/hooks.json` 中的 `pretool-hook.mjs` 确认。
+- 使用 `pnpm local:stop` 停止由 `scripts/local-start.sh` 启动的 API/Web；手工后台进程可按 `.local/pids/codex-asg-api.pid` 和 `.local/pids/codex-asg-web.pid` 执行 `kill`。
+
 ## MCP 工具
 
 Codex 重启后可以使用 MCP 工具：

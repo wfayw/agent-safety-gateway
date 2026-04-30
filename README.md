@@ -21,6 +21,7 @@ agent-safety-gateway/
 ├── skills/               # 项目相关技能、运行规范或可复用执行说明
 ├── docs/                 # 产品、验证和运行文档
 ├── docs/evidence/        # 真实验证证据与报告输出位置
+├── docs/runbooks/        # 本地启动、验证和故障处理 runbook
 ├── scripts/              # 工作区脚本和临时占位命令
 ├── package.json          # 根工作区脚本
 ├── pnpm-workspace.yaml   # pnpm workspace 包范围
@@ -85,10 +86,13 @@ pnpm seed
 其中：
 
 - `pnpm dev` 启动 API，默认监听 `http://127.0.0.1:4310`。
-- `pnpm dev:web` 启动 Web，默认监听 `http://127.0.0.1:5173`。
+- `pnpm dev:web` 启动 Web，默认监听 `http://127.0.0.1:5173`；Vite 7 dev server 需要 Node `20.19+` 或 `22.12+`。
+- `pnpm local:status` 查看由本地脚本启动的 API/Web 进程，`pnpm local:stop` 停止它们。
 - `pnpm typecheck` 是当前工作区最小整体验证命令。
 - `pnpm build` 构建 shared、API 和 Web。
 - `pnpm test` 当前保留为根工作区占位测试；API/Web 的测试请使用包级命令。
+
+如果系统 `PATH` 中没有 `pnpm`，本地 Ralph 验证环境可使用用户级 fallback：`PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm <script>`。
 
 包级验证命令：
 
@@ -129,6 +133,8 @@ ASG_API_TOKEN=change-me ASG_CORS_ORIGIN=https://console.example API_PORT=4310 pn
 ```bash
 VITE_API_BASE_URL=http://127.0.0.1:4310 pnpm dev:web
 ```
+
+如果本机 Node 低于 Vite 7 dev server 要求（`20.19+` 或 `22.12+`），优先升级 Node；短期浏览器验证可先构建 `apps/web/dist`，再用静态服务器绑定 `127.0.0.1:5173`。完整步骤、Codex MCP/hook 验证命令和停止命令见 `docs/runbooks/local-startup.md`。
 
 启动后可访问：
 
@@ -242,6 +248,7 @@ cd services/api && node --import tsx --test test/agent-production-config-real-va
 
 - 接入说明：`docs/integration/real-component-onboarding.md`
 - Codex 接入说明：`docs/integration/codex-integration.md`
+- 本地启动 runbook：`docs/runbooks/local-startup.md`
 - 配置模板：`docs/integration/real-component-profile.example.json`
 - 复验报告模板：`docs/evidence/real-validation/templates/RV-real-component-report.template.md`
 - 代码契约：`services/api/src/real-component-adapters.ts`
