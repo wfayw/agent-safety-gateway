@@ -48,6 +48,76 @@ export const DecisionType = {
 
 export type DecisionType = (typeof DecisionType)[keyof typeof DecisionType];
 
+export const ManagementRole = {
+  Viewer: "viewer",
+  Operator: "operator",
+  Approver: "approver",
+  PolicyAdmin: "policy_admin",
+  Auditor: "auditor",
+} as const;
+
+export type ManagementRole =
+  (typeof ManagementRole)[keyof typeof ManagementRole];
+
+export const ManagementPermission = {
+  ViewAuditEvidence: "audit:evidence:view",
+  AnalyzeToolCalls: "tool_calls:analyze",
+  ExecuteToolCalls: "tool_calls:execute",
+  ManageApprovals: "approvals:manage",
+  ManagePolicies: "policies:manage",
+} as const;
+
+export type ManagementPermission =
+  (typeof ManagementPermission)[keyof typeof ManagementPermission];
+
+export const ManagementRolePermissions = {
+  [ManagementRole.Viewer]: [ManagementPermission.ViewAuditEvidence],
+  [ManagementRole.Operator]: [
+    ManagementPermission.ViewAuditEvidence,
+    ManagementPermission.AnalyzeToolCalls,
+    ManagementPermission.ExecuteToolCalls,
+  ],
+  [ManagementRole.Approver]: [
+    ManagementPermission.ViewAuditEvidence,
+    ManagementPermission.ManageApprovals,
+  ],
+  [ManagementRole.PolicyAdmin]: [
+    ManagementPermission.ViewAuditEvidence,
+    ManagementPermission.AnalyzeToolCalls,
+    ManagementPermission.ManagePolicies,
+  ],
+  [ManagementRole.Auditor]: [ManagementPermission.ViewAuditEvidence],
+} as const satisfies Record<ManagementRole, readonly ManagementPermission[]>;
+
+export const ManagementRoleValues = Object.values(
+  ManagementRole,
+) as ManagementRole[];
+
+export const ManagementPermissionValues = Object.values(
+  ManagementPermission,
+) as ManagementPermission[];
+
+const managementRoleValueSet = new Set<string>(ManagementRoleValues);
+
+export const isManagementRole = (value: unknown): value is ManagementRole =>
+  typeof value === "string" && managementRoleValueSet.has(value);
+
+export const getManagementRolePermissions = (
+  role: ManagementRole,
+): readonly ManagementPermission[] => ManagementRolePermissions[role];
+
+export const hasManagementPermission = (
+  roles: readonly ManagementRole[],
+  permission: ManagementPermission,
+): boolean =>
+  roles.some((role) => getManagementRolePermissions(role).includes(permission));
+
+export const hasAnyManagementPermission = (
+  roles: readonly ManagementRole[],
+  permissions: readonly ManagementPermission[],
+): boolean =>
+  permissions.some((permission) => hasManagementPermission(roles, permission));
+
 export const ResourceType = {
   DatabaseTable: "database_table",
   Service: "service",

@@ -9,6 +9,8 @@ import {
   ConfigScenarioFixtureId,
   DecisionType,
   Environment,
+  ManagementPermission,
+  ManagementRole,
   RiskLevel,
   SqlScenarioFixtureId,
   cicdScenarioFixtures,
@@ -45,6 +47,23 @@ const createProtectedTestServer = () => {
       ASG_CORS_ORIGIN: "https://console.example",
     }),
     logger: false,
+  });
+
+  servers.push(server);
+  return server;
+};
+
+const createProtectedSeededServer = async () => {
+  const layout = await createSeededLayout();
+  const server = buildServer({
+    config: createApiConfig({
+      API_DATA_DIR: layout.dataDir,
+      API_LOG_LEVEL: "silent",
+      ASG_API_TOKEN: "gateway-token",
+      ASG_CORS_ORIGIN: "https://console.example",
+    }),
+    logger: false,
+    localStorageLayout: layout,
   });
 
   servers.push(server);
@@ -178,7 +197,7 @@ describe("API server", () => {
     assert.equal(response.headers["access-control-allow-origin"], "*");
     assert.equal(
       response.headers["access-control-allow-headers"],
-      "Authorization,Content-Type,Accept",
+      "Authorization,Content-Type,Accept,X-ASG-Roles",
     );
   });
 
@@ -275,8 +294,140 @@ describe("API server", () => {
     assert.equal(response.headers["access-control-allow-origin"], undefined);
     assert.equal(
       response.headers["access-control-allow-headers"],
-      "Authorization,Content-Type,Accept",
+      "Authorization,Content-Type,Accept,X-ASG-Roles",
     );
+  });
+
+  it("allows viewer role to read audit evidence in protected mode", async () => {
+    const server = await createProtectedSeededServer();
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/audits",
+      headers: {
+        authorization: "Bearer gateway-token",
+        "x-asg-roles": ManagementRole.Viewer,
+      },
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(response.json(), { audits: [] });
+  });
+
+  it("denies viewer role from policy-management routes in protected mode", async () => {
+    const server = await createProtectedSeededServer();
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/catalog/ingest",
+      headers: {
+        authorization: "Bearer gateway-token",
+        "x-asg-roles": ManagementRole.Viewer,
+      },
+      payload: { resources: [], dependencies: [] },
+    });
+
+    assert.equal(response.statusCode, 403);
+    assert.deepEqual(response.json(), {
+      code: "FORBIDDEN",
+      message: "Required management permission missing",
+      details: {
+        requiredPermission: ManagementPermission.ManagePolicies,
+        roles: [ManagementRole.Viewer],
+      },
+    });
+  });
+
+  it("allows policy_admin role to manage catalog policy inputs", async () => {
+    const server = await createProtectedSeededServer();
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/catalog/ingest",
+      headers: {
+        authorization: "Bearer gateway-token",
+        "x-asg-roles": ManagementRole.PolicyAdmin,
+      },
+      payload: {
+        resources: [
+          {
+            id: "resource-service-rbac-policy-prod",
+            name: "rbac-policy-service",
+            type: "service",
+            system: "security",
+            environment: "production",
+            sensitivityLevel: "internal",
+            criticalityLevel: "medium",
+            owner: "security-platform",
+            rollbackCapability: "manual",
+          },
+        ],
+        dependencies: [],
+      },
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().status, "ingested");
+  });
+
+  it("separates operator and approver management permissions", async () => {
+    const server = await createProtectedSeededServer();
+    const fixture = getSqlReadFixture();
+
+    const operatorResponse = await server.inject({
+      method: "POST",
+      url: "/api/tool-calls/analyze",
+      headers: {
+        authorization: "Bearer gateway-token",
+        "x-asg-roles": ManagementRole.Operator,
+      },
+      payload: fixture.request,
+    });
+    assert.equal(operatorResponse.statusCode, 200);
+
+    const approverResponse = await server.inject({
+      method: "POST",
+      url: "/api/tool-calls/analyze",
+      headers: {
+        authorization: "Bearer gateway-token",
+        "x-asg-roles": ManagementRole.Approver,
+      },
+      payload: fixture.request,
+    });
+    assert.equal(approverResponse.statusCode, 403);
+    assert.deepEqual(approverResponse.json().details, {
+      requiredPermission: ManagementPermission.AnalyzeToolCalls,
+      roles: [ManagementRole.Approver],
+    });
+  });
+
+  it("rejects unknown management roles before protected actions", async () => {
+    const server = await createProtectedSeededServer();
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/audits",
+      headers: {
+        authorization: "Bearer gateway-token",
+        "x-asg-roles": "admin",
+      },
+    });
+
+    assert.equal(response.statusCode, 403);
+    assert.deepEqual(response.json(), {
+      code: "FORBIDDEN",
+      message: "Invalid management role",
+      details: {
+        invalidRoles: ["admin"],
+        allowedRoles: [
+          ManagementRole.Viewer,
+          ManagementRole.Operator,
+          ManagementRole.Approver,
+          ManagementRole.PolicyAdmin,
+          ManagementRole.Auditor,
+        ],
+      },
+    });
   });
 
   it("returns the unified error format for invalid requests", async () => {

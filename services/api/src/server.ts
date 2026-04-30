@@ -3,9 +3,14 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import {
   DecisionType,
   Environment,
+  ManagementPermission,
+  ManagementRole,
+  ManagementRoleValues,
   RiskLevel,
   ToolCallRequestSchema,
   ToolType,
+  hasManagementPermission,
+  isManagementRole,
 } from "@agent-safety-gateway/shared";
 
 import { ApiLogLevel, createApiConfig, type ApiConfig } from "./config.js";
@@ -84,6 +89,20 @@ type HookDecisionQuery = Omit<HookDecisionFilters, "shouldBlock"> & {
   shouldBlock?: "true" | "false";
 };
 
+type AuthenticatedRolesResult =
+  | { ok: true; roles: ManagementRole[] }
+  | { ok: false; invalidRoles: string[] };
+
+const allManagementRoles = [...ManagementRoleValues];
+
+const getHeaderValues = (value: string | string[] | undefined): string[] => {
+  if (value === undefined) {
+    return [];
+  }
+
+  return Array.isArray(value) ? value : [value];
+};
+
 const isHealthRoute = (url: string): boolean => {
   const [pathname] = url.split("?", 1);
   return pathname === "/health";
@@ -108,7 +127,7 @@ const applyCorsHeaders = (
   reply.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   reply.header(
     "Access-Control-Allow-Headers",
-    "Authorization,Content-Type,Accept",
+    "Authorization,Content-Type,Accept,X-ASG-Roles",
   );
 
   if (!config.corsOrigin) {
@@ -123,6 +142,66 @@ const applyCorsHeaders = (
   if (!requestOrigin || requestOrigin === config.corsOrigin) {
     reply.header("Access-Control-Allow-Origin", config.corsOrigin);
   }
+};
+
+const getAuthenticatedRoles = (
+  request: FastifyRequest,
+  config: ApiConfig,
+): AuthenticatedRolesResult => {
+  if (!config.apiToken) {
+    return { ok: true, roles: allManagementRoles };
+  }
+
+  const requestedRoles = getHeaderValues(request.headers["x-asg-roles"])
+    .flatMap((value) => value.split(","))
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  const uniqueRoles = [...new Set(requestedRoles)];
+
+  if (uniqueRoles.length === 0) {
+    return { ok: true, roles: [ManagementRole.Viewer] };
+  }
+
+  const invalidRoles = uniqueRoles.filter((role) => !isManagementRole(role));
+
+  if (invalidRoles.length > 0) {
+    return { ok: false, invalidRoles };
+  }
+
+  return { ok: true, roles: uniqueRoles as ManagementRole[] };
+};
+
+const requireManagementPermission = (
+  request: FastifyRequest,
+  reply: FastifyReply,
+  config: ApiConfig,
+  permission: ManagementPermission,
+) => {
+  const authenticatedRoles = getAuthenticatedRoles(request, config);
+
+  if (!authenticatedRoles.ok) {
+    return sendErrorResponse(reply, 403, {
+      code: "FORBIDDEN",
+      message: "Invalid management role",
+      details: {
+        invalidRoles: authenticatedRoles.invalidRoles,
+        allowedRoles: ManagementRoleValues,
+      },
+    });
+  }
+
+  if (hasManagementPermission(authenticatedRoles.roles, permission)) {
+    return true;
+  }
+
+  return sendErrorResponse(reply, 403, {
+    code: "FORBIDDEN",
+    message: "Required management permission missing",
+    details: {
+      requiredPermission: permission,
+      roles: authenticatedRoles.roles,
+    },
+  });
 };
 
 const requireApiAuth = (
@@ -268,11 +347,24 @@ export const buildServer = (options: ApiServerOptions = {}) => {
         },
       },
     },
-    async (request) => ({
-      audits: await auditRepository.listAuditRecords(
-        request.query as AuditRecordFilters,
-      ),
-    }),
+    async (request, reply) => {
+      const permissionResult = requireManagementPermission(
+        request,
+        reply,
+        config,
+        ManagementPermission.ViewAuditEvidence,
+      );
+
+      if (permissionResult !== true) {
+        return permissionResult;
+      }
+
+      return {
+        audits: await auditRepository.listAuditRecords(
+          request.query as AuditRecordFilters,
+        ),
+      };
+    },
   );
 
   server.get(
@@ -293,6 +385,17 @@ export const buildServer = (options: ApiServerOptions = {}) => {
       },
     },
     async (request, reply) => {
+      const permissionResult = requireManagementPermission(
+        request,
+        reply,
+        config,
+        ManagementPermission.ViewAuditEvidence,
+      );
+
+      if (permissionResult !== true) {
+        return permissionResult;
+      }
+
       const { id } = request.params as { id: string };
       const audit = await auditRepository.getAuditRecordById(id);
 
@@ -342,11 +445,24 @@ export const buildServer = (options: ApiServerOptions = {}) => {
         },
       },
     },
-    async (request) => ({
-      executionLogs: await executionLogRepository.listExecutionLogs(
-        request.query as ExecutionLogFilters,
-      ),
-    }),
+    async (request, reply) => {
+      const permissionResult = requireManagementPermission(
+        request,
+        reply,
+        config,
+        ManagementPermission.ViewAuditEvidence,
+      );
+
+      if (permissionResult !== true) {
+        return permissionResult;
+      }
+
+      return {
+        executionLogs: await executionLogRepository.listExecutionLogs(
+          request.query as ExecutionLogFilters,
+        ),
+      };
+    },
   );
 
   server.get(
@@ -381,7 +497,18 @@ export const buildServer = (options: ApiServerOptions = {}) => {
         },
       },
     },
-    async (request) => {
+    async (request, reply) => {
+      const permissionResult = requireManagementPermission(
+        request,
+        reply,
+        config,
+        ManagementPermission.ViewAuditEvidence,
+      );
+
+      if (permissionResult !== true) {
+        return permissionResult;
+      }
+
       const query = request.query as HookDecisionQuery;
       const { shouldBlock, ...rest } = query;
       const filters: HookDecisionFilters = {
@@ -433,6 +560,17 @@ export const buildServer = (options: ApiServerOptions = {}) => {
   );
 
   server.post("/api/catalog/ingest", async (request, reply) => {
+    const permissionResult = requireManagementPermission(
+      request,
+      reply,
+      config,
+      ManagementPermission.ManagePolicies,
+    );
+
+    if (permissionResult !== true) {
+      return permissionResult;
+    }
+
     try {
       const summary = await catalogIngestionService.ingestManifest(request.body);
 
@@ -456,6 +594,17 @@ export const buildServer = (options: ApiServerOptions = {}) => {
   });
 
   server.post("/api/tool-calls/sql/execute", async (request, reply) => {
+    const permissionResult = requireManagementPermission(
+      request,
+      reply,
+      config,
+      ManagementPermission.ExecuteToolCalls,
+    );
+
+    if (permissionResult !== true) {
+      return permissionResult;
+    }
+
     const parseResult = ToolCallRequestSchema.safeParse(request.body);
 
     if (!parseResult.success) {
@@ -515,6 +664,17 @@ export const buildServer = (options: ApiServerOptions = {}) => {
   });
 
   server.post("/api/tool-calls/analyze", async (request, reply) => {
+    const permissionResult = requireManagementPermission(
+      request,
+      reply,
+      config,
+      ManagementPermission.AnalyzeToolCalls,
+    );
+
+    if (permissionResult !== true) {
+      return permissionResult;
+    }
+
     const parseResult = ToolCallRequestSchema.safeParse(request.body);
 
     if (!parseResult.success) {

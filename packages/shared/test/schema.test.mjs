@@ -8,6 +8,8 @@ import {
   AuditRecordSchema,
   DecisionType,
   Environment,
+  ManagementPermission,
+  ManagementRole,
   OperationType,
   RiskLevel,
   SqlScenarioFixtureId,
@@ -15,6 +17,10 @@ import {
   ToolType,
   cicdScenarioFixtures,
   configScenarioFixtures,
+  getManagementRolePermissions,
+  hasAnyManagementPermission,
+  hasManagementPermission,
+  isManagementRole,
   sqlScenarioFixtures,
 } from "../dist/index.js";
 
@@ -55,6 +61,38 @@ test("rejects invalid SQL tool call request fields", () => {
   assert.deepEqual(
     result.issues.map((issue) => issue.path),
     ["$.toolType", "$.rawPayload", "$.environment"],
+  );
+});
+
+test("exports management roles with deterministic permissions", () => {
+  assert.equal(isManagementRole(ManagementRole.Viewer), true);
+  assert.equal(isManagementRole("admin"), false);
+  assert.deepEqual(getManagementRolePermissions(ManagementRole.Viewer), [
+    ManagementPermission.ViewAuditEvidence,
+  ]);
+  assert.equal(
+    hasManagementPermission(
+      [ManagementRole.Operator],
+      ManagementPermission.ExecuteToolCalls,
+    ),
+    true,
+  );
+  assert.equal(
+    hasManagementPermission(
+      [ManagementRole.Viewer],
+      ManagementPermission.ExecuteToolCalls,
+    ),
+    false,
+  );
+  assert.equal(
+    hasAnyManagementPermission(
+      [ManagementRole.Approver],
+      [
+        ManagementPermission.ManagePolicies,
+        ManagementPermission.ManageApprovals,
+      ],
+    ),
+    true,
   );
 });
 

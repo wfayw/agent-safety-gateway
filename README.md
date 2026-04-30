@@ -118,6 +118,8 @@ ASG_API_TOKEN=change-me ASG_CORS_ORIGIN=https://console.example API_PORT=4310 pn
 
 配置 `ASG_API_TOKEN` 后，`/api/*` 路由要求 `Authorization: Bearer <token>`；`/health` 仍保持匿名可访问且只返回 `{ "status": "ok" }`。如果未配置 `ASG_CORS_ORIGIN`，受保护模式不会默认返回 `Access-Control-Allow-Origin: *`。
 
+受保护模式支持 `X-ASG-Roles` 角色头，多个角色用逗号分隔；缺省为 `viewer`。共享 RBAC 模型定义 `viewer`、`operator`、`approver`、`policy_admin` 和 `auditor`：`viewer`/`auditor` 可读取审计证据，`operator` 可分析和执行工具调用，`policy_admin` 可管理策略输入，`approver` 预留给审批动作。
+
 另一个终端启动 Web：
 
 ```bash
