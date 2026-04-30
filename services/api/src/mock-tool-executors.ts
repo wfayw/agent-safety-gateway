@@ -67,6 +67,9 @@ const createMockExecutor = (
       toolType: request.toolType,
       requestId: request.id,
       called: true,
+      auditId: analysisResult.auditRecordId,
+      decision: analysisResult.executionDecision.type,
+      environment: request.environment,
       timestamp: now().toISOString(),
       result,
     });

@@ -24,6 +24,16 @@ import {
   type AuditRepository,
 } from "./audit-repository.js";
 import {
+  createExecutionLogRepository,
+  type ExecutionLogFilters,
+  type ExecutionLogRepository,
+} from "./execution-log-repository.js";
+import {
+  createHookDecisionRepository,
+  type HookDecisionFilters,
+  type HookDecisionRepository,
+} from "./hook-decision-repository.js";
+import {
   createDefaultToolCallAnalysisService,
   ToolCallAnalysisError,
   type ToolCallAnalysisService,
@@ -42,9 +52,15 @@ export type ApiServerOptions = {
   logger?: ApiLoggerOption;
   localStorageLayout?: LocalStorageLayout;
   auditRepository?: AuditRepository;
+  executionLogRepository?: ExecutionLogRepository;
+  hookDecisionRepository?: HookDecisionRepository;
   scenarioRepository?: ScenarioRepository;
   toolCallAnalysisService?: ToolCallAnalysisService;
   sqlExecutor?: ToolExecutor<SqlDryRunExecutorResult>;
+};
+
+type HookDecisionQuery = Omit<HookDecisionFilters, "shouldBlock"> & {
+  shouldBlock?: "true" | "false";
 };
 
 const enumValues = <T extends Record<string, string>>(values: T) =>
@@ -82,6 +98,10 @@ export const buildServer = (options: ApiServerOptions = {}) => {
     options.scenarioRepository ?? createScenarioRepository(localStorageLayout);
   const auditRepository =
     options.auditRepository ?? createAuditRepository(localStorageLayout);
+  const executionLogRepository =
+    options.executionLogRepository ?? createExecutionLogRepository(localStorageLayout);
+  const hookDecisionRepository =
+    options.hookDecisionRepository ?? createHookDecisionRepository(localStorageLayout);
   const server = Fastify({
     logger: options.logger ?? createLoggerOption(config),
   });
@@ -194,6 +214,93 @@ export const buildServer = (options: ApiServerOptions = {}) => {
       }
 
       return { audit };
+    },
+  );
+
+  server.get(
+    "/api/execution-logs",
+    {
+      schema: {
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            requestId: {
+              type: "string",
+              minLength: 1,
+            },
+            auditId: {
+              type: "string",
+              minLength: 1,
+            },
+            toolType: {
+              type: "string",
+              enum: enumValues(ToolType),
+            },
+            decision: {
+              type: "string",
+              enum: enumValues(DecisionType),
+            },
+            environment: {
+              type: "string",
+              enum: enumValues(Environment),
+            },
+          },
+        },
+      },
+    },
+    async (request) => ({
+      executionLogs: await executionLogRepository.listExecutionLogs(
+        request.query as ExecutionLogFilters,
+      ),
+    }),
+  );
+
+  server.get(
+    "/api/hook-decisions",
+    {
+      schema: {
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            requestId: {
+              type: "string",
+              minLength: 1,
+            },
+            auditId: {
+              type: "string",
+              minLength: 1,
+            },
+            shouldBlock: {
+              type: "string",
+              enum: ["true", "false"],
+            },
+            toolName: {
+              type: "string",
+              minLength: 1,
+            },
+            environment: {
+              type: "string",
+              enum: enumValues(Environment),
+            },
+          },
+        },
+      },
+    },
+    async (request) => {
+      const query = request.query as HookDecisionQuery;
+      const { shouldBlock, ...rest } = query;
+      const filters: HookDecisionFilters = {
+        ...rest,
+        ...(shouldBlock === undefined
+          ? {}
+          : { shouldBlock: shouldBlock === "true" }),
+      };
+
+      return {
+        hookDecisions: await hookDecisionRepository.listHookDecisions(filters),
+      };
     },
   );
 

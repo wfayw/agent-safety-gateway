@@ -100,6 +100,9 @@ describe("mock tool executors", () => {
       toolType: ToolType.Sql,
       requestId: "req-sql-read-orders-production",
       called: true,
+      auditId: "audit-mock-executor-2",
+      decision: DecisionType.Allow,
+      environment: "production",
       timestamp: "2026-04-28T08:10:01.000Z",
       result: allowedResult.executorResult,
     });

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { appendFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
@@ -8,6 +8,7 @@ import {
   CiCdScenarioFixtureId,
   ConfigScenarioFixtureId,
   DecisionType,
+  Environment,
   RiskLevel,
   SqlScenarioFixtureId,
   cicdScenarioFixtures,
@@ -17,6 +18,7 @@ import {
 import type { FastifyInstance } from "fastify";
 
 import { createApiConfig } from "../src/config.js";
+import { createExecutionLogRepository } from "../src/execution-log-repository.js";
 import { seedLocalData } from "../src/seed.js";
 import { buildServer } from "../src/server.js";
 import { initializeLocalStorage, type LocalStorageLayout } from "../src/storage.js";
@@ -43,7 +45,7 @@ const createSeededLayout = async (): Promise<LocalStorageLayout> => {
   return layout;
 };
 
-const createAnalysisServer = async () => {
+const createAnalysisServerContext = async () => {
   const layout = await createSeededLayout();
   let auditRecordCount = 0;
   const service = createDefaultToolCallAnalysisService(layout, {
@@ -61,8 +63,11 @@ const createAnalysisServer = async () => {
   });
 
   servers.push(server);
-  return server;
+  return { server, layout };
 };
+
+const createAnalysisServer = async () =>
+  (await createAnalysisServerContext()).server;
 
 const getSqlDeleteFixture = () => {
   const fixture = sqlScenarioFixtures.find(
@@ -116,6 +121,17 @@ const analyzeFixture = async (
     url: "/api/tool-calls/analyze",
     payload: fixture.request,
   });
+
+const appendHookDecisionRecord = async (
+  layout: LocalStorageLayout,
+  record: Record<string, unknown>,
+) => {
+  await appendFile(
+    layout.stores.hookDecisions,
+    `${JSON.stringify(record)}\n`,
+    "utf8",
+  );
+};
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => server.close()));
@@ -300,6 +316,217 @@ describe("API server", () => {
         .audits.map((audit: { id: string }) => audit.id),
       ["audit-route-1"],
     );
+  });
+
+  it("lists execution logs and filters without triggering analysis", async () => {
+    const { server, layout } = await createAnalysisServerContext();
+    const executionLogRepository = createExecutionLogRepository(layout);
+    const sqlReadFixture = getSqlReadFixture();
+    const ciCdDeployFixture = getCiCdDeployFixture();
+
+    const emptyResponse = await server.inject({
+      method: "GET",
+      url: "/api/execution-logs",
+    });
+    assert.equal(emptyResponse.statusCode, 200);
+    assert.deepEqual(emptyResponse.json(), { executionLogs: [] });
+
+    await executionLogRepository.appendExecutionLog({
+      scenarioId: "evidence-sql-read",
+      toolType: sqlReadFixture.request.toolType,
+      requestId: sqlReadFixture.request.id,
+      called: true,
+      auditId: "audit-evidence-sql-read",
+      decision: DecisionType.Allow,
+      environment: Environment.Production,
+      timestamp: "2026-04-28T08:05:00.000Z",
+      result: {
+        ok: true,
+        auditId: "audit-evidence-sql-read",
+        decision: DecisionType.Allow,
+        environment: Environment.Production,
+      },
+    });
+    await executionLogRepository.appendExecutionLog({
+      scenarioId: "evidence-cicd-deploy",
+      toolType: ciCdDeployFixture.request.toolType,
+      requestId: ciCdDeployFixture.request.id,
+      called: true,
+      auditId: "audit-evidence-cicd-block",
+      decision: DecisionType.Block,
+      environment: Environment.Staging,
+      timestamp: "2026-04-28T08:06:00.000Z",
+      result: {
+        ok: true,
+        auditId: "audit-evidence-cicd-block",
+        decision: DecisionType.Block,
+        environment: Environment.Staging,
+      },
+    });
+
+    const listResponse = await server.inject({
+      method: "GET",
+      url: "/api/execution-logs",
+    });
+    assert.equal(listResponse.statusCode, 200);
+    assert.deepEqual(
+      listResponse
+        .json()
+        .executionLogs.map((entry: { scenarioId: string }) => entry.scenarioId),
+      ["evidence-sql-read", "evidence-cicd-deploy"],
+    );
+
+    const requestFilterResponse = await server.inject({
+      method: "GET",
+      url: `/api/execution-logs?requestId=${sqlReadFixture.request.id}`,
+    });
+    assert.deepEqual(
+      requestFilterResponse
+        .json()
+        .executionLogs.map((entry: { scenarioId: string }) => entry.scenarioId),
+      ["evidence-sql-read"],
+    );
+
+    const combinedFilterResponse = await server.inject({
+      method: "GET",
+      url:
+        "/api/execution-logs?auditId=audit-evidence-cicd-block&toolType=ci_cd&decision=block&environment=staging",
+    });
+    assert.deepEqual(
+      combinedFilterResponse
+        .json()
+        .executionLogs.map((entry: { scenarioId: string }) => entry.scenarioId),
+      ["evidence-cicd-deploy"],
+    );
+
+    const emptyFilterResponse = await server.inject({
+      method: "GET",
+      url: "/api/execution-logs?requestId=req-missing",
+    });
+    assert.deepEqual(emptyFilterResponse.json(), { executionLogs: [] });
+
+    const invalidFilterResponse = await server.inject({
+      method: "GET",
+      url: "/api/execution-logs?decision=unknown",
+    });
+    assert.equal(invalidFilterResponse.statusCode, 400);
+    assert.equal(invalidFilterResponse.json().code, "INVALID_REQUEST");
+
+    const auditResponse = await server.inject({ method: "GET", url: "/api/audits" });
+    assert.deepEqual(auditResponse.json(), { audits: [] });
+  });
+
+  it("lists hook decisions and filters without triggering analysis", async () => {
+    const { server, layout } = await createAnalysisServerContext();
+    const sqlDeleteFixture = getSqlDeleteFixture();
+    const sqlReadFixture = getSqlReadFixture();
+
+    const emptyResponse = await server.inject({
+      method: "GET",
+      url: "/api/hook-decisions",
+    });
+    assert.equal(emptyResponse.statusCode, 200);
+    assert.deepEqual(emptyResponse.json(), { hookDecisions: [] });
+
+    await appendHookDecisionRecord(layout, {
+      id: "hook-evidence-sql-delete",
+      toolName: "Bash",
+      commandSummary: "psql -c DELETE FROM orders",
+      cwd: "/workspace",
+      adaptedRequest: sqlDeleteFixture.request,
+      blockReason: "Production DELETE was blocked by gateway analysis.",
+      shouldBlock: true,
+      createdAt: "2026-04-28T08:07:00.000Z",
+      auditId: "audit-hook-sql-delete",
+    });
+    await appendHookDecisionRecord(layout, {
+      id: "hook-evidence-local-block",
+      toolName: "Bash",
+      commandSummary: "rm -rf /",
+      cwd: "/workspace",
+      adaptedRequest: null,
+      blockReason: "Local destructive command was blocked before adaptation.",
+      shouldBlock: true,
+      createdAt: "2026-04-28T08:08:00.000Z",
+      auditId: null,
+    });
+    await appendHookDecisionRecord(layout, {
+      id: "hook-evidence-sql-read",
+      toolName: "functions.exec_command",
+      commandSummary: "psql -c SELECT COUNT(*) FROM orders",
+      cwd: null,
+      adaptedRequest: sqlReadFixture.request,
+      blockReason: "Allowed hook decision evidence sample.",
+      shouldBlock: false,
+      createdAt: "2026-04-28T08:09:00.000Z",
+      auditId: "audit-hook-sql-read",
+    });
+
+    const listResponse = await server.inject({
+      method: "GET",
+      url: "/api/hook-decisions",
+    });
+    assert.equal(listResponse.statusCode, 200);
+    assert.deepEqual(
+      listResponse
+        .json()
+        .hookDecisions.map((record: { id: string }) => record.id),
+      [
+        "hook-evidence-sql-delete",
+        "hook-evidence-local-block",
+        "hook-evidence-sql-read",
+      ],
+    );
+
+    const requestFilterResponse = await server.inject({
+      method: "GET",
+      url: `/api/hook-decisions?requestId=${sqlDeleteFixture.request.id}`,
+    });
+    assert.deepEqual(
+      requestFilterResponse
+        .json()
+        .hookDecisions.map((record: { id: string }) => record.id),
+      ["hook-evidence-sql-delete"],
+    );
+
+    const falseFilterResponse = await server.inject({
+      method: "GET",
+      url:
+        "/api/hook-decisions?shouldBlock=false&toolName=functions.exec_command&environment=production",
+    });
+    assert.deepEqual(
+      falseFilterResponse
+        .json()
+        .hookDecisions.map((record: { id: string }) => record.id),
+      ["hook-evidence-sql-read"],
+    );
+
+    const auditFilterResponse = await server.inject({
+      method: "GET",
+      url: "/api/hook-decisions?auditId=audit-hook-sql-delete&shouldBlock=true",
+    });
+    assert.deepEqual(
+      auditFilterResponse
+        .json()
+        .hookDecisions.map((record: { id: string }) => record.id),
+      ["hook-evidence-sql-delete"],
+    );
+
+    const emptyFilterResponse = await server.inject({
+      method: "GET",
+      url: "/api/hook-decisions?requestId=req-missing",
+    });
+    assert.deepEqual(emptyFilterResponse.json(), { hookDecisions: [] });
+
+    const invalidFilterResponse = await server.inject({
+      method: "GET",
+      url: "/api/hook-decisions?shouldBlock=maybe",
+    });
+    assert.equal(invalidFilterResponse.statusCode, 400);
+    assert.equal(invalidFilterResponse.json().code, "INVALID_REQUEST");
+
+    const auditResponse = await server.inject({ method: "GET", url: "/api/audits" });
+    assert.deepEqual(auditResponse.json(), { audits: [] });
   });
 
   it("returns complete audit details by id", async () => {
