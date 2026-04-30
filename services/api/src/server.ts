@@ -49,6 +49,7 @@ import {
   ToolCallAnalysisError,
   type ToolCallAnalysisService,
 } from "./tool-call-analysis-service.js";
+import { createGatewayDiagnostics } from "./diagnostics-service.js";
 import type {
   ExternalApprovalAdapter,
   ExternalAuditSinkAdapter,
@@ -76,7 +77,8 @@ export type ApiServerOptions = {
   approvalAdapter?: Pick<
     ExternalApprovalAdapter,
     "createApprovalRequest" | "getApprovalRequest"
-  >;
+  > &
+    Partial<Pick<ExternalApprovalAdapter, "health">>;
   auditSinkAdapter?: Pick<
     ExternalAuditSinkAdapter,
     "appendControlEvidence" | "health"
@@ -523,6 +525,32 @@ export const buildServer = (options: ApiServerOptions = {}) => {
       };
     },
   );
+
+  server.get("/api/diagnostics", async (request, reply) => {
+    const permissionResult = requireManagementPermission(
+      request,
+      reply,
+      config,
+      ManagementPermission.ViewAuditEvidence,
+    );
+
+    if (permissionResult !== true) {
+      return permissionResult;
+    }
+
+    return {
+      diagnostics: await createGatewayDiagnostics({
+        auditRepository,
+        executionLogRepository,
+        hookDecisionRepository,
+        adapters: {
+          sqlExecutorConfigured: options.sqlExecutor !== undefined,
+          approvalAdapter: options.approvalAdapter ?? null,
+          auditSinkAdapter: options.auditSinkAdapter ?? null,
+        },
+      }),
+    };
+  });
 
   server.get(
     "/api/scenarios/:id",

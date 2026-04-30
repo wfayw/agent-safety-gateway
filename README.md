@@ -131,8 +131,11 @@ VITE_API_BASE_URL=http://127.0.0.1:4310 pnpm dev:web
 - API 健康检查：`http://127.0.0.1:4310/health`
 - 场景列表：`http://127.0.0.1:4310/api/scenarios`
 - 审计列表：`http://127.0.0.1:4310/api/audits`
+- 诊断指标：`http://127.0.0.1:4310/api/diagnostics`
 - 资源目录导入：`POST http://127.0.0.1:4310/api/catalog/ingest`
 - Web 控制台：`http://127.0.0.1:5173`
+
+`/api/diagnostics` 是只读观测端点，会汇总 gateway 决策数、风险等级数、hook 阻断数、executor 调用数、fail-closed 事件和 adapter 健康摘要；它不触发新的分析或 executor 调用。
 
 ## 本地启动与手工验证
 

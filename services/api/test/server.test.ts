@@ -822,6 +822,153 @@ describe("API server", () => {
     assert.deepEqual(auditResponse.json(), { audits: [] });
   });
 
+  it("returns diagnostics metrics without triggering analysis or executors", async () => {
+    const { server, layout } = await createAnalysisServerContext();
+    const executionLogRepository = createExecutionLogRepository(layout);
+    const sqlDeleteFixture = getSqlDeleteFixture();
+    const sqlReadFixture = getSqlReadFixture();
+
+    await analyzeFixture(server, sqlDeleteFixture);
+    await analyzeFixture(server, sqlReadFixture);
+    await executionLogRepository.appendExecutionLog({
+      scenarioId: "diagnostics-sql-read",
+      toolType: sqlReadFixture.request.toolType,
+      requestId: sqlReadFixture.request.id,
+      called: true,
+      auditId: "audit-route-2",
+      decision: DecisionType.Allow,
+      environment: Environment.Production,
+      timestamp: "2026-04-28T08:10:00.000Z",
+      result: {
+        ok: true,
+        executorStatus: "configured",
+      },
+    });
+    await executionLogRepository.appendExecutionLog({
+      scenarioId: "diagnostics-sql-not-configured",
+      toolType: sqlReadFixture.request.toolType,
+      requestId: "req-diagnostics-sql-not-configured",
+      called: false,
+      auditId: "audit-diagnostics-sql-not-configured",
+      decision: DecisionType.Allow,
+      environment: Environment.Production,
+      timestamp: "2026-04-28T08:11:00.000Z",
+      result: {
+        executorStatus: "not_configured",
+        message: "Readonly SQL executor is not configured.",
+      },
+    });
+    await appendHookDecisionRecord(layout, {
+      id: "hook-diagnostics-sql-delete",
+      toolName: "Bash",
+      commandSummary: "psql -c DELETE FROM orders",
+      cwd: "/workspace",
+      adaptedRequest: sqlDeleteFixture.request,
+      blockReason:
+        "agent-safety-gateway decision=block risk=prohibited code=risk.prohibited.block.",
+      shouldBlock: true,
+      createdAt: "2026-04-28T08:12:00.000Z",
+      auditId: "audit-route-1",
+    });
+    await appendHookDecisionRecord(layout, {
+      id: "hook-diagnostics-fail-closed",
+      toolName: "Bash",
+      commandSummary: "psql -c DROP TABLE orders",
+      cwd: "/workspace",
+      adaptedRequest: sqlDeleteFixture.request,
+      blockReason:
+        "agent-safety-gateway could not analyze a high-risk Codex Bash command, so the hook failed closed. timeout",
+      shouldBlock: true,
+      createdAt: "2026-04-28T08:13:00.000Z",
+      auditId: null,
+    });
+    await appendHookDecisionRecord(layout, {
+      id: "hook-diagnostics-sql-read",
+      toolName: "functions.exec_command",
+      commandSummary: "psql -c SELECT COUNT(*) FROM orders",
+      cwd: null,
+      adaptedRequest: sqlReadFixture.request,
+      blockReason: "Allowed hook decision evidence sample.",
+      shouldBlock: false,
+      createdAt: "2026-04-28T08:14:00.000Z",
+      auditId: "audit-route-2",
+    });
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/diagnostics",
+    });
+    const diagnostics = response.json().diagnostics;
+
+    assert.equal(response.statusCode, 200);
+    assert.match(diagnostics.generatedAt, /^\d{4}-\d{2}-\d{2}T/);
+    assert.equal(diagnostics.decisions.total, 2);
+    assert.equal(diagnostics.decisions.byType[DecisionType.Block], 1);
+    assert.equal(diagnostics.decisions.byType[DecisionType.Allow], 1);
+    assert.equal(diagnostics.decisions.normalBlocks, 1);
+    assert.equal(diagnostics.decisions.failClosedBlocks, 0);
+    assert.equal(diagnostics.risks.byLevel[RiskLevel.Prohibited], 1);
+    assert.equal(diagnostics.risks.byLevel[RiskLevel.Low], 1);
+    assert.deepEqual(diagnostics.hooks, {
+      total: 3,
+      blocked: 2,
+      allowed: 1,
+      normalBlocks: 1,
+      failClosedBlocks: 1,
+      gatewayAnalyzedBlocks: 1,
+      localBlocks: 0,
+    });
+    assert.equal(diagnostics.executors.totalLogs, 2);
+    assert.equal(diagnostics.executors.invoked, 1);
+    assert.equal(diagnostics.executors.notInvoked, 1);
+    assert.equal(diagnostics.executors.failClosed, 1);
+    assert.deepEqual(diagnostics.executors.byToolType[sqlReadFixture.request.toolType], {
+      total: 2,
+      invoked: 1,
+      notInvoked: 1,
+    });
+    assert.deepEqual(diagnostics.failClosedEvents, {
+      total: 2,
+      audits: 0,
+      hooks: 1,
+      executors: 1,
+      byReason: {
+        hook_fail_closed: 1,
+        not_configured: 1,
+      },
+    });
+    assert.deepEqual(diagnostics.adapters.summary, {
+      total: 6,
+      ready: 0,
+      notConfigured: 6,
+      unreachable: 0,
+    });
+    assert.deepEqual(
+      diagnostics.adapters.health.map(
+        (entry: { adapterKind: string; status: string }) => [
+          entry.adapterKind,
+          entry.status,
+        ],
+      ),
+      [
+        ["agent_runtime", "not_configured"],
+        ["sql_dry_run", "not_configured"],
+        ["cicd_dry_run", "not_configured"],
+        ["config_sandbox", "not_configured"],
+        ["approval", "not_configured"],
+        ["audit_sink", "not_configured"],
+      ],
+    );
+
+    const auditResponse = await server.inject({ method: "GET", url: "/api/audits" });
+    const executionLogResponse = await server.inject({
+      method: "GET",
+      url: "/api/execution-logs",
+    });
+    assert.equal(auditResponse.json().audits.length, 2);
+    assert.equal(executionLogResponse.json().executionLogs.length, 2);
+  });
+
   it("returns complete audit details by id", async () => {
     const server = await createAnalysisServer();
     const fixture = getSqlDeleteFixture();
