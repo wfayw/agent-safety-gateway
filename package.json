@@ -16,6 +16,7 @@
     "lint": "node scripts/workspace-placeholder.mjs lint",
     "format": "node scripts/workspace-placeholder.mjs format",
     "seed": "pnpm --filter @agent-safety-gateway/api seed",
+    "catalog:ingest": "pnpm --filter @agent-safety-gateway/api catalog:ingest",
     "dev:web": "pnpm --filter @agent-safety-gateway/web dev",
     "build:web": "pnpm --filter @agent-safety-gateway/web build",
     "typecheck:web": "pnpm --filter @agent-safety-gateway/web typecheck",

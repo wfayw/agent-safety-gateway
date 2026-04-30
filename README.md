@@ -45,6 +45,15 @@ pnpm seed
 
 `pnpm seed` 会写入 `.data/` 下的本地 JSON/JSONL 存储，包括资源目录、依赖关系、四个模拟场景，以及后续分析产生的审计、执行日志和 Codex hook 阻断决策。默认路径可通过 `API_DATA_DIR=/path/to/data pnpm seed` 覆盖。
 
+从服务清单同步资源目录和依赖关系：
+
+```bash
+pnpm seed
+pnpm catalog:ingest sample-workspace/payment-service/service-manifest.json
+```
+
+`pnpm catalog:ingest` 会校验资源 id、环境、类型、关键性、敏感级别、owner、回滚能力和依赖引用；未变化的清单重复导入会返回 `status=unchanged`，不会重复写入 `.data/resources.json` 或 `.data/dependencies.json`。
+
 样例输入位于：
 
 - `sample-workspace/agent-tasks/sql-delete-pending-orders.md`
@@ -112,6 +121,7 @@ VITE_API_BASE_URL=http://127.0.0.1:4310 pnpm dev:web
 - API 健康检查：`http://127.0.0.1:4310/health`
 - 场景列表：`http://127.0.0.1:4310/api/scenarios`
 - 审计列表：`http://127.0.0.1:4310/api/audits`
+- 资源目录导入：`POST http://127.0.0.1:4310/api/catalog/ingest`
 - Web 控制台：`http://127.0.0.1:5173`
 
 ## 本地启动与手工验证

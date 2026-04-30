@@ -8,6 +8,11 @@ import {
 } from "@agent-safety-gateway/shared";
 
 import { ApiLogLevel, createApiConfig, type ApiConfig } from "./config.js";
+import {
+  CatalogManifestValidationError,
+  createCatalogIngestionService,
+  type CatalogIngestionService,
+} from "./catalog-ingestion-service.js";
 import { registerErrorHandlers, sendErrorResponse } from "./errors.js";
 import {
   createLocalStorageLayout,
@@ -59,6 +64,7 @@ export type ApiServerOptions = {
   executionLogRepository?: ExecutionLogRepository;
   hookDecisionRepository?: HookDecisionRepository;
   scenarioRepository?: ScenarioRepository;
+  catalogIngestionService?: CatalogIngestionService;
   toolCallAnalysisService?: ToolCallAnalysisService;
   sqlExecutor?: ToolExecutor<SqlDryRunExecutorResult>;
   approvalAdapter?: Pick<
@@ -118,6 +124,9 @@ export const buildServer = (options: ApiServerOptions = {}) => {
     options.executionLogRepository ?? createExecutionLogRepository(localStorageLayout);
   const hookDecisionRepository =
     options.hookDecisionRepository ?? createHookDecisionRepository(localStorageLayout);
+  const catalogIngestionService =
+    options.catalogIngestionService ??
+    createCatalogIngestionService(localStorageLayout);
   const server = Fastify({
     logger: options.logger ?? createLoggerOption(config),
   });
@@ -354,6 +363,29 @@ export const buildServer = (options: ApiServerOptions = {}) => {
       return { scenario };
     },
   );
+
+  server.post("/api/catalog/ingest", async (request, reply) => {
+    try {
+      const summary = await catalogIngestionService.ingestManifest(request.body);
+
+      return {
+        status: summary.idempotent ? "unchanged" : "ingested",
+        summary,
+      };
+    } catch (error: unknown) {
+      if (error instanceof CatalogManifestValidationError) {
+        return sendErrorResponse(reply, 400, {
+          code: "INVALID_CATALOG_MANIFEST",
+          message: "Catalog manifest validation failed",
+          details: {
+            issues: error.issues,
+          },
+        });
+      }
+
+      throw error;
+    }
+  });
 
   server.post("/api/tool-calls/sql/execute", async (request, reply) => {
     const parseResult = ToolCallRequestSchema.safeParse(request.body);

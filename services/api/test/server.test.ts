@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFile, mkdtemp, rm } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
@@ -643,6 +643,110 @@ describe("API server", () => {
       message: "Scenario not found",
       details: {
         scenarioId: "scenario-missing",
+      },
+    });
+  });
+
+  it("ingests catalog manifests through the API", async () => {
+    const { server, layout } = await createAnalysisServerContext();
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/catalog/ingest",
+      payload: {
+        serviceId: "ledger-service",
+        system: "finance",
+        owner: "finance-platform",
+        environment: "production",
+        criticalityLevel: "high",
+        sensitivityLevel: "confidential",
+        rollbackCapability: "manual",
+        resources: [
+          {
+            id: "resource-db-table-ledger-prod",
+            name: "ledger",
+            type: "database_table",
+            system: "finance",
+            environment: "production",
+            sensitivityLevel: "restricted",
+            criticalityLevel: "critical",
+            owner: "finance-platform",
+            rollbackCapability: "manual",
+          },
+        ],
+        dataDependencies: [
+          {
+            resourceId: "resource-db-table-ledger-prod",
+            relationType: "reads_from",
+          },
+        ],
+      },
+    });
+    const body = response.json();
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(body.status, "ingested");
+    assert.equal(body.summary.resources.created, 2);
+    assert.equal(body.summary.dependencies.created, 1);
+
+    const resources = JSON.parse(
+      await readFile(layout.stores.resources, "utf8"),
+    ) as { id: string; owner: string }[];
+    const service = resources.find(
+      (resource) => resource.id === "resource-service-ledger-service-prod",
+    );
+    assert.equal(service?.owner, "finance-platform");
+  });
+
+  it("returns structured catalog ingest errors", async () => {
+    const server = await createAnalysisServer();
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/catalog/ingest",
+      payload: {
+        resources: [
+          {
+            id: "resource-service-orphan-prod",
+            name: "orphan-service",
+            type: "service",
+            system: "platform",
+            environment: "production",
+            sensitivityLevel: "internal",
+            criticalityLevel: "medium",
+            owner: "platform",
+            rollbackCapability: "manual",
+          },
+        ],
+        dependencies: [
+          {
+            sourceResourceId: "resource-service-orphan-prod",
+            targetResourceId: "resource-service-missing-prod",
+            relationType: "depends_on",
+            direction: "downstream",
+            environment: "production",
+            enabled: true,
+          },
+        ],
+      },
+    });
+
+    assert.equal(response.statusCode, 400);
+    assert.deepEqual(response.json(), {
+      code: "INVALID_CATALOG_MANIFEST",
+      message: "Catalog manifest validation failed",
+      details: {
+        issues: [
+          {
+            path: "$.dependencies[0].targetResourceId",
+            code: "unknown_dependency_resource",
+            message:
+              "Dependency targetResourceId does not reference a known catalog resource.",
+            details: {
+              resourceId: "resource-service-missing-prod",
+            },
+          },
+        ],
       },
     });
   });

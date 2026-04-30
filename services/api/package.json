@@ -17,6 +17,7 @@
   "scripts": {
     "dev": "tsx src/server.ts",
     "seed": "tsx src/seed.ts",
+    "catalog:ingest": "tsx src/catalog-ingest.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test test/*.test.ts"
