@@ -1,0 +1,248 @@
+import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, it } from "node:test";
+
+import {
+  executeCiCdDryRun,
+  executeConfigSandbox,
+  executeSqlDryRun,
+  validateExecutorCommand,
+} from "../src/dry-run-executors.mjs";
+
+const envNames = [
+  "ASG_SQL_DRY_RUN_COMMAND",
+  "ASG_CICD_DRY_RUN_COMMAND",
+  "ASG_CONFIG_SANDBOX_COMMAND",
+  "ASG_CONFIG_SANDBOX_NAMESPACE",
+  "ASG_TEST_EXECUTOR_OUTPUT_PATH",
+];
+const originalEnv = Object.fromEntries(envNames.map((name) => [name, process.env[name]]));
+const tempDirs = [];
+
+const allowAnalysis = {
+  riskLevel: "low",
+  executionDecision: {
+    type: "allow",
+    code: "SAFE_TOOL_CALL_ALLOWED",
+    reason: "Allowed by test fixture.",
+  },
+};
+
+const sandboxAnalysis = {
+  riskLevel: "medium",
+  executionDecision: {
+    type: "sandbox",
+    code: "CONFIG_SANDBOX_REQUIRED",
+    reason: "Sandbox config changes before production.",
+  },
+};
+
+const sqlRequest = {
+  rawPayload: {
+    sql: "SELECT COUNT(*) FROM orders",
+  },
+};
+
+const deployRequest = {
+  environment: "staging",
+  rawPayload: {
+    service: "payment-service",
+    operation: "deploy",
+    testStatus: "passed",
+  },
+};
+
+const configRequest = {
+  environment: "production",
+  rawPayload: {
+    service: "payment-service",
+    key: "payment.timeout_ms",
+    value: 250,
+    previousValue: 500,
+  },
+};
+
+const resetEnv = () => {
+  for (const name of envNames) {
+    if (originalEnv[name] === undefined) {
+      delete process.env[name];
+    } else {
+      process.env[name] = originalEnv[name];
+    }
+  }
+};
+
+const makeRecorder = async (name) => {
+  const dir = await mkdtemp(join(tmpdir(), "asg-dry-run-test-"));
+  tempDirs.push(dir);
+  const outputPath = join(dir, `${name}.json`);
+  const scriptPath = join(dir, `${name}.mjs`);
+
+  await writeFile(
+    scriptPath,
+    [
+      "#!/usr/bin/env node",
+      "import { writeFileSync } from 'node:fs';",
+      "const outputPath = process.env.ASG_TEST_EXECUTOR_OUTPUT_PATH;",
+      "writeFileSync(outputPath, JSON.stringify({ args: process.argv.slice(2) }));",
+      "console.log(JSON.stringify({ ok: true, args: process.argv.slice(2) }));",
+    ].join("\n"),
+    { mode: 0o700 },
+  );
+
+  return { outputPath, scriptPath };
+};
+
+const readRecorderArgs = async (outputPath) => {
+  const raw = await readFile(outputPath, "utf8");
+
+  return JSON.parse(raw).args;
+};
+
+afterEach(async () => {
+  resetEnv();
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
+
+describe("dry-run executor profile validation", () => {
+  it("reports not_configured without invoking SQL executors", async () => {
+    delete process.env.ASG_SQL_DRY_RUN_COMMAND;
+    const result = await executeSqlDryRun(sqlRequest, allowAnalysis);
+
+    assert.equal(result.mode, "not_configured");
+    assert.equal(result.executorStatus, "not_configured");
+    assert.equal(result.adapterKind, "sql_dry_run");
+    assert.equal(result.executorInvoked, false);
+  });
+
+  it("rejects malformed JSON command configuration without invocation", async () => {
+    process.env.ASG_CICD_DRY_RUN_COMMAND = "not-json";
+    const result = await executeCiCdDryRun(deployRequest, allowAnalysis);
+
+    assert.equal(result.mode, "invalid");
+    assert.equal(result.executorStatus, "invalid");
+    assert.equal(result.adapterKind, "cicd_dry_run");
+    assert.equal(result.executorInvoked, false);
+    assert.match(result.message, /JSON string array/);
+  });
+
+  it("rejects shell-string commands without invocation", async () => {
+    process.env.ASG_SQL_DRY_RUN_COMMAND = JSON.stringify("psql -c 'SELECT 1'");
+    const result = await executeSqlDryRun(sqlRequest, allowAnalysis);
+
+    assert.equal(result.mode, "invalid");
+    assert.equal(result.executorStatus, "invalid");
+    assert.equal(result.executorInvoked, false);
+    assert.match(result.reason, /Shell-string/);
+  });
+
+  it("rejects shell interpreter arrays as unsafe", async () => {
+    process.env.ASG_CONFIG_SANDBOX_COMMAND = JSON.stringify(["sh", "-c", "echo unsafe"]);
+    const result = await executeConfigSandbox(configRequest, sandboxAnalysis);
+
+    assert.equal(result.mode, "invalid");
+    assert.equal(result.executorStatus, "invalid");
+    assert.equal(result.adapterKind, "config_sandbox");
+    assert.equal(result.executorInvoked, false);
+    assert.match(result.reason, /shell executor/);
+  });
+
+  it("reports unreachable command configuration without invocation", async () => {
+    process.env.ASG_SQL_DRY_RUN_COMMAND = JSON.stringify(["/definitely/missing/asg-sql-dry-run"]);
+    const result = await executeSqlDryRun(sqlRequest, allowAnalysis);
+
+    assert.equal(result.mode, "unreachable");
+    assert.equal(result.executorStatus, "unreachable");
+    assert.equal(result.executorInvoked, false);
+    assert.match(result.message, /not reachable/);
+  });
+
+  it("reports configured for executable JSON array profiles", async () => {
+    delete process.env.ASG_CICD_DRY_RUN_COMMAND;
+    const diagnostic = await validateExecutorCommand("ASG_CICD_DRY_RUN_COMMAND", "cicd_dry_run");
+
+    assert.equal(diagnostic.executorStatus, "not_configured");
+
+    process.env.ASG_CICD_DRY_RUN_COMMAND = JSON.stringify([process.execPath, "--version"]);
+    const configured = await validateExecutorCommand("ASG_CICD_DRY_RUN_COMMAND", "cicd_dry_run");
+
+    assert.equal(configured.mode, "configured");
+    assert.equal(configured.executorStatus, "configured");
+    assert.equal(configured.executorInvoked, false);
+    assert.ok(configured.executablePath);
+  });
+
+  it("invokes valid SQL, CI/CD, and config executor profiles", async () => {
+    const sqlRecorder = await makeRecorder("sql");
+    const deployRecorder = await makeRecorder("deploy");
+    const configRecorder = await makeRecorder("config");
+
+    process.env.ASG_TEST_EXECUTOR_OUTPUT_PATH = sqlRecorder.outputPath;
+    process.env.ASG_SQL_DRY_RUN_COMMAND = JSON.stringify([process.execPath, sqlRecorder.scriptPath]);
+    const sqlResult = await executeSqlDryRun(sqlRequest, allowAnalysis);
+
+    assert.equal(sqlResult.mode, "readonly");
+    assert.equal(sqlResult.executorStatus, "configured");
+    assert.equal(sqlResult.executorInvoked, true);
+    assert.deepEqual(await readRecorderArgs(sqlRecorder.outputPath), [
+      "-c",
+      "EXPLAIN SELECT COUNT(*) FROM orders",
+    ]);
+
+    process.env.ASG_TEST_EXECUTOR_OUTPUT_PATH = deployRecorder.outputPath;
+    process.env.ASG_CICD_DRY_RUN_COMMAND = JSON.stringify([process.execPath, deployRecorder.scriptPath]);
+    const deployResult = await executeCiCdDryRun(deployRequest, allowAnalysis);
+
+    assert.equal(deployResult.mode, "dry_run");
+    assert.equal(deployResult.executorStatus, "configured");
+    assert.equal(deployResult.executorInvoked, true);
+    assert.deepEqual(await readRecorderArgs(deployRecorder.outputPath), [
+      "--service",
+      "payment-service",
+      "--operation",
+      "deploy",
+      "--environment",
+      "staging",
+    ]);
+
+    process.env.ASG_TEST_EXECUTOR_OUTPUT_PATH = configRecorder.outputPath;
+    process.env.ASG_CONFIG_SANDBOX_COMMAND = JSON.stringify([process.execPath, configRecorder.scriptPath]);
+    process.env.ASG_CONFIG_SANDBOX_NAMESPACE = "payment-sandbox";
+    const configResult = await executeConfigSandbox(configRequest, sandboxAnalysis);
+
+    assert.equal(configResult.mode, "sandbox");
+    assert.equal(configResult.executorStatus, "configured");
+    assert.equal(configResult.executorInvoked, true);
+    assert.equal(configResult.targetNamespace, "payment-sandbox");
+    assert.deepEqual(await readRecorderArgs(configRecorder.outputPath), [
+      "--service",
+      "payment-service",
+      "--key",
+      "payment.timeout_ms",
+      "--value",
+      "250",
+      "--namespace",
+      "payment-sandbox",
+    ]);
+  });
+
+  it("never invokes dry-run commands when validation fails", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "asg-dry-run-test-"));
+    tempDirs.push(dir);
+    const markerPath = join(dir, "unsafe-marker.txt");
+
+    process.env.ASG_SQL_DRY_RUN_COMMAND = JSON.stringify([
+      "sh",
+      "-c",
+      `printf invoked > ${markerPath}`,
+    ]);
+    const invalidResult = await executeSqlDryRun(sqlRequest, allowAnalysis);
+
+    assert.equal(invalidResult.executorInvoked, false);
+    assert.equal(invalidResult.mode, "invalid");
+    assert.equal(existsSync(markerPath), false);
+  });
+});

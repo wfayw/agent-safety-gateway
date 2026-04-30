@@ -85,6 +85,15 @@ export ASG_CONFIG_SANDBOX_COMMAND='["/opt/company/bin/config-sandbox-write"]'
 
 未配置这些环境变量时，MCP 工具仍会返回网关分析结果，但不会伪造真实 executor 已执行。
 
+MCP executor 会在调用前验证 dry-run profile，并返回以下 `executorStatus` / `mode` 诊断：
+
+- `configured`：环境变量是非空 JSON 字符串数组，首个元素是当前进程可执行的 dry-run/sandbox 命令。
+- `not_configured`：环境变量为空或未设置；网关分析结果保留，但 executor 不会被调用。
+- `invalid`：配置不是 JSON 字符串数组、数组为空、元素不是非空字符串，或指向 `sh`/`bash`/`zsh`/`powershell` 等 shell interpreter。
+- `unreachable`：命令格式有效，但首个元素在绝对路径或 `PATH` 中不可执行。
+
+`invalid` 和 `unreachable` 都会 fail closed，并在调用任何 dry-run 命令前返回 `executorInvoked=false`。
+
 ### MCP 协议边界
 
 当前 MCP server 是无额外依赖的 stdio JSON-RPC 薄封装，刻意保持较小协议面：
