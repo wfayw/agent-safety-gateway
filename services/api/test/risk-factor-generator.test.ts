@@ -201,4 +201,39 @@ describe("risk factor generator", () => {
     assert.equal(validationFactor?.severity, RiskFactorSeverity.Critical);
     assert.match(validationFactor?.reason ?? "", /failed tests/);
   });
+
+  it("adds explicit destructive SQL DDL and broad table delete evidence", () => {
+    const generator = createRiskFactorGenerator();
+    const ddlFactors = generator.generateRiskFactors({
+      actionTuple: createActionTuple({
+        operation: OperationType.Delete,
+        parameters: {
+          operationKeyword: "drop",
+          sqlOperationClass: "destructive_ddl",
+        },
+      }),
+      directResources: [createResource()],
+    });
+    const broadDeleteFactors = generator.generateRiskFactors({
+      actionTuple: createActionTuple({
+        operation: OperationType.Delete,
+        parameters: {
+          operationKeyword: "delete",
+          sqlOperationClass: "broad_table_delete",
+          broadTableDelete: true,
+        },
+      }),
+      directResources: [createResource()],
+    });
+
+    assert.equal(
+      findFactor(ddlFactors, RiskFactorCategory.Operation)?.label,
+      "Destructive SQL DROP operation",
+    );
+    assert.ok(
+      broadDeleteFactors.some(
+        (factor) => factor.label === "broad-table-delete without WHERE",
+      ),
+    );
+  });
 });

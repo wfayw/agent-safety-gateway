@@ -188,6 +188,37 @@ describe("risk level scorer", () => {
     );
   });
 
+  it("applies hard block for production destructive SQL DDL on unresolved resources", () => {
+    const scorer = createRiskLevelScorer();
+    const result = scorer.scoreRiskLevel({
+      actionTuple: createActionTuple({
+        operation: OperationType.Delete,
+        parameters: {
+          operationKeyword: "truncate",
+          sqlOperationClass: "destructive_ddl",
+        },
+      }),
+      directResources: [
+        createResource({
+          id: "unresolved-production-sql-orders_archive",
+          name: "orders_archive",
+          criticalityLevel: CriticalityLevel.Medium,
+        }),
+      ],
+      riskFactors: [createFactor({ score: 10 })],
+    });
+
+    assert.equal(result.riskLevel, RiskLevel.Prohibited);
+    assert.ok(
+      result.appliedHardRules.includes("production_destructive_sql_ddl"),
+    );
+    assert.ok(
+      result.policyTrace.matchedRuleIds.includes(
+        "production_destructive_sql_ddl",
+      ),
+    );
+  });
+
   it("applies hard block for failed production deploys on critical resources", () => {
     const scorer = createRiskLevelScorer();
     const result = scorer.scoreRiskLevel({

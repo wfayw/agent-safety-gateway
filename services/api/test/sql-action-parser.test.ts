@@ -105,6 +105,57 @@ describe("SQL action parser", () => {
     assert.equal(result.actionTuple.parameters.filter, "status='PENDING'");
   });
 
+  it("classifies destructive SQL table operations with target table evidence", () => {
+    const parser = createSqlActionParser();
+    const cases = [
+      {
+        sql: "DROP TABLE orders",
+        operation: OperationType.Delete,
+        operationKeyword: "drop",
+        sqlOperationClass: "destructive_ddl",
+      },
+      {
+        sql: "TRUNCATE orders",
+        operation: OperationType.Delete,
+        operationKeyword: "truncate",
+        sqlOperationClass: "destructive_ddl",
+      },
+      {
+        sql: "ALTER TABLE orders ADD COLUMN archived_at timestamp",
+        operation: OperationType.Update,
+        operationKeyword: "alter",
+        sqlOperationClass: "destructive_ddl",
+      },
+      {
+        sql: "DELETE FROM orders",
+        operation: OperationType.Delete,
+        operationKeyword: "delete",
+        sqlOperationClass: "broad_table_delete",
+        broadTableDelete: true,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const result = parser.parse(createSqlRequest(testCase.sql));
+
+      assert.equal(result.success, true);
+      assert.equal(result.actionTuple.operation, testCase.operation);
+      assert.equal(result.actionTuple.target, "orders");
+      assert.equal(
+        result.actionTuple.parameters.operationKeyword,
+        testCase.operationKeyword,
+      );
+      assert.equal(
+        result.actionTuple.parameters.sqlOperationClass,
+        testCase.sqlOperationClass,
+      );
+
+      if (testCase.broadTableDelete) {
+        assert.equal(result.actionTuple.parameters.broadTableDelete, true);
+      }
+    }
+  });
+
   it("returns a structured error for unknown SQL operations", () => {
     const parser = createSqlActionParser();
     const result = parser.parse(createSqlRequest("VACUUM orders"));
@@ -114,11 +165,14 @@ describe("SQL action parser", () => {
       errors: [
         {
           code: "unknown_sql_operation",
-          message: "SQL operation must be SELECT, INSERT, UPDATE, or DELETE.",
+          message:
+            "SQL operation must be SELECT, INSERT, UPDATE, DELETE, DROP TABLE, TRUNCATE TABLE, or ALTER TABLE.",
           field: "rawPayload.sql",
           details: {
             requestId: "req-sql-parser-test",
             operationKeyword: "vacuum",
+            sqlOperationClass: "unknown",
+            failClosed: true,
           },
         },
       ],
@@ -139,6 +193,31 @@ describe("SQL action parser", () => {
           details: {
             requestId: "req-sql-parser-test",
             operationKeyword: "delete",
+            sqlOperationClass: "destructive_dml",
+            failClosed: true,
+          },
+        },
+      ],
+    });
+  });
+
+  it("fails closed with structured evidence for unknown destructive SQL", () => {
+    const parser = createSqlActionParser();
+    const result = parser.parse(createSqlRequest("MERGE INTO orders USING updates"));
+
+    assert.deepEqual(result, {
+      success: false,
+      errors: [
+        {
+          code: "unknown_sql_operation",
+          message:
+            "SQL operation must be SELECT, INSERT, UPDATE, DELETE, DROP TABLE, TRUNCATE TABLE, or ALTER TABLE.",
+          field: "rawPayload.sql",
+          details: {
+            requestId: "req-sql-parser-test",
+            operationKeyword: "merge",
+            sqlOperationClass: "unknown_destructive",
+            failClosed: true,
           },
         },
       ],

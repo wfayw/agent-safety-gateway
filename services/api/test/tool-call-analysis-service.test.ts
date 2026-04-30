@@ -8,6 +8,8 @@ import {
   cicdScenarioFixtures,
   configScenarioFixtures,
   DecisionType,
+  Environment,
+  OperationType,
   RiskLevel,
   RiskFactorCategory,
   sqlScenarioFixtures,
@@ -143,6 +145,68 @@ describe("tool call analysis service", () => {
     assert.equal(auditRecords[0]?.decision.type, DecisionType.Block);
     assert.equal(auditRecords[0]?.policyVersion, DEFAULT_LOCAL_POLICY_VERSION);
     assert.deepEqual(auditRecords[0]?.policyTrace, result.policyTrace);
+  });
+
+  it("blocks expanded destructive SQL cases with explicit risk evidence", async () => {
+    const layout = await createSeededLayout();
+    const service = createDefaultToolCallAnalysisService(layout, {
+      idFactory: createAuditIdFactory(),
+    });
+    const cases = [
+      {
+        sql: "DROP TABLE orders",
+        operationKeyword: "drop",
+        operation: OperationType.Delete,
+        expectedFactorLabel: "Destructive SQL DROP operation",
+      },
+      {
+        sql: "TRUNCATE orders",
+        operationKeyword: "truncate",
+        operation: OperationType.Delete,
+        expectedFactorLabel: "Destructive SQL TRUNCATE operation",
+      },
+      {
+        sql: "ALTER TABLE orders ADD COLUMN archived_at timestamp",
+        operationKeyword: "alter",
+        operation: OperationType.Update,
+        expectedFactorLabel: "Destructive SQL ALTER operation",
+      },
+      {
+        sql: "DELETE FROM orders",
+        operationKeyword: "delete",
+        operation: OperationType.Delete,
+        expectedFactorLabel: "broad-table-delete without WHERE",
+      },
+    ];
+
+    for (const testCase of cases) {
+      const result = await service.analyzeToolCall({
+        id: `req-${testCase.operationKeyword}-orders`,
+        actor: "agent:codex",
+        taskPurpose: "Validate expanded destructive SQL blocking",
+        toolType: ToolType.Sql,
+        rawPayload: {
+          sql: testCase.sql,
+          database: "orders-prod",
+        },
+        environment: Environment.Production,
+        createdAt: "2026-04-30T12:00:00.000Z",
+      });
+
+      assert.equal(result.actionTuple.operation, testCase.operation);
+      assert.equal(result.actionTuple.target, "orders");
+      assert.equal(
+        result.actionTuple.parameters.operationKeyword,
+        testCase.operationKeyword,
+      );
+      assert.equal(result.riskLevel, RiskLevel.Prohibited);
+      assert.equal(result.executionDecision.type, DecisionType.Block);
+      assert.ok(
+        result.riskFactors.some(
+          (factor) => factor.label === testCase.expectedFactorLabel,
+        ),
+      );
+    }
   });
 
   it("allows the low-risk SQL SELECT control fixture", async () => {

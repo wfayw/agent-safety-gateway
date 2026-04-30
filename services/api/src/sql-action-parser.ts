@@ -20,7 +20,21 @@ const sqlOperationByKeyword: Record<string, ActionTuple["operation"]> = {
   insert: OperationType.Create,
   update: OperationType.Update,
   delete: OperationType.Delete,
+  drop: OperationType.Delete,
+  truncate: OperationType.Delete,
+  alter: OperationType.Update,
 };
+
+const destructiveDdlKeywords = new Set(["alter", "drop", "truncate"]);
+
+const unknownDestructiveKeywords = new Set([
+  "create",
+  "grant",
+  "merge",
+  "rename",
+  "replace",
+  "revoke",
+]);
 
 const toParseError = (
   code: string,
@@ -69,6 +83,9 @@ const matchTargetTable = (sql: string, keyword: string): string | null => {
     insert: /\binsert\s+into\s+([`"\[]?[a-zA-Z_][\w$.-]*[`"\]]?)/i,
     update: /\bupdate\s+([`"\[]?[a-zA-Z_][\w$.-]*[`"\]]?)/i,
     delete: /\bdelete\s+from\s+([`"\[]?[a-zA-Z_][\w$.-]*[`"\]]?)/i,
+    drop: /\bdrop\s+table(?:\s+if\s+exists)?\s+([`"\[]?[a-zA-Z_][\w$.-]*[`"\]]?)/i,
+    truncate: /\btruncate(?:\s+table)?\s+([`"\[]?[a-zA-Z_][\w$.-]*[`"\]]?)/i,
+    alter: /\balter\s+table(?:\s+if\s+exists)?\s+([`"\[]?[a-zA-Z_][\w$.-]*[`"\]]?)/i,
   };
   const targetTable = patterns[keyword]?.exec(sql)?.[1];
 
@@ -147,6 +164,30 @@ const getConnectionEnvironment = (rawPayload: JsonObject) => {
   return isStringValue(value) ? value.trim() : null;
 };
 
+const getSqlOperationClass = (operationKeyword: string, filter: string | null) => {
+  if (operationKeyword === "select") {
+    return "read";
+  }
+
+  if (operationKeyword === "insert" || operationKeyword === "update") {
+    return "mutable_dml";
+  }
+
+  if (operationKeyword === "delete") {
+    return filter ? "destructive_dml" : "broad_table_delete";
+  }
+
+  if (destructiveDdlKeywords.has(operationKeyword)) {
+    return "destructive_ddl";
+  }
+
+  if (unknownDestructiveKeywords.has(operationKeyword)) {
+    return "unknown_destructive";
+  }
+
+  return "unknown";
+};
+
 const buildParameters = (
   rawPayload: JsonObject,
   operationKeyword: string,
@@ -158,8 +199,13 @@ const buildParameters = (
   const parameters: JsonObject = {
     ...rawPayload,
     operationKeyword,
+    sqlOperationClass: getSqlOperationClass(operationKeyword, filter),
     table: target,
   };
+
+  if (operationKeyword === "delete" && !filter) {
+    parameters.broadTableDelete = true;
+  }
 
   if (fields.length > 0) {
     parameters.fields = [...fields];
@@ -224,17 +270,20 @@ export const createSqlActionParser = (): ActionParser => ({
         errors: [
           toParseError(
             "unknown_sql_operation",
-            "SQL operation must be SELECT, INSERT, UPDATE, or DELETE.",
+            "SQL operation must be SELECT, INSERT, UPDATE, DELETE, DROP TABLE, TRUNCATE TABLE, or ALTER TABLE.",
             "rawPayload.sql",
             {
               requestId: request.id,
               operationKeyword: sqlOperation.keyword,
+              sqlOperationClass: getSqlOperationClass(sqlOperation.keyword, null),
+              failClosed: true,
             },
           ),
         ],
       };
     }
 
+    const filter = matchFilter(sql);
     const target = matchTargetTable(sql, sqlOperation.keyword);
 
     if (!target) {
@@ -248,6 +297,8 @@ export const createSqlActionParser = (): ActionParser => ({
             {
               requestId: request.id,
               operationKeyword: sqlOperation.keyword,
+              sqlOperationClass: getSqlOperationClass(sqlOperation.keyword, filter),
+              failClosed: true,
             },
           ),
         ],
@@ -255,7 +306,6 @@ export const createSqlActionParser = (): ActionParser => ({
     }
 
     const fields = matchFields(sql, sqlOperation.keyword);
-    const filter = matchFilter(sql);
     const connectionEnvironment = getConnectionEnvironment(request.rawPayload);
 
     return {

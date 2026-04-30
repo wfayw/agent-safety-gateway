@@ -52,6 +52,8 @@ const highRiskOperations = new Set<OperationTypeValue>([
   OperationType.Deploy,
 ]);
 
+const destructiveSqlDdlOperations = new Set(["alter", "drop", "truncate"]);
+
 const isMutableOperation = (operation: OperationTypeValue) =>
   mutableOperations.has(operation);
 
@@ -67,7 +69,37 @@ const toSeverity = (score: number): RiskFactorSeverityValue => {
   return RiskFactorSeverity.Informational;
 };
 
+const getStringParameter = (actionTuple: ActionTuple, key: string) => {
+  const value = actionTuple.parameters[key];
+
+  return typeof value === "string" ? value : null;
+};
+
+const getSqlOperationKeyword = (actionTuple: ActionTuple) =>
+  getStringParameter(actionTuple, "operationKeyword")?.toLowerCase() ?? null;
+
+const createDestructiveSqlDdlFactor = (
+  actionTuple: ActionTuple,
+  operationKeyword: string,
+): RiskFactor => ({
+  category: RiskFactorCategory.Operation,
+  label: `Destructive SQL ${operationKeyword.toUpperCase()} operation`,
+  severity: RiskFactorSeverity.Critical,
+  score: 65,
+  reason: `${operationKeyword.toUpperCase()} can change or remove table structure/data for ${actionTuple.target}.`,
+});
+
 const createOperationFactor = (actionTuple: ActionTuple): RiskFactor => {
+  const operationKeyword = getSqlOperationKeyword(actionTuple);
+
+  if (
+    actionTuple.toolType === ToolType.Sql &&
+    operationKeyword &&
+    destructiveSqlDdlOperations.has(operationKeyword)
+  ) {
+    return createDestructiveSqlDdlFactor(actionTuple, operationKeyword);
+  }
+
   switch (actionTuple.operation) {
     case OperationType.Delete:
       return {
@@ -143,10 +175,22 @@ const createEnvironmentFactor = (actionTuple: ActionTuple): RiskFactor => {
   };
 };
 
-const getStringParameter = (actionTuple: ActionTuple, key: string) => {
-  const value = actionTuple.parameters[key];
+const createBroadTableDeleteFactor = (actionTuple: ActionTuple): RiskFactor | null => {
+  if (
+    actionTuple.toolType !== ToolType.Sql ||
+    actionTuple.operation !== OperationType.Delete ||
+    actionTuple.parameters.broadTableDelete !== true
+  ) {
+    return null;
+  }
 
-  return typeof value === "string" ? value : null;
+  return {
+    category: RiskFactorCategory.Operation,
+    label: "broad-table-delete without WHERE",
+    severity: RiskFactorSeverity.Critical,
+    score: 35,
+    reason: `DELETE on ${actionTuple.target} has no WHERE clause, so it can remove the full table contents.`,
+  };
 };
 
 const createValidationFactor = (actionTuple: ActionTuple): RiskFactor | null => {
@@ -357,9 +401,11 @@ export const createRiskFactorGenerator = (): RiskFactorGenerator => ({
   generateRiskFactors({ actionTuple, directResources, indirectResources = [] }) {
     const allResources = [...directResources, ...indirectResources];
     const validationFactor = createValidationFactor(actionTuple);
+    const broadTableDeleteFactor = createBroadTableDeleteFactor(actionTuple);
 
     return [
       createOperationFactor(actionTuple),
+      ...(broadTableDeleteFactor ? [broadTableDeleteFactor] : []),
       createEnvironmentFactor(actionTuple),
       ...(validationFactor ? [validationFactor] : []),
       createResourceFactor(allResources, actionTuple),

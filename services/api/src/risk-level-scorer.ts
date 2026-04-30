@@ -73,6 +73,28 @@ type HardBlockingRule = {
   matches: (input: RiskLevelScorerInput) => boolean;
 };
 
+const destructiveSqlDdlOperations = new Set(["alter", "drop", "truncate"]);
+
+const getStringParameter = (actionTuple: ActionTuple, key: string) => {
+  const value = actionTuple.parameters[key];
+
+  return typeof value === "string" ? value : null;
+};
+
+const isProductionDestructiveSqlDdl = ({ actionTuple }: RiskLevelScorerInput) => {
+  const operationKeyword = getStringParameter(
+    actionTuple,
+    "operationKeyword",
+  )?.toLowerCase();
+
+  return (
+    actionTuple.toolType === ToolType.Sql &&
+    actionTuple.environment === Environment.Production &&
+    operationKeyword !== undefined &&
+    destructiveSqlDdlOperations.has(operationKeyword)
+  );
+};
+
 const hardBlockingRules: readonly HardBlockingRule[] = [
   {
     id: "production_delete_on_critical_resource",
@@ -87,6 +109,19 @@ const hardBlockingRules: readonly HardBlockingRule[] = [
           (resource) => resource.criticalityLevel === CriticalityLevel.Critical,
         )
       );
+    },
+  },
+  {
+    id: "production_destructive_sql_ddl",
+    description:
+      "Block production DROP/TRUNCATE/ALTER SQL operations on matched or unresolved resources.",
+    matches: (input) => {
+      const affectedResources = [
+        ...input.directResources,
+        ...(input.indirectResources ?? []),
+      ];
+
+      return isProductionDestructiveSqlDdl(input) && affectedResources.length > 0;
     },
   },
   {
