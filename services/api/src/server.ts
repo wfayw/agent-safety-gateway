@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import {
   DecisionType,
   Environment,
@@ -83,6 +84,71 @@ type HookDecisionQuery = Omit<HookDecisionFilters, "shouldBlock"> & {
   shouldBlock?: "true" | "false";
 };
 
+const isHealthRoute = (url: string): boolean => {
+  const [pathname] = url.split("?", 1);
+  return pathname === "/health";
+};
+
+const getBearerToken = (authorizationHeader: string | undefined) => {
+  const [scheme, token, ...extraParts] = authorizationHeader?.split(" ") ?? [];
+
+  if (scheme !== "Bearer" || !token || extraParts.length > 0) {
+    return null;
+  }
+
+  return token;
+};
+
+const applyCorsHeaders = (
+  reply: FastifyReply,
+  config: ApiConfig,
+  requestOrigin: string | undefined,
+) => {
+  reply.header("Vary", "Origin");
+  reply.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  reply.header(
+    "Access-Control-Allow-Headers",
+    "Authorization,Content-Type,Accept",
+  );
+
+  if (!config.corsOrigin) {
+    return;
+  }
+
+  if (config.corsOrigin === "*") {
+    reply.header("Access-Control-Allow-Origin", "*");
+    return;
+  }
+
+  if (!requestOrigin || requestOrigin === config.corsOrigin) {
+    reply.header("Access-Control-Allow-Origin", config.corsOrigin);
+  }
+};
+
+const requireApiAuth = (
+  request: FastifyRequest,
+  reply: FastifyReply,
+  config: ApiConfig,
+) => {
+  if (!config.apiToken || isHealthRoute(request.url)) {
+    return true;
+  }
+
+  const bearerToken = getBearerToken(request.headers.authorization);
+
+  if (bearerToken === config.apiToken) {
+    return true;
+  }
+
+  reply.header("WWW-Authenticate", 'Bearer realm="agent-safety-gateway"');
+  void sendErrorResponse(reply, 401, {
+    code: "UNAUTHORIZED",
+    message: "Valid bearer token required",
+    details: null,
+  });
+  return false;
+};
+
 const enumValues = <T extends Record<string, string>>(values: T) =>
   Object.values(values);
 
@@ -135,12 +201,14 @@ export const buildServer = (options: ApiServerOptions = {}) => {
   registerErrorHandlers(server);
 
   server.addHook("onRequest", (request, reply, done) => {
-    reply.header("Access-Control-Allow-Origin", "*");
-    reply.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-    reply.header("Access-Control-Allow-Headers", "Content-Type,Accept");
+    applyCorsHeaders(reply, config, request.headers.origin);
 
     if (request.method === "OPTIONS") {
       void reply.code(204).send();
+      return;
+    }
+
+    if (!requireApiAuth(request, reply, config)) {
       return;
     }
 

@@ -110,6 +110,14 @@ pnpm seed
 API_PORT=4310 API_LOG_LEVEL=info pnpm dev
 ```
 
+默认本地模式不需要认证，并返回通配 CORS，便于 `127.0.0.1` 上的 API/Web 联调。非本地或共享环境建议配置 bearer token 和显式 CORS origin：
+
+```bash
+ASG_API_TOKEN=change-me ASG_CORS_ORIGIN=https://console.example API_PORT=4310 pnpm dev
+```
+
+配置 `ASG_API_TOKEN` 后，`/api/*` 路由要求 `Authorization: Bearer <token>`；`/health` 仍保持匿名可访问且只返回 `{ "status": "ok" }`。如果未配置 `ASG_CORS_ORIGIN`，受保护模式不会默认返回 `Access-Control-Allow-Origin: *`。
+
 另一个终端启动 Web：
 
 ```bash

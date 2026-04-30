@@ -37,6 +37,20 @@ const createTestServer = () => {
   return server;
 };
 
+const createProtectedTestServer = () => {
+  const server = buildServer({
+    config: createApiConfig({
+      API_LOG_LEVEL: "silent",
+      ASG_API_TOKEN: "gateway-token",
+      ASG_CORS_ORIGIN: "https://console.example",
+    }),
+    logger: false,
+  });
+
+  servers.push(server);
+  return server;
+};
+
 const createSeededLayout = async (): Promise<LocalStorageLayout> => {
   const dataDir = await mkdtemp(join(tmpdir(), "asg-server-"));
   dataDirs.push(dataDir);
@@ -150,6 +164,119 @@ describe("API server", () => {
 
     assert.equal(response.statusCode, 200);
     assert.deepEqual(response.json(), { status: "ok" });
+  });
+
+  it("keeps local open mode unauthenticated with wildcard CORS", async () => {
+    const server = createTestServer();
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/scenarios",
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.headers["access-control-allow-origin"], "*");
+    assert.equal(
+      response.headers["access-control-allow-headers"],
+      "Authorization,Content-Type,Accept",
+    );
+  });
+
+  it("keeps health accessible without leaking protected config", async () => {
+    const server = createProtectedTestServer();
+
+    const response = await server.inject({ method: "GET", url: "/health" });
+
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(response.json(), { status: "ok" });
+    assert.equal(response.body.includes("gateway-token"), false);
+  });
+
+  it("requires bearer auth for protected API routes", async () => {
+    const server = createProtectedTestServer();
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/scenarios",
+      headers: {
+        authorization: "Bearer gateway-token",
+        origin: "https://console.example",
+      },
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(
+      response.headers["access-control-allow-origin"],
+      "https://console.example",
+    );
+  });
+
+  it("rejects missing bearer auth for protected API routes", async () => {
+    const server = createProtectedTestServer();
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/scenarios",
+      headers: {
+        origin: "https://console.example",
+      },
+    });
+
+    assert.equal(response.statusCode, 401);
+    assert.deepEqual(response.json(), {
+      code: "UNAUTHORIZED",
+      message: "Valid bearer token required",
+      details: null,
+    });
+    assert.equal(
+      response.headers["www-authenticate"],
+      'Bearer realm="agent-safety-gateway"',
+    );
+    assert.equal(
+      response.headers["access-control-allow-origin"],
+      "https://console.example",
+    );
+  });
+
+  it("rejects invalid bearer auth for protected API routes", async () => {
+    const server = createProtectedTestServer();
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/scenarios",
+      headers: {
+        authorization: "Bearer wrong-token",
+      },
+    });
+
+    assert.equal(response.statusCode, 401);
+    assert.equal(response.json().code, "UNAUTHORIZED");
+  });
+
+  it("does not default protected CORS preflight to wildcard", async () => {
+    const server = buildServer({
+      config: createApiConfig({
+        API_LOG_LEVEL: "silent",
+        ASG_API_TOKEN: "gateway-token",
+      }),
+      logger: false,
+    });
+    servers.push(server);
+
+    const response = await server.inject({
+      method: "OPTIONS",
+      url: "/api/scenarios",
+      headers: {
+        origin: "https://console.example",
+      },
+    });
+
+    assert.equal(response.statusCode, 204);
+    assert.equal(response.headers["access-control-allow-origin"], undefined);
+    assert.equal(
+      response.headers["access-control-allow-headers"],
+      "Authorization,Content-Type,Accept",
+    );
   });
 
   it("returns the unified error format for invalid requests", async () => {
