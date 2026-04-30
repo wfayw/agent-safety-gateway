@@ -61,6 +61,8 @@ const deployRequest = {
   rawPayload: {
     service: "payment-service",
     operation: "deploy",
+    pipeline: "payment-service-release",
+    version: "2026.05.01",
     testStatus: "passed",
   },
 };
@@ -217,8 +219,14 @@ describe("dry-run executor profile validation", () => {
       "payment-service",
       "--operation",
       "deploy",
+      "--pipeline",
+      "payment-service-release",
+      "--version",
+      "2026.05.01",
       "--environment",
       "staging",
+      "--test-status",
+      "passed",
     ]);
 
     process.env.ASG_TEST_EXECUTOR_OUTPUT_PATH = configRecorder.outputPath;
@@ -291,6 +299,96 @@ describe("dry-run executor profile validation", () => {
     assert.deepEqual(await readRecorderArgs(dryRunRecorder.outputPath), [
       "-c",
       "EXPLAIN UPDATE orders SET status='ARCHIVED' WHERE status='PENDING'",
+    ]);
+  });
+
+  it("refuses production deploy dry-runs when tests are failed, unknown, or missing", async () => {
+    for (const testStatus of ["failed", "unknown", undefined]) {
+      const deployRecorder = await makeRecorder(`deploy-${testStatus ?? "missing"}`);
+      process.env.ASG_TEST_EXECUTOR_OUTPUT_PATH = deployRecorder.outputPath;
+      process.env.ASG_CICD_DRY_RUN_COMMAND = JSON.stringify([
+        process.execPath,
+        deployRecorder.scriptPath,
+      ]);
+
+      const result = await executeCiCdDryRun(
+        {
+          environment: "production",
+          rawPayload: {
+            service: "payment-service",
+            operation: "deploy",
+            pipeline: "payment-service-release",
+            version: "2026.05.01",
+            ...(testStatus === undefined ? {} : { testStatus }),
+          },
+        },
+        allowAnalysis,
+      );
+
+      assert.equal(result.mode, "production_deploy_tests_not_passed");
+      assert.equal(result.executorStatus, "production_deploy_tests_not_passed");
+      assert.equal(result.adapterKind, "cicd_dry_run");
+      assert.equal(result.executorInvoked, false);
+      assert.equal(result.testStatus, testStatus ?? "missing");
+      assert.equal(existsSync(deployRecorder.outputPath), false);
+    }
+  });
+
+  it("invokes passed production deploy dry-runs and records plan evidence", async () => {
+    const deployRecorder = await makeRecorder("deploy-plan");
+
+    await writeFile(
+      deployRecorder.scriptPath,
+      [
+        "#!/usr/bin/env node",
+        "import { writeFileSync } from 'node:fs';",
+        "const outputPath = process.env.ASG_TEST_EXECUTOR_OUTPUT_PATH;",
+        "writeFileSync(outputPath, JSON.stringify({ args: process.argv.slice(2) }));",
+        "console.log(JSON.stringify({ runId: 'dry-run-123', artifactUris: ['file:///tmp/deploy-plan.json'], dryRunPlan: { changes: ['would deploy payment-service'] } }));",
+      ].join("\n"),
+      { mode: 0o700 },
+    );
+
+    process.env.ASG_TEST_EXECUTOR_OUTPUT_PATH = deployRecorder.outputPath;
+    process.env.ASG_CICD_DRY_RUN_COMMAND = JSON.stringify([
+      process.execPath,
+      deployRecorder.scriptPath,
+    ]);
+    const result = await executeCiCdDryRun(
+      {
+        environment: "production",
+        rawPayload: {
+          service: "payment-service",
+          operation: "deploy",
+          pipeline: "payment-service-release",
+          version: "2026.05.01",
+          testStatus: "passed",
+        },
+      },
+      allowAnalysis,
+    );
+
+    assert.equal(result.mode, "dry_run");
+    assert.equal(result.executorStatus, "configured");
+    assert.equal(result.executorInvoked, true);
+    assert.equal(result.runId, "dry-run-123");
+    assert.deepEqual(result.artifactUris, ["file:///tmp/deploy-plan.json"]);
+    assert.equal(result.evidence.runId, "dry-run-123");
+    assert.deepEqual(result.evidence.artifactUris, ["file:///tmp/deploy-plan.json"]);
+    assert.deepEqual(result.dryRunPlan, { changes: ["would deploy payment-service"] });
+    assert.deepEqual(await readRecorderArgs(deployRecorder.outputPath), [
+      "--service",
+      "payment-service",
+      "--operation",
+      "deploy",
+      "--pipeline",
+      "payment-service-release",
+      "--version",
+      "2026.05.01",
+      "--environment",
+      "production",
+      "--test-status",
+      "passed",
     ]);
   });
 

@@ -70,7 +70,7 @@ ASG_GATEWAY_URL=http://127.0.0.1:4311 node services/codex/src/install.mjs
 Codex 重启后可以使用 MCP 工具：
 
 - `safe_sql`：分析 SQL 请求；`SELECT` 只调用 `ASG_SQL_READONLY_COMMAND`，非只读 SQL 只调用 `ASG_SQL_DRY_RUN_COMMAND` 生成 dry-run / explain-plan 证据。
-- `safe_deploy`：分析部署或回滚请求，只有 `allow` 且配置了 `ASG_CICD_DRY_RUN_COMMAND` 时才调用 CI/CD dry-run。
+- `safe_deploy`：分析部署或回滚请求，只有 `allow`、测试状态满足安全门槛且配置了 `ASG_CICD_DRY_RUN_COMMAND` 时才调用 CI/CD dry-run。
 - `safe_config_update`：分析配置变更，只有 `allow` 或 `sandbox` 且配置了 `ASG_CONFIG_SANDBOX_COMMAND` 时才调用 sandbox/canary executor。
 - `analyze_tool_call`：只分析完整 `ToolCallRequest`，不执行。
 - `gateway_health`：检查网关 API 是否可达。
@@ -93,6 +93,13 @@ SQL executor 约定：
 - 非只读 SQL：通过 `ASG_SQL_DRY_RUN_COMMAND` 调用 dry-run/explain 连接，传入参数为 `-c "EXPLAIN <原始 SQL>"`，不得提交写入。
 - executor stdout 如果是 JSON，可返回 `rowCount`、`rows` 或 `explainPlan`；否则 dry-run 文本 stdout 会作为 `explainPlan.text` 保存。
 
+CI/CD dry-run executor 约定：
+
+- executor profile 通过 `ASG_CICD_DRY_RUN_COMMAND` 配置，MCP adapter 会传入 `--service`、`--operation`、`--pipeline`、`--version`、`--environment` 和 `--test-status`。
+- 生产 `deploy` 请求只有在 `testStatus=passed` 时才会调用 dry-run executor；`failed`、`unknown` 或缺失状态会在调用前 fail closed，并返回 `production_deploy_tests_not_passed`。
+- executor stdout 如果是 JSON，可返回 `runId`、`artifactUris` 和 `dryRunPlan` / `plan`；这些字段会写入 MCP `executor` 结果与 `evidence`，便于关联真实 CI/CD dry-run 产物。
+- 该 adapter 只调用 dry-run / planning interface，测试覆盖会验证失败测试状态不会触发任何真实发布 executor。
+
 未配置这些环境变量时，MCP 工具仍会返回网关分析结果，但不会伪造真实 executor 已执行。
 
 MCP executor 会在调用前验证 dry-run profile，并返回以下 `executorStatus` / `mode` 诊断：
@@ -102,6 +109,7 @@ MCP executor 会在调用前验证 dry-run profile，并返回以下 `executorSt
 - `invalid`：配置不是 JSON 字符串数组、数组为空、元素不是非空字符串，或指向 `sh`/`bash`/`zsh`/`powershell` 等 shell interpreter。
 - `unreachable`：命令格式有效，但首个元素在绝对路径或 `PATH` 中不可执行。
 - `production_write_network_unknown` / `production_write_network_open`：SQL executor profile 虽然可用，但生产写网络边界未知或明确未阻断，因此不会调用 SQL executor。
+- `production_deploy_tests_not_passed`：生产 deploy 的测试状态不是 `passed`，因此 CI/CD dry-run executor 不会被调用。
 
 `invalid` 和 `unreachable` 都会 fail closed，并在调用任何 dry-run 命令前返回 `executorInvoked=false`。
 

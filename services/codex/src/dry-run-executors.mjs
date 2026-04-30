@@ -307,6 +307,69 @@ const getExplainPlan = (payload, stdout, includeRawText) => {
   return null;
 };
 
+const normalizeCiCdTestStatus = (value) => {
+  const normalized = String(value ?? "").trim().toLowerCase();
+
+  if (!normalized) {
+    return "missing";
+  }
+
+  if (["pass", "passed", "success", "succeeded"].includes(normalized)) {
+    return "passed";
+  }
+
+  if (["fail", "failed", "failure", "errored"].includes(normalized)) {
+    return "failed";
+  }
+
+  return "unknown";
+};
+
+const getCiCdValue = (request, key, fallback) =>
+  String(request.rawPayload[key] ?? fallback);
+
+const validateCiCdProductionDeployTests = (request) => {
+  const environment = String(request.environment ?? "unknown-environment").toLowerCase();
+  const operation = String(request.rawPayload.operation ?? "deploy").toLowerCase();
+  const testStatus = normalizeCiCdTestStatus(request.rawPayload.testStatus);
+
+  if (!["production", "prod"].includes(environment) || operation !== "deploy") {
+    return { ok: true, testStatus };
+  }
+
+  if (testStatus === "passed") {
+    return { ok: true, testStatus };
+  }
+
+  return {
+    ok: false,
+    diagnostic: makeDiagnostic({
+      adapterKind: "cicd_dry_run",
+      envName: "rawPayload.testStatus",
+      status: "production_deploy_tests_not_passed",
+      message:
+        "CI/CD dry-run adapter refused a production deploy because tests are not confirmed passed.",
+      reason: `Production deploys require testStatus='passed' before any CI/CD dry-run command can be invoked; received '${testStatus}'.`,
+    }),
+    testStatus,
+  };
+};
+
+const getArtifactUris = (payload) => {
+  if (Array.isArray(payload?.artifactUris)) {
+    return payload.artifactUris.filter((uri) => typeof uri === "string" && uri.trim());
+  }
+
+  if (typeof payload?.artifactUri === "string" && payload.artifactUri.trim()) {
+    return [payload.artifactUri];
+  }
+
+  return [];
+};
+
+const getDryRunRunId = (payload) =>
+  typeof payload?.runId === "string" && payload.runId.trim() ? payload.runId : null;
+
 export const executeSqlDryRun = async (request, analysis) => {
   if (!canExecuteDecision(analysis)) {
     return {
@@ -371,6 +434,20 @@ export const executeCiCdDryRun = async (request, analysis) => {
     };
   }
 
+  const productionDeployTestCheck = validateCiCdProductionDeployTests(request);
+
+  if (!productionDeployTestCheck.ok) {
+    return {
+      ...failClosedEvidence(
+        productionDeployTestCheck.diagnostic,
+        "cicd-production-deploy-tests-not-passed",
+      ),
+      testStatus: productionDeployTestCheck.testStatus,
+      environment: request.environment,
+      operation: request.rawPayload.operation ?? "deploy",
+    };
+  }
+
   const diagnostic = await validateExecutorCommand("ASG_CICD_DRY_RUN_COMMAND", "cicd_dry_run");
 
   if (diagnostic.executorStatus !== "configured") {
@@ -378,16 +455,33 @@ export const executeCiCdDryRun = async (request, analysis) => {
   }
 
   const [binary, ...baseArgs] = diagnostic.command;
+  const service = getCiCdValue(request, "service", "unknown-service");
+  const operation = getCiCdValue(request, "operation", "deploy");
+  const pipeline = getCiCdValue(request, "pipeline", "unknown-pipeline");
+  const version = getCiCdValue(request, "version", "unknown-version");
+  const environment = String(request.environment ?? "unknown-environment");
+  const testStatus = productionDeployTestCheck.testStatus;
   const args = [
     ...baseArgs,
     "--service",
-    String(request.rawPayload.service ?? "unknown-service"),
+    service,
     "--operation",
-    String(request.rawPayload.operation ?? "deploy"),
+    operation,
+    "--pipeline",
+    pipeline,
+    "--version",
+    version,
     "--environment",
-    request.environment,
+    environment,
+    "--test-status",
+    testStatus,
   ];
   const result = await runCommand(binary, args, "");
+  const parsedOutput = parseStdoutJson(result.stdout);
+  const artifactUris = getArtifactUris(parsedOutput);
+  const evidence = makeEvidence("cicd-dry-run-command", artifactUris);
+  const runId = getDryRunRunId(parsedOutput) ?? evidence.runId;
+  evidence.runId = runId;
 
   return {
     ok: result.code === 0,
@@ -395,9 +489,18 @@ export const executeCiCdDryRun = async (request, analysis) => {
     executorStatus: "configured",
     adapterKind: "cicd_dry_run",
     executorInvoked: true,
-    pipelineStatus: request.rawPayload.testStatus ?? "unknown",
+    service,
+    operation,
+    pipeline,
+    version,
+    environment,
+    testStatus,
+    pipelineStatus: testStatus,
+    runId,
+    artifactUris,
+    dryRunPlan: parsedOutput?.dryRunPlan ?? parsedOutput?.plan ?? null,
     rawResult: result,
-    evidence: makeEvidence("cicd-dry-run-command"),
+    evidence,
   };
 };
 
