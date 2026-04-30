@@ -85,6 +85,17 @@ export ASG_CONFIG_SANDBOX_COMMAND='["/opt/company/bin/config-sandbox-write"]'
 
 未配置这些环境变量时，MCP 工具仍会返回网关分析结果，但不会伪造真实 executor 已执行。
 
+### MCP 协议边界
+
+当前 MCP server 是无额外依赖的 stdio JSON-RPC 薄封装，刻意保持较小协议面：
+
+- 支持 `initialize`、`ping`、`tools/list`、`tools/call`、`resources/list` 和 `prompts/list`。
+- `tools/call` 响应总是包含 MCP `content` 文本块和 `structuredContent`，便于 Codex 同时展示可读结果和保留结构化证据。
+- `resources/list` 与 `prompts/list` 目前返回空列表；本集成暂不提供资源订阅、提示模板、流式进度或工具列表变更通知。
+- server 按行读取 JSON-RPC 消息；单行 malformed JSON 会返回 `-32700` parse error，后续有效消息仍可继续处理。
+- notification 或缺少 `id` 的请求不会返回响应，避免把 Codex 的单向生命周期事件误报为失败。
+- `safe_sql`、`safe_deploy` 和 `safe_config_update` 只在网关允许且对应 dry-run/sandbox 环境变量配置后才会调用本地 executor；未配置时返回 `not_configured` 证据，不伪造执行成功。
+
 ## Hook 行为
 
 `PreToolUse` hook 只处理 Bash 类工具。它会识别以下命令类型：
