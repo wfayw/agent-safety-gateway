@@ -8,6 +8,16 @@
 - 报告中的场景编号必须与样例任务、审计记录和验证脚本输出保持一致。
 - 使用 mock executor、mock Agent、mock CI/CD、mock 配置中心或本地样例数据时，必须在报告中明确标记“需要真实组件复验”。
 
+## 真实组件验证计划
+
+- 第一阶段真实组件验证计划：`docs/evidence/real-validation/real-component-validation-plan.md`
+- 通用报告模板：`docs/evidence/real-validation/templates/RV-real-component-report.template.md`
+- SQL dry-run 模板：`docs/evidence/real-validation/templates/RV-sql-dry-run-report.template.md`
+- CI/CD dry-run 模板：`docs/evidence/real-validation/templates/RV-cicd-dry-run-report.template.md`
+- 配置沙箱模板：`docs/evidence/real-validation/templates/RV-config-sandbox-report.template.md`
+- 审批系统模板：`docs/evidence/real-validation/templates/RV-approval-report.template.md`
+- 外部审计 sink 模板：`docs/evidence/real-validation/templates/RV-external-audit-sink-report.template.md`
+
 ## 结论定义
 
 - 通过：场景按验证步骤完成，网关响应、executor 日志、审计记录和预期控制结果完全一致。
