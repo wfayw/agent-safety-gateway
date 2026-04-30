@@ -1,0 +1,36 @@
+{
+  "profileId": "company-dev-sandbox",
+  "environmentName": "研发沙箱环境",
+  "allowedToolTypes": ["sql", "ci_cd", "config"],
+  "protectedEnvironments": ["production"],
+  "agentRuntime": {
+    "protocol": "ralph-tool-call-json-v1",
+    "toolCallJsonPath": "$.toolCalls[0]",
+    "actorJsonPath": "$.actor.id",
+    "taskInputExampleUri": "docs/evidence/input-examples/rv-001-agent-task.json"
+  },
+  "sqlDryRun": {
+    "enabled": true,
+    "readOnlyConnectionName": "orders-prod-readonly",
+    "dryRunConnectionName": "orders-prod-dry-run",
+    "productionWriteNetworkBlocked": true
+  },
+  "ciCdDryRun": {
+    "enabled": true,
+    "pipelineStatusApi": "https://ci.example.internal/api/pipelines/{pipelineId}/status",
+    "dryRunExecutorName": "deploy-dry-run",
+    "productionDeployBlocked": true
+  },
+  "configSandbox": {
+    "enabled": true,
+    "sandboxNamespacePattern": "{service}.staging",
+    "canaryNamespacePattern": "{service}.canary",
+    "productionWriteBlocked": true
+  },
+  "auditSink": {
+    "enabled": true,
+    "sinkName": "company-audit-log-sandbox",
+    "retentionDays": 180,
+    "desensitizationRequired": true
+  }
+}

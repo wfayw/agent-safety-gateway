@@ -200,7 +200,7 @@ cd services/api && node --import tsx --test test/agent-production-config-real-va
 
 这些场景当前结论均按“部分通过”记录：执行控制闭环已由本地确定性测试证明，但 Agent、executor、数据库、CI/CD、配置中心和审计存储仍包含 mock 或 fixture，需要真实组件复验。
 
-## 可选真实组件接入
+## 真实组件接入
 
 如需把 MVP 从本地验证推进到真实研发链路，请先提供以下信息，再新增 adapter 或复验报告：
 
@@ -210,12 +210,20 @@ cd services/api && node --import tsx --test test/agent-production-config-real-va
 - 配置中心沙箱、staging/canary 命名规则、审批 API、回滚策略和审计字段要求。
 - 审计/日志平台的写入接口、查询方式、保留周期、脱敏规则和证据归档位置。
 
+当前已补充真实组件接入契约、配置模板和复验报告模板：
+
+- 接入说明：`docs/integration/real-component-onboarding.md`
+- 配置模板：`docs/integration/real-component-profile.example.json`
+- 复验报告模板：`docs/evidence/real-validation/templates/RV-real-component-report.template.md`
+- 代码契约：`services/api/src/real-component-adapters.ts`
+
+真实 adapter 未配置时必须 fail-closed，不调用真实 executor。后续拿到真实环境信息后，优先按 Agent/Ralph 输出协议、审计平台、SQL dry-run、CI/CD dry-run、配置中心 sandbox 的顺序接入。
+
 ## 未完成能力
 
-- 真实 Agent、真实数据库、真实 CI/CD、真实配置中心和真实审计平台 adapter。
-- 针对用户提供研发环境的 RV-001 到 RV-004 复验报告。
-- 后台资源/策略管理系统。
-- 正式专利文档生成。
+- 真实 Agent、真实数据库、真实 CI/CD、真实配置中心和真实审计平台的具体 adapter 实现。
+- 针对用户提供研发环境的 RV-001 到 RV-004 真实组件复验报告。
+- 后台资源/策略管理系统；当前 MVP 仍使用本地 JSON/JSONL 和 seed 数据。
 
 ## 设计边界
 
