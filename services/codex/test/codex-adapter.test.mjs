@@ -60,11 +60,13 @@ describe("Codex command adapter", () => {
       sql: "SELECT COUNT(*) FROM orders",
       database: "orders-prod-readonly",
       environment: "production",
+      productionWriteNetworkBlocked: true,
     });
 
     assert.equal(request.toolType, "sql");
     assert.equal(request.rawPayload.sql, "SELECT COUNT(*) FROM orders");
     assert.equal(request.rawPayload.database, "orders-prod-readonly");
+    assert.equal(request.rawPayload.productionWriteNetworkBlocked, true);
   });
 
   it("blocks destructive host commands locally", () => {

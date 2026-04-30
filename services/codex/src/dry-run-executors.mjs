@@ -202,6 +202,111 @@ export const canExecuteDecision = (analysis, acceptedDecisionTypes = ["allow"]) 
   acceptedDecisionTypes.includes(analysis.executionDecision?.type) &&
   analysis.riskLevel !== "prohibited";
 
+const getSqlKeyword = (sql) =>
+  String(sql ?? "").match(/^\s*([a-zA-Z]+)/)?.[1]?.toLowerCase() ?? "unknown";
+
+const isReadonlySql = (sql) => getSqlKeyword(sql) === "select";
+
+const parseBooleanEnv = (value) => {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return null;
+  }
+
+  if (/^(true|1|yes)$/i.test(String(value).trim())) {
+    return true;
+  }
+
+  if (/^(false|0|no)$/i.test(String(value).trim())) {
+    return false;
+  }
+
+  return null;
+};
+
+const getProductionWriteNetworkBoundary = (request) => {
+  if (typeof request.rawPayload.productionWriteNetworkBlocked === "boolean") {
+    return {
+      value: request.rawPayload.productionWriteNetworkBlocked,
+      source: "rawPayload.productionWriteNetworkBlocked",
+    };
+  }
+
+  const envValue = parseBooleanEnv(process.env.ASG_SQL_PRODUCTION_WRITE_NETWORK_BLOCKED);
+
+  if (envValue !== null) {
+    return {
+      value: envValue,
+      source: "ASG_SQL_PRODUCTION_WRITE_NETWORK_BLOCKED",
+    };
+  }
+
+  return { value: null, source: null };
+};
+
+const validateSqlProductionBoundary = (request, adapterKind) => {
+  const boundary = getProductionWriteNetworkBoundary(request);
+
+  if (boundary.value === true) {
+    return null;
+  }
+
+  const knownOpenNetwork = boundary.value === false;
+  const status = knownOpenNetwork
+    ? "production_write_network_open"
+    : "production_write_network_unknown";
+
+  return makeDiagnostic({
+    adapterKind,
+    envName: boundary.source ?? "rawPayload.productionWriteNetworkBlocked",
+    status,
+    message: knownOpenNetwork
+      ? "SQL adapter refused to run because production write network access is not blocked."
+      : "SQL adapter refused to run because the production write network boundary is unknown.",
+    reason:
+      "Set rawPayload.productionWriteNetworkBlocked=true, or ASG_SQL_PRODUCTION_WRITE_NETWORK_BLOCKED=true, only after verifying the executor cannot write to production.",
+  });
+};
+
+const parseStdoutJson = (stdout) => {
+  const trimmed = String(stdout ?? "").trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+};
+
+const getRowCount = (payload) => {
+  if (Number.isInteger(payload?.rowCount)) {
+    return payload.rowCount;
+  }
+
+  if (Array.isArray(payload?.rows)) {
+    return payload.rows.length;
+  }
+
+  return null;
+};
+
+const getExplainPlan = (payload, stdout, includeRawText) => {
+  if (payload?.explainPlan !== undefined) {
+    return payload.explainPlan;
+  }
+
+  const text = String(stdout ?? "").trim();
+
+  if (includeRawText && text) {
+    return { text };
+  }
+
+  return null;
+};
+
 export const executeSqlDryRun = async (request, analysis) => {
   if (!canExecuteDecision(analysis)) {
     return {
@@ -214,26 +319,44 @@ export const executeSqlDryRun = async (request, analysis) => {
   }
 
   const sql = String(request.rawPayload.sql ?? "").trim();
-  const diagnostic = await validateExecutorCommand("ASG_SQL_DRY_RUN_COMMAND", "sql_dry_run");
+  const readonly = isReadonlySql(sql);
+  const adapterKind = readonly ? "sql_readonly" : "sql_dry_run";
+  const envName = readonly ? "ASG_SQL_READONLY_COMMAND" : "ASG_SQL_DRY_RUN_COMMAND";
+  const diagnostic = await validateExecutorCommand(envName, adapterKind);
 
   if (diagnostic.executorStatus !== "configured") {
-    return failClosedEvidence(diagnostic, `sql-dry-run-${diagnostic.executorStatus}`);
+    return failClosedEvidence(
+      diagnostic,
+      `sql-${readonly ? "readonly" : "dry-run"}-${diagnostic.executorStatus}`,
+    );
+  }
+
+  const boundaryDiagnostic = validateSqlProductionBoundary(request, adapterKind);
+
+  if (boundaryDiagnostic) {
+    return failClosedEvidence(
+      boundaryDiagnostic,
+      `sql-${readonly ? "readonly" : "dry-run"}-${boundaryDiagnostic.executorStatus}`,
+    );
   }
 
   const [binary, ...baseArgs] = diagnostic.command;
-  const statement = /^select\b/i.test(sql) ? `EXPLAIN ${sql}` : sql;
+  const statement = readonly ? sql : `EXPLAIN ${sql}`;
   const result = await runCommand(binary, [...baseArgs, "-c", statement], "");
+  const parsedOutput = parseStdoutJson(result.stdout);
 
   return {
     ok: result.code === 0,
-    mode: /^select\b/i.test(sql) ? "readonly" : "dry_run",
+    mode: readonly ? "readonly" : "dry_run",
     executorStatus: "configured",
-    adapterKind: "sql_dry_run",
+    adapterKind,
     executorInvoked: true,
-    rowCount: null,
-    explainPlan: result.stdout ? { text: result.stdout } : null,
+    rowCount: getRowCount(parsedOutput),
+    explainPlan: getExplainPlan(parsedOutput, result.stdout, !readonly),
+    productionWriteNetworkBlocked: true,
+    executedStatement: statement,
     rawResult: result,
-    evidence: makeEvidence("sql-dry-run-command"),
+    evidence: makeEvidence(readonly ? "sql-readonly-command" : "sql-dry-run-command"),
   };
 };
 

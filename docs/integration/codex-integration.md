@@ -69,7 +69,7 @@ ASG_GATEWAY_URL=http://127.0.0.1:4311 node services/codex/src/install.mjs
 
 Codex 重启后可以使用 MCP 工具：
 
-- `safe_sql`：分析 SQL 请求，只有 `allow` 且配置了 `ASG_SQL_DRY_RUN_COMMAND` 时才调用 SQL dry-run。
+- `safe_sql`：分析 SQL 请求；`SELECT` 只调用 `ASG_SQL_READONLY_COMMAND`，非只读 SQL 只调用 `ASG_SQL_DRY_RUN_COMMAND` 生成 dry-run / explain-plan 证据。
 - `safe_deploy`：分析部署或回滚请求，只有 `allow` 且配置了 `ASG_CICD_DRY_RUN_COMMAND` 时才调用 CI/CD dry-run。
 - `safe_config_update`：分析配置变更，只有 `allow` 或 `sandbox` 且配置了 `ASG_CONFIG_SANDBOX_COMMAND` 时才调用 sandbox/canary executor。
 - `analyze_tool_call`：只分析完整 `ToolCallRequest`，不执行。
@@ -78,10 +78,20 @@ Codex 重启后可以使用 MCP 工具：
 dry-run 命令使用 JSON 字符串数组配置，避免 shell 拼接：
 
 ```bash
-export ASG_SQL_DRY_RUN_COMMAND='["psql","postgres://readonly-user@host/db","-X","-v","ON_ERROR_STOP=1"]'
+export ASG_SQL_READONLY_COMMAND='["psql","postgres://readonly-user@host/db","-X","-v","ON_ERROR_STOP=1"]'
+export ASG_SQL_DRY_RUN_COMMAND='["psql","postgres://dry-run-user@host/db","-X","-v","ON_ERROR_STOP=1"]'
+export ASG_SQL_PRODUCTION_WRITE_NETWORK_BLOCKED=true
 export ASG_CICD_DRY_RUN_COMMAND='["/opt/company/bin/deploy-dry-run"]'
 export ASG_CONFIG_SANDBOX_COMMAND='["/opt/company/bin/config-sandbox-write"]'
 ```
+
+SQL adapter 会先验证 `productionWriteNetworkBlocked` 边界：可以在 MCP `safe_sql` 参数或 `ToolCallRequest.rawPayload.productionWriteNetworkBlocked` 中传入 `true`，也可以设置 `ASG_SQL_PRODUCTION_WRITE_NETWORK_BLOCKED=true`。该值为 `false` 或未知时，SQL adapter 会在调用任何 SQL client 前 fail closed。
+
+SQL executor 约定：
+
+- `SELECT`：通过 `ASG_SQL_READONLY_COMMAND` 调用只读连接，传入参数为 `-c <原始 SELECT>`。
+- 非只读 SQL：通过 `ASG_SQL_DRY_RUN_COMMAND` 调用 dry-run/explain 连接，传入参数为 `-c "EXPLAIN <原始 SQL>"`，不得提交写入。
+- executor stdout 如果是 JSON，可返回 `rowCount`、`rows` 或 `explainPlan`；否则 dry-run 文本 stdout 会作为 `explainPlan.text` 保存。
 
 未配置这些环境变量时，MCP 工具仍会返回网关分析结果，但不会伪造真实 executor 已执行。
 
@@ -91,6 +101,7 @@ MCP executor 会在调用前验证 dry-run profile，并返回以下 `executorSt
 - `not_configured`：环境变量为空或未设置；网关分析结果保留，但 executor 不会被调用。
 - `invalid`：配置不是 JSON 字符串数组、数组为空、元素不是非空字符串，或指向 `sh`/`bash`/`zsh`/`powershell` 等 shell interpreter。
 - `unreachable`：命令格式有效，但首个元素在绝对路径或 `PATH` 中不可执行。
+- `production_write_network_unknown` / `production_write_network_open`：SQL executor profile 虽然可用，但生产写网络边界未知或明确未阻断，因此不会调用 SQL executor。
 
 `invalid` 和 `unreachable` 都会 fail closed，并在调用任何 dry-run 命令前返回 `executorInvoked=false`。
 
@@ -103,7 +114,7 @@ MCP executor 会在调用前验证 dry-run profile，并返回以下 `executorSt
 - `resources/list` 与 `prompts/list` 目前返回空列表；本集成暂不提供资源订阅、提示模板、流式进度或工具列表变更通知。
 - server 按行读取 JSON-RPC 消息；单行 malformed JSON 会返回 `-32700` parse error，后续有效消息仍可继续处理。
 - notification 或缺少 `id` 的请求不会返回响应，避免把 Codex 的单向生命周期事件误报为失败。
-- `safe_sql`、`safe_deploy` 和 `safe_config_update` 只在网关允许且对应 dry-run/sandbox 环境变量配置后才会调用本地 executor；未配置时返回 `not_configured` 证据，不伪造执行成功。
+- `safe_sql`、`safe_deploy` 和 `safe_config_update` 只在网关允许且对应 readonly/dry-run/sandbox 环境变量配置后才会调用本地 executor；未配置时返回 `not_configured` 证据，不伪造执行成功。
 
 ## Hook 行为
 

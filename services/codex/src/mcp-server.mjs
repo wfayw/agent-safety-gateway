@@ -53,6 +53,7 @@ const toolSchemas = [
         },
         taskPurpose: { type: "string" },
         actor: { type: "string" },
+        productionWriteNetworkBlocked: { type: "boolean" },
       },
     },
   },

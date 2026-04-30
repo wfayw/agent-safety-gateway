@@ -161,6 +161,7 @@ export const adaptSql = ({
   actor,
   taskPurpose,
   command,
+  productionWriteNetworkBlocked,
 }) => {
   const payload = {
     sql,
@@ -170,6 +171,10 @@ export const adaptSql = ({
 
   if (command) {
     payload.command = command;
+  }
+
+  if (typeof productionWriteNetworkBlocked === "boolean") {
+    payload.productionWriteNetworkBlocked = productionWriteNetworkBlocked;
   }
 
   return buildToolCallRequest({

@@ -17,7 +17,9 @@ const runMcp = ({ messages, env = {} }) =>
       env: {
         ...process.env,
         ASG_GATEWAY_TIMEOUT_MS: "1000",
+        ASG_SQL_READONLY_COMMAND: "",
         ASG_SQL_DRY_RUN_COMMAND: "",
+        ASG_SQL_PRODUCTION_WRITE_NETWORK_BLOCKED: "",
         ASG_CICD_DRY_RUN_COMMAND: "",
         ASG_CONFIG_SANDBOX_COMMAND: "",
         ...env,
@@ -269,7 +271,7 @@ describe("Codex MCP server contract", () => {
     assert.equal(response.result.structuredContent.request.toolType, "sql");
     assert.equal(response.result.structuredContent.analysis.executionDecision.type, "allow");
     assert.equal(response.result.structuredContent.executor.mode, "not_configured");
-    assert.equal(response.result.structuredContent.executor.adapterKind, "sql_dry_run");
+    assert.equal(response.result.structuredContent.executor.adapterKind, "sql_readonly");
     assert.equal(response.result.structuredContent.executor.executorInvoked, false);
   });
 

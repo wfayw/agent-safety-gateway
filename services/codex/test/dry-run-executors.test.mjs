@@ -13,7 +13,9 @@ import {
 } from "../src/dry-run-executors.mjs";
 
 const envNames = [
+  "ASG_SQL_READONLY_COMMAND",
   "ASG_SQL_DRY_RUN_COMMAND",
+  "ASG_SQL_PRODUCTION_WRITE_NETWORK_BLOCKED",
   "ASG_CICD_DRY_RUN_COMMAND",
   "ASG_CONFIG_SANDBOX_COMMAND",
   "ASG_CONFIG_SANDBOX_NAMESPACE",
@@ -43,6 +45,14 @@ const sandboxAnalysis = {
 const sqlRequest = {
   rawPayload: {
     sql: "SELECT COUNT(*) FROM orders",
+    productionWriteNetworkBlocked: true,
+  },
+};
+
+const sqlWriteRequest = {
+  rawPayload: {
+    sql: "UPDATE orders SET status='ARCHIVED' WHERE status='PENDING'",
+    productionWriteNetworkBlocked: true,
   },
 };
 
@@ -109,12 +119,12 @@ afterEach(async () => {
 
 describe("dry-run executor profile validation", () => {
   it("reports not_configured without invoking SQL executors", async () => {
-    delete process.env.ASG_SQL_DRY_RUN_COMMAND;
+    delete process.env.ASG_SQL_READONLY_COMMAND;
     const result = await executeSqlDryRun(sqlRequest, allowAnalysis);
 
     assert.equal(result.mode, "not_configured");
     assert.equal(result.executorStatus, "not_configured");
-    assert.equal(result.adapterKind, "sql_dry_run");
+    assert.equal(result.adapterKind, "sql_readonly");
     assert.equal(result.executorInvoked, false);
   });
 
@@ -130,7 +140,7 @@ describe("dry-run executor profile validation", () => {
   });
 
   it("rejects shell-string commands without invocation", async () => {
-    process.env.ASG_SQL_DRY_RUN_COMMAND = JSON.stringify("psql -c 'SELECT 1'");
+    process.env.ASG_SQL_READONLY_COMMAND = JSON.stringify("psql -c 'SELECT 1'");
     const result = await executeSqlDryRun(sqlRequest, allowAnalysis);
 
     assert.equal(result.mode, "invalid");
@@ -151,7 +161,7 @@ describe("dry-run executor profile validation", () => {
   });
 
   it("reports unreachable command configuration without invocation", async () => {
-    process.env.ASG_SQL_DRY_RUN_COMMAND = JSON.stringify(["/definitely/missing/asg-sql-dry-run"]);
+    process.env.ASG_SQL_READONLY_COMMAND = JSON.stringify(["/definitely/missing/asg-sql-readonly"]);
     const result = await executeSqlDryRun(sqlRequest, allowAnalysis);
 
     assert.equal(result.mode, "unreachable");
@@ -181,15 +191,18 @@ describe("dry-run executor profile validation", () => {
     const configRecorder = await makeRecorder("config");
 
     process.env.ASG_TEST_EXECUTOR_OUTPUT_PATH = sqlRecorder.outputPath;
-    process.env.ASG_SQL_DRY_RUN_COMMAND = JSON.stringify([process.execPath, sqlRecorder.scriptPath]);
+    process.env.ASG_SQL_READONLY_COMMAND = JSON.stringify([process.execPath, sqlRecorder.scriptPath]);
     const sqlResult = await executeSqlDryRun(sqlRequest, allowAnalysis);
 
     assert.equal(sqlResult.mode, "readonly");
     assert.equal(sqlResult.executorStatus, "configured");
+    assert.equal(sqlResult.adapterKind, "sql_readonly");
     assert.equal(sqlResult.executorInvoked, true);
+    assert.equal(sqlResult.productionWriteNetworkBlocked, true);
+    assert.equal(sqlResult.executedStatement, "SELECT COUNT(*) FROM orders");
     assert.deepEqual(await readRecorderArgs(sqlRecorder.outputPath), [
       "-c",
-      "EXPLAIN SELECT COUNT(*) FROM orders",
+      "SELECT COUNT(*) FROM orders",
     ]);
 
     process.env.ASG_TEST_EXECUTOR_OUTPUT_PATH = deployRecorder.outputPath;
@@ -229,12 +242,103 @@ describe("dry-run executor profile validation", () => {
     ]);
   });
 
+  it("parses readonly row counts and invokes dry-run writes through EXPLAIN", async () => {
+    const readonlyRecorder = await makeRecorder("sql-readonly");
+    const dryRunRecorder = await makeRecorder("sql-dry-run");
+
+    await writeFile(
+      readonlyRecorder.scriptPath,
+      [
+        "#!/usr/bin/env node",
+        "import { writeFileSync } from 'node:fs';",
+        "const outputPath = process.env.ASG_TEST_EXECUTOR_OUTPUT_PATH;",
+        "writeFileSync(outputPath, JSON.stringify({ args: process.argv.slice(2) }));",
+        "console.log(JSON.stringify({ rowCount: 2, rows: [{ id: 1 }, { id: 2 }] }));",
+      ].join("\n"),
+      { mode: 0o700 },
+    );
+
+    process.env.ASG_TEST_EXECUTOR_OUTPUT_PATH = readonlyRecorder.outputPath;
+    process.env.ASG_SQL_READONLY_COMMAND = JSON.stringify([
+      process.execPath,
+      readonlyRecorder.scriptPath,
+    ]);
+    const readonlyResult = await executeSqlDryRun(sqlRequest, allowAnalysis);
+
+    assert.equal(readonlyResult.mode, "readonly");
+    assert.equal(readonlyResult.rowCount, 2);
+    assert.equal(readonlyResult.explainPlan, null);
+    assert.deepEqual(await readRecorderArgs(readonlyRecorder.outputPath), [
+      "-c",
+      "SELECT COUNT(*) FROM orders",
+    ]);
+
+    process.env.ASG_TEST_EXECUTOR_OUTPUT_PATH = dryRunRecorder.outputPath;
+    process.env.ASG_SQL_DRY_RUN_COMMAND = JSON.stringify([
+      process.execPath,
+      dryRunRecorder.scriptPath,
+    ]);
+    const dryRunResult = await executeSqlDryRun(sqlWriteRequest, allowAnalysis);
+
+    assert.equal(dryRunResult.mode, "dry_run");
+    assert.equal(dryRunResult.adapterKind, "sql_dry_run");
+    assert.equal(dryRunResult.executorInvoked, true);
+    assert.equal(
+      dryRunResult.executedStatement,
+      "EXPLAIN UPDATE orders SET status='ARCHIVED' WHERE status='PENDING'",
+    );
+    assert.match(dryRunResult.explainPlan.text, /EXPLAIN UPDATE orders/);
+    assert.deepEqual(await readRecorderArgs(dryRunRecorder.outputPath), [
+      "-c",
+      "EXPLAIN UPDATE orders SET status='ARCHIVED' WHERE status='PENDING'",
+    ]);
+  });
+
+  it("refuses SQL execution when the production write network boundary is false or unknown", async () => {
+    const unknownBoundaryRecorder = await makeRecorder("sql-unknown-boundary");
+    const openBoundaryRecorder = await makeRecorder("sql-open-boundary");
+
+    delete process.env.ASG_SQL_PRODUCTION_WRITE_NETWORK_BLOCKED;
+    process.env.ASG_TEST_EXECUTOR_OUTPUT_PATH = unknownBoundaryRecorder.outputPath;
+    process.env.ASG_SQL_READONLY_COMMAND = JSON.stringify([
+      process.execPath,
+      unknownBoundaryRecorder.scriptPath,
+    ]);
+    const unknownBoundaryResult = await executeSqlDryRun(
+      { rawPayload: { sql: "SELECT COUNT(*) FROM orders" } },
+      allowAnalysis,
+    );
+
+    assert.equal(unknownBoundaryResult.mode, "production_write_network_unknown");
+    assert.equal(unknownBoundaryResult.executorInvoked, false);
+    assert.equal(existsSync(unknownBoundaryRecorder.outputPath), false);
+
+    process.env.ASG_TEST_EXECUTOR_OUTPUT_PATH = openBoundaryRecorder.outputPath;
+    process.env.ASG_SQL_READONLY_COMMAND = JSON.stringify([
+      process.execPath,
+      openBoundaryRecorder.scriptPath,
+    ]);
+    const openBoundaryResult = await executeSqlDryRun(
+      {
+        rawPayload: {
+          sql: "SELECT COUNT(*) FROM orders",
+          productionWriteNetworkBlocked: false,
+        },
+      },
+      allowAnalysis,
+    );
+
+    assert.equal(openBoundaryResult.mode, "production_write_network_open");
+    assert.equal(openBoundaryResult.executorInvoked, false);
+    assert.equal(existsSync(openBoundaryRecorder.outputPath), false);
+  });
+
   it("never invokes dry-run commands when validation fails", async () => {
     const dir = await mkdtemp(join(tmpdir(), "asg-dry-run-test-"));
     tempDirs.push(dir);
     const markerPath = join(dir, "unsafe-marker.txt");
 
-    process.env.ASG_SQL_DRY_RUN_COMMAND = JSON.stringify([
+    process.env.ASG_SQL_READONLY_COMMAND = JSON.stringify([
       "sh",
       "-c",
       `printf invoked > ${markerPath}`,
