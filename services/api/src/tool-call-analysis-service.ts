@@ -47,6 +47,7 @@ import {
 } from "./risk-level-scorer.js";
 import { createSqlActionParser } from "./sql-action-parser.js";
 import type { LocalStorageLayout } from "./storage.js";
+import type { AuditRedactionOptions } from "./audit-redaction.js";
 
 export type ToolCallAnalysisResult = {
   request: ToolCallRequest;
@@ -72,6 +73,7 @@ export type ToolCallAnalysisServiceOptions = {
   maxIndirectImpactDepth?: number;
   idFactory?: () => string;
   now?: () => Date;
+  auditRedaction?: AuditRedactionOptions;
 };
 
 export type ToolCallAnalysisServiceDependencies = {
@@ -224,6 +226,7 @@ export const createDefaultToolCallAnalysisService = (
   options: ToolCallAnalysisServiceOptions = {},
 ) => {
   const catalogRepositories = createCatalogRepositories(layout);
+  const { auditRedaction, ...analysisOptions } = options;
 
   return createToolCallAnalysisService({
     actionParserRegistry: createDefaultActionParserRegistry(),
@@ -232,7 +235,10 @@ export const createDefaultToolCallAnalysisService = (
     riskFactorGenerator: createRiskFactorGenerator(),
     riskLevelScorer: createRiskLevelScorer(),
     executionDecisionEngine: createExecutionDecisionEngine(),
-    auditRepository: createAuditRepository(layout),
-    ...options,
+    auditRepository: createAuditRepository(
+      layout,
+      auditRedaction ? { redaction: auditRedaction } : {},
+    ),
+    ...analysisOptions,
   });
 };

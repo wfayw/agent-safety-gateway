@@ -42,6 +42,12 @@ services/api/src/real-component-adapters.ts
 
 外部审计 sink 的本地 adapter 位于 `services/api/src/audit-sink-adapter.ts`，用于以 JSONL 形式证明写入契约。`ToolExecutionGuard` 默认会把未配置 sink 记录为 `not_configured`，但不阻断本地分析或已允许的 executor；当调用方启用 `auditSinkStrict` 时，允许执行的路径会在审计 sink 未配置或健康检查不可用时 fail-closed，并保持 `executorInvoked=false`。
 
+## 审计脱敏与保留
+
+审计记录必须在写入本地 JSONL 或外部审计 sink 前完成脱敏。API 默认会替换字段名中包含 `token`、`password`、`passwd`、`secret` 的字段，以及 `authorization`、`connectionString`、`databaseUrl`、`dbUrl`、`dsn` 等认证或连接串字段；如目标组件还使用 `connection`、`privateKey`、`credentialRef` 等组织内字段名，应通过 `ASG_AUDIT_REDACTION_FIELDS` 追加配置。默认替换值为 `[REDACTED]`，可通过 `ASG_AUDIT_REDACTION_REPLACEMENT` 改为组织审计规范要求的占位值。
+
+本地 JSONL 模式用于开发和复验，保留位置由 `API_DATA_DIR` 控制，默认写入 `.data/audits.jsonl`。当前本地模式不自动删除或压缩旧记录；验证环境应使用独立数据目录，并由运行脚本、日志轮转、CI artifact 过期策略或人工清理来满足保留周期。外部审计 sink 模式的保留周期应由审计平台或对象存储生命周期策略执行，并与 `docs/integration/real-component-profile.example.json` 中的 `auditSink.retentionDays` 保持一致。无论采用哪种模式，禁止把未脱敏 token、密码、授权头或连接串作为证据附件上传。
+
 ## 推荐接入顺序
 
 1. 接入真实 Agent/Ralph 输出协议，只做 `ToolCallRequest` 转换，不调用任何真实 executor。

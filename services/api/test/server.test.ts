@@ -1000,6 +1000,53 @@ describe("API server", () => {
     assert.equal(body.audit.createdAt, "2026-04-28T08:00:00.000Z");
   });
 
+  it("applies API redaction config before audit records are persisted", async () => {
+    const layout = await createSeededLayout();
+    const server = buildServer({
+      config: createApiConfig({
+        API_DATA_DIR: layout.dataDir,
+        API_LOG_LEVEL: "silent",
+        ASG_AUDIT_REDACTION_FIELDS: "connection",
+        ASG_AUDIT_REDACTION_REPLACEMENT: "[MASKED]",
+      }),
+      logger: false,
+      localStorageLayout: layout,
+    });
+    servers.push(server);
+    const fixture = getSqlReadFixture();
+    const request = {
+      ...fixture.request,
+      rawPayload: {
+        ...fixture.request.rawPayload,
+        apiToken: "token-live-123",
+        authorization: "Bearer live-token",
+        connection: "prod-primary",
+        connectionString: "postgres://user:pass@db.example/orders",
+      },
+    };
+
+    const analyzeResponse = await server.inject({
+      method: "POST",
+      url: "/api/tool-calls/analyze",
+      payload: request,
+    });
+    const auditId = analyzeResponse.json().auditId;
+    const auditResponse = await server.inject({
+      method: "GET",
+      url: `/api/audits/${auditId}`,
+    });
+    const rawStoreContent = await readFile(layout.stores.audits, "utf8");
+
+    assert.equal(analyzeResponse.statusCode, 200);
+    assert.equal(auditResponse.statusCode, 200);
+    assert.equal(auditResponse.json().audit.request.rawPayload.apiToken, "[MASKED]");
+    assert.equal(auditResponse.json().audit.request.rawPayload.authorization, "[MASKED]");
+    assert.equal(auditResponse.json().audit.request.rawPayload.connection, "[MASKED]");
+    assert.equal(auditResponse.json().audit.request.rawPayload.connectionString, "[MASKED]");
+    assert.equal(rawStoreContent.includes("token-live-123"), false);
+    assert.equal(rawStoreContent.includes("postgres://user:pass@db.example/orders"), false);
+  });
+
   it("returns 404 for missing audit records", async () => {
     const server = await createAnalysisServer();
 

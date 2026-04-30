@@ -1,6 +1,8 @@
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import type { AuditRedactionOptions } from "./audit-redaction.js";
+
 const API_SOURCE_DIR = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_REPO_ROOT = resolve(API_SOURCE_DIR, "../../..");
 
@@ -28,6 +30,7 @@ export type ApiConfig = {
   logLevel: ApiLogLevel;
   apiToken: string | null;
   corsOrigin: string | null;
+  auditRedaction: AuditRedactionOptions;
 };
 
 export type ApiConfigEnv = {
@@ -37,6 +40,8 @@ export type ApiConfigEnv = {
   API_LOG_LEVEL?: string | undefined;
   ASG_API_TOKEN?: string | undefined;
   ASG_CORS_ORIGIN?: string | undefined;
+  ASG_AUDIT_REDACTION_FIELDS?: string | undefined;
+  ASG_AUDIT_REDACTION_REPLACEMENT?: string | undefined;
 };
 
 const apiLogLevels = new Set<string>(Object.values(ApiLogLevel));
@@ -84,6 +89,28 @@ const parseCorsOrigin = (
   return apiToken ? null : DEFAULT_OPEN_CORS_ORIGIN;
 };
 
+const parseCommaSeparatedValues = (value: string | undefined): string[] =>
+  (value ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+
+const parseAuditRedactionOptions = (
+  env: ApiConfigEnv,
+): AuditRedactionOptions => {
+  const additionalRawPayloadFieldNames = parseCommaSeparatedValues(
+    env.ASG_AUDIT_REDACTION_FIELDS,
+  );
+  const replacement = parseOptionalSecret(env.ASG_AUDIT_REDACTION_REPLACEMENT);
+
+  return {
+    ...(additionalRawPayloadFieldNames.length > 0
+      ? { additionalRawPayloadFieldNames }
+      : {}),
+    ...(replacement ? { replacement } : {}),
+  };
+};
+
 export const createApiConfig = (
   env: ApiConfigEnv = process.env,
 ): ApiConfig => {
@@ -96,5 +123,6 @@ export const createApiConfig = (
     logLevel: parseApiLogLevel(env.API_LOG_LEVEL),
     apiToken,
     corsOrigin: parseCorsOrigin(env.ASG_CORS_ORIGIN, apiToken),
+    auditRedaction: parseAuditRedactionOptions(env),
   };
 };

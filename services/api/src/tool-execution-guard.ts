@@ -16,6 +16,10 @@ import {
   type ExternalAuditSinkResult,
   type RealComponentEvidence,
 } from "./real-component-adapters.js";
+import {
+  redactSensitiveAuditFields,
+  type AuditRedactionOptions,
+} from "./audit-redaction.js";
 import type {
   ToolCallAnalysisResult,
   ToolCallAnalysisService,
@@ -63,6 +67,7 @@ export type ToolExecutionGuardDependencies<ExecutorResult> = {
     "appendControlEvidence" | "health"
   >;
   auditSinkStrict?: boolean;
+  auditRedaction?: AuditRedactionOptions;
   defaultApproverGroup?: string;
   now?: () => Date;
 };
@@ -133,24 +138,30 @@ const createAuditSinkInput = <ExecutorResult>({
   executorInvoked,
   executorResult,
   completedAt,
+  redaction,
 }: {
   request: ToolCallRequest;
   analysisResult: ToolCallAnalysisResult;
   executorInvoked: boolean;
   executorResult: ExecutorResult | null;
   completedAt: string;
-}): ExternalAuditSinkInput => ({
-  request,
-  analysisResult,
-  executorInvoked,
-  executorResult: toJsonValue(executorResult),
-  evidence: createAuditEvidence({
-    request,
-    analysisResult,
-    executorInvoked,
-    completedAt,
-  }),
-});
+  redaction?: AuditRedactionOptions;
+}): ExternalAuditSinkInput =>
+  redactSensitiveAuditFields(
+    {
+      request,
+      analysisResult,
+      executorInvoked,
+      executorResult: toJsonValue(executorResult),
+      evidence: createAuditEvidence({
+        request,
+        analysisResult,
+        executorInvoked,
+        completedAt,
+      }),
+    },
+    redaction,
+  );
 
 const createResult = <ExecutorResult>({
   status,
@@ -187,6 +198,7 @@ export const createToolExecutionGuard = <ExecutorResult>({
   approvalAdapter,
   auditSinkAdapter,
   auditSinkStrict = false,
+  auditRedaction,
   defaultApproverGroup = DEFAULT_APPROVER_GROUP,
   now = () => new Date(),
 }: ToolExecutionGuardDependencies<ExecutorResult>): ToolExecutionGuard<ExecutorResult> => {
@@ -215,6 +227,7 @@ export const createToolExecutionGuard = <ExecutorResult>({
           executorInvoked,
           executorResult,
           completedAt: now().toISOString(),
+          ...(auditRedaction ? { redaction: auditRedaction } : {}),
         }),
       );
     } catch (error: unknown) {

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
@@ -189,6 +189,50 @@ describe("audit repository", () => {
     assert.equal(records[0]?.policyVersion, "local-risk-policy-v1");
     assert.deepEqual(records[0]?.policyTrace, auditRecord.policyTrace);
     assert.deepEqual(records[0]?.decision, auditRecord.decision);
+  });
+
+  it("redacts sensitive rawPayload fields before persisting audit records", async () => {
+    const layout = await initializeLocalStorage(await createTempDataDir());
+    const repository = createAuditRepository(layout, {
+      redaction: {
+        additionalRawPayloadFieldNames: ["connection"],
+        replacement: "[MASKED]",
+      },
+    });
+    const auditRecord = createAuditRecordFixture("audit-sensitive");
+    auditRecord.request.rawPayload = {
+      ...auditRecord.request.rawPayload,
+      apiToken: "token-live-123",
+      password: "p@ssw0rd",
+      authorization: "Bearer live-token",
+      connection: "prod-primary",
+      connectionString: "postgres://user:pass@db.example/orders",
+      nested: {
+        clientSecret: "client-secret-value",
+      },
+    };
+    auditRecord.actionTuple.parameters = auditRecord.request.rawPayload;
+
+    const persistedRecord = await repository.createAuditRecord(auditRecord);
+    const rawStoreContent = await readFile(layout.stores.audits, "utf8");
+    const records = await repository.listAuditRecords();
+
+    assert.equal(persistedRecord.request.rawPayload.sql, auditRecord.request.rawPayload.sql);
+    assert.equal(persistedRecord.request.rawPayload.apiToken, "[MASKED]");
+    assert.equal(persistedRecord.request.rawPayload.password, "[MASKED]");
+    assert.equal(persistedRecord.request.rawPayload.authorization, "[MASKED]");
+    assert.equal(persistedRecord.request.rawPayload.connection, "[MASKED]");
+    assert.equal(persistedRecord.request.rawPayload.connectionString, "[MASKED]");
+    assert.deepEqual(persistedRecord.request.rawPayload.nested, {
+      clientSecret: "[MASKED]",
+    });
+    assert.deepEqual(records, [persistedRecord]);
+    assert.equal(records[0]?.actionTuple.parameters.apiToken, "[MASKED]");
+    assert.equal(rawStoreContent.includes("token-live-123"), false);
+    assert.equal(rawStoreContent.includes("p@ssw0rd"), false);
+    assert.equal(rawStoreContent.includes("postgres://user:pass@db.example/orders"), false);
+    assert.equal(rawStoreContent.includes("client-secret-value"), false);
+    assert.equal(rawStoreContent.includes("prod-primary"), false);
   });
 
   it("returns audit records by id and null for missing ids", async () => {

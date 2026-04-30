@@ -262,11 +262,14 @@ export const buildServer = (options: ApiServerOptions = {}) => {
     options.localStorageLayout ?? createLocalStorageLayout(config.dataDir);
   const toolCallAnalysisService =
     options.toolCallAnalysisService ??
-    createDefaultToolCallAnalysisService(localStorageLayout);
+    createDefaultToolCallAnalysisService(localStorageLayout, {
+      auditRedaction: config.auditRedaction,
+    });
   const scenarioRepository =
     options.scenarioRepository ?? createScenarioRepository(localStorageLayout);
   const auditRepository =
-    options.auditRepository ?? createAuditRepository(localStorageLayout);
+    options.auditRepository ??
+    createAuditRepository(localStorageLayout, { redaction: config.auditRedaction });
   const executionLogRepository =
     options.executionLogRepository ?? createExecutionLogRepository(localStorageLayout);
   const hookDecisionRepository =
@@ -669,6 +672,7 @@ export const buildServer = (options: ApiServerOptions = {}) => {
         ...(options.auditSinkStrict === undefined
           ? {}
           : { auditSinkStrict: options.auditSinkStrict }),
+        auditRedaction: config.auditRedaction,
         ...(options.defaultApproverGroup
           ? { defaultApproverGroup: options.defaultApproverGroup }
           : {}),

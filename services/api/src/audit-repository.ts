@@ -10,6 +10,10 @@ import {
 } from "@agent-safety-gateway/shared";
 
 import type { LocalStorageLayout } from "./storage.js";
+import {
+  redactSensitiveAuditFields,
+  type AuditRedactionOptions,
+} from "./audit-redaction.js";
 
 export type AuditRecordFilters = {
   decision?: DecisionType;
@@ -23,6 +27,15 @@ export type AuditRepository = {
   listAuditRecords: (filters?: AuditRecordFilters) => Promise<AuditRecord[]>;
   getAuditRecordById: (auditId: string) => Promise<AuditRecord | null>;
 };
+
+export type AuditRepositoryOptions = {
+  redaction?: AuditRedactionOptions;
+};
+
+const redactAuditRecord = (
+  record: AuditRecord,
+  redaction: AuditRedactionOptions | undefined,
+): AuditRecord => AuditRecordSchema.parse(redactSensitiveAuditFields(record, redaction));
 
 const parseAuditRecordLine = (line: string, index: number): AuditRecord => {
   try {
@@ -48,6 +61,7 @@ const readAuditRecordStore = async (
 
 export const createAuditRepository = (
   layout: LocalStorageLayout,
+  options: AuditRepositoryOptions = {},
 ): AuditRepository => {
   const listAuditRecords = async (filters: AuditRecordFilters = {}) => {
     const auditRecords = await readAuditRecordStore(layout.stores.audits);
@@ -76,12 +90,16 @@ export const createAuditRepository = (
   return {
     async createAuditRecord(record) {
       const validatedRecord = AuditRecordSchema.parse(record);
+      const redactedRecord = redactAuditRecord(
+        validatedRecord,
+        options.redaction,
+      );
       await appendFile(
         layout.stores.audits,
-        `${JSON.stringify(validatedRecord)}\n`,
+        `${JSON.stringify(redactedRecord)}\n`,
         "utf8",
       );
-      return validatedRecord;
+      return redactedRecord;
     },
     listAuditRecords,
     async getAuditRecordById(auditId) {

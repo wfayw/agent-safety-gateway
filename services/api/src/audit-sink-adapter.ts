@@ -4,6 +4,10 @@ import { dirname } from "node:path";
 import type { JsonObject } from "@agent-safety-gateway/shared";
 
 import {
+  redactSensitiveAuditFields,
+  type AuditRedactionOptions,
+} from "./audit-redaction.js";
+import {
   AdapterHealthStatus,
   RealComponentAdapterKind,
   type ExternalAuditSinkAdapter,
@@ -21,6 +25,7 @@ export type FileExternalAuditSinkAdapterOptions = {
   filePath: string;
   sinkName?: string;
   evidenceBaseUri?: string;
+  redaction?: AuditRedactionOptions;
   idFactory?: (input: ExternalAuditSinkInput) => string;
   now?: () => Date;
 };
@@ -96,6 +101,7 @@ export const createFileExternalAuditSinkAdapter = ({
   filePath,
   sinkName = DEFAULT_SINK_NAME,
   evidenceBaseUri,
+  redaction,
   idFactory = defaultExternalAuditIdFactory,
   now = () => new Date(),
 }: FileExternalAuditSinkAdapterOptions): ExternalAuditSinkAdapter => ({
@@ -110,9 +116,10 @@ export const createFileExternalAuditSinkAdapter = ({
       writtenAt: now().toISOString(),
       evidenceUri,
     };
+    const redactedRecord = redactSensitiveAuditFields(record, redaction);
 
     await mkdir(dirname(filePath), { recursive: true });
-    await appendFile(filePath, `${JSON.stringify(record)}\n`, "utf8");
+    await appendFile(filePath, `${JSON.stringify(redactedRecord)}\n`, "utf8");
 
     return {
       ok: true,

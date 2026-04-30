@@ -30,6 +30,8 @@ describe("API config", () => {
       API_LOG_LEVEL: "debug",
       ASG_API_TOKEN: " gateway-token ",
       ASG_CORS_ORIGIN: " https://console.example ",
+      ASG_AUDIT_REDACTION_FIELDS: " connection, privateKey ",
+      ASG_AUDIT_REDACTION_REPLACEMENT: " [MASKED] ",
     });
 
     assert.equal(config.port, 4311);
@@ -37,6 +39,10 @@ describe("API config", () => {
     assert.equal(config.logLevel, ApiLogLevel.Debug);
     assert.equal(config.apiToken, "gateway-token");
     assert.equal(config.corsOrigin, "https://console.example");
+    assert.deepEqual(config.auditRedaction, {
+      additionalRawPayloadFieldNames: ["connection", "privateKey"],
+      replacement: "[MASKED]",
+    });
   });
 
   it("does not default protected deployments to wildcard CORS", () => {

@@ -120,6 +120,10 @@ ASG_API_TOKEN=change-me ASG_CORS_ORIGIN=https://console.example API_PORT=4310 pn
 
 受保护模式支持 `X-ASG-Roles` 角色头，多个角色用逗号分隔；缺省为 `viewer`。共享 RBAC 模型定义 `viewer`、`operator`、`approver`、`policy_admin` 和 `auditor`：`viewer`/`auditor` 可读取审计证据，`operator` 可分析和执行工具调用，`policy_admin` 可管理策略输入，`approver` 预留给审批动作。
 
+审计落盘前会对本地 JSONL 审计记录和文件型外部审计 sink 记录做脱敏。默认匹配字段名中包含 `token`、`password`、`passwd`、`secret` 的字段，以及 `authorization`、`connectionString`、`databaseUrl`、`dbUrl`、`dsn` 等连接串字段；通过 `ASG_AUDIT_REDACTION_FIELDS=connection,privateKey` 可追加项目自定义字段，通过 `ASG_AUDIT_REDACTION_REPLACEMENT='[MASKED]'` 可替换默认的 `[REDACTED]` 占位值。
+
+本地审计存储位于 `API_DATA_DIR` 下的 JSONL 文件（默认 `.data/audits.jsonl`），当前不内置自动清理任务；开发或验证环境应通过目录隔离、日志轮转、备份策略或定期删除来执行保留周期。外部审计 sink 模式的保留周期由接入平台负责，建议在真实组件 profile 的 `auditSink.retentionDays` 和平台侧生命周期策略中保持一致，并确保脱敏在写入外部平台前已经启用。
+
 另一个终端启动 Web：
 
 ```bash

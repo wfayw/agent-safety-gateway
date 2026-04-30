@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
@@ -209,5 +209,79 @@ describe("external audit sink adapter", () => {
     const health = await adapter.health();
     assert.equal(health.status, AdapterHealthStatus.Ready);
     assert.deepEqual(health.details.durable, true);
+  });
+
+  it("redacts sensitive fields before external audit sink persistence", async () => {
+    const filePath = join(await createTempDataDir(), "external-audit.jsonl");
+    const adapter = createFileExternalAuditSinkAdapter({
+      filePath,
+      redaction: {
+        additionalRawPayloadFieldNames: ["connection"],
+      },
+      now: () => new Date("2026-04-29T08:00:04.000Z"),
+    });
+    const sensitiveInput: ExternalAuditSinkInput = {
+      ...auditSinkInput,
+      request: {
+        ...request,
+        rawPayload: {
+          ...request.rawPayload,
+          apiToken: "token-live-123",
+          password: "p@ssw0rd",
+          authorization: "Bearer live-token",
+          connection: "prod-primary",
+          connectionString: "postgres://user:pass@db.example/orders",
+          nested: {
+            clientSecret: "client-secret-value",
+          },
+        },
+      },
+      analysisResult: {
+        ...analysisResult,
+        request: {
+          ...analysisResult.request,
+          rawPayload: {
+            ...analysisResult.request.rawPayload,
+            apiToken: "token-live-123",
+            password: "p@ssw0rd",
+            authorization: "Bearer live-token",
+            connection: "prod-primary",
+            connectionString: "postgres://user:pass@db.example/orders",
+            nested: {
+              clientSecret: "client-secret-value",
+            },
+          },
+        },
+        actionTuple: {
+          ...analysisResult.actionTuple,
+          parameters: {
+            ...analysisResult.actionTuple.parameters,
+            apiToken: "token-live-123",
+          },
+        },
+      },
+    };
+
+    await adapter.appendControlEvidence(sensitiveInput);
+
+    const rawStoreContent = await readFile(filePath, "utf8");
+    const records = await readExternalAuditSinkRecords(filePath);
+
+    assert.equal(records[0]?.request.rawPayload.apiToken, "[REDACTED]");
+    assert.equal(records[0]?.request.rawPayload.password, "[REDACTED]");
+    assert.equal(records[0]?.request.rawPayload.authorization, "[REDACTED]");
+    assert.equal(records[0]?.request.rawPayload.connection, "[REDACTED]");
+    assert.equal(records[0]?.request.rawPayload.connectionString, "[REDACTED]");
+    assert.deepEqual(records[0]?.request.rawPayload.nested, {
+      clientSecret: "[REDACTED]",
+    });
+    assert.equal(
+      records[0]?.analysisResult.actionTuple.parameters.apiToken,
+      "[REDACTED]",
+    );
+    assert.equal(rawStoreContent.includes("token-live-123"), false);
+    assert.equal(rawStoreContent.includes("p@ssw0rd"), false);
+    assert.equal(rawStoreContent.includes("postgres://user:pass@db.example/orders"), false);
+    assert.equal(rawStoreContent.includes("client-secret-value"), false);
   });
 });
