@@ -57,6 +57,8 @@ export type ToolCallAnalysisResult = {
   riskFactors: RiskFactor[];
   riskScore: RiskLevelScore;
   riskLevel: RiskLevelValue;
+  policyVersion: string;
+  policyTrace: RiskLevelScore["policyTrace"];
   executionDecision: ExecutionDecision;
   auditRecordId: string;
   auditRecord: AuditRecord;
@@ -101,6 +103,8 @@ const createAuditRecord = ({
   indirectResources,
   riskFactors,
   riskLevel,
+  policyVersion,
+  policyTrace,
   executionDecision,
   idFactory,
   now,
@@ -111,6 +115,8 @@ const createAuditRecord = ({
   indirectResources: readonly IndirectResourceImpact[];
   riskFactors: readonly RiskFactor[];
   riskLevel: RiskLevelValue;
+  policyVersion: string;
+  policyTrace: RiskLevelScore["policyTrace"];
   executionDecision: ExecutionDecision;
   idFactory: () => string;
   now: () => Date;
@@ -123,6 +129,8 @@ const createAuditRecord = ({
   impactPaths: indirectResources.map((resource) => resource.path),
   riskFactors: [...riskFactors],
   riskLevel,
+  policyVersion,
+  policyTrace,
   decision: executionDecision,
   createdAt: now().toISOString(),
 });
@@ -178,6 +186,8 @@ export const createToolCallAnalysisService = ({
         indirectResources,
         riskFactors,
         riskLevel: riskScore.riskLevel,
+        policyVersion: riskScore.policyVersion,
+        policyTrace: riskScore.policyTrace,
         executionDecision,
         idFactory,
         now,
@@ -193,6 +203,8 @@ export const createToolCallAnalysisService = ({
       riskFactors,
       riskScore,
       riskLevel: riskScore.riskLevel,
+      policyVersion: riskScore.policyVersion,
+      policyTrace: riskScore.policyTrace,
       executionDecision,
       auditRecordId: auditRecord.id,
       auditRecord,

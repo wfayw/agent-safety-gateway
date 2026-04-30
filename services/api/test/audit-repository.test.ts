@@ -108,6 +108,58 @@ const createAuditRecordFixture = (id: string): AuditRecord => ({
     },
   ],
   riskLevel: "prohibited",
+  policyVersion: "local-risk-policy-v1",
+  policyTrace: {
+    thresholds: {
+      medium: 30,
+      high: 90,
+      prohibited: 120,
+    },
+    weights: {
+      operation: 1,
+      environment: 1,
+      resource_criticality: 1,
+      dependency_impact: 1,
+      validation_state: 1,
+      reversibility: 1,
+    },
+    hardRules: [
+      {
+        id: "production_delete_on_critical_resource",
+        description:
+          "Block production DELETE operations that touch critical resources.",
+        matched: true,
+      },
+      {
+        id: "production_deploy_with_failed_tests",
+        description: "Block production deployments with failed validation tests.",
+        matched: false,
+      },
+    ],
+    matchedRuleIds: [
+      "operation.destructive_sql_delete.1",
+      "environment.production_environment.2",
+      "production_delete_on_critical_resource",
+    ],
+    weightedFactors: [
+      {
+        id: "operation.destructive_sql_delete.1",
+        category: "operation",
+        label: "Destructive SQL DELETE",
+        score: 50,
+        weight: 1,
+        weightedScore: 50,
+      },
+      {
+        id: "environment.production_environment.2",
+        category: "environment",
+        label: "Production environment",
+        score: 30,
+        weight: 1,
+        weightedScore: 30,
+      },
+    ],
+  },
   decision: {
     type: "block",
     code: "BLOCK_PRODUCTION_DELETE",
@@ -134,6 +186,8 @@ describe("audit repository", () => {
     assert.deepEqual(records[0]?.indirectResources, auditRecord.indirectResources);
     assert.deepEqual(records[0]?.riskFactors, auditRecord.riskFactors);
     assert.equal(records[0]?.riskLevel, "prohibited");
+    assert.equal(records[0]?.policyVersion, "local-risk-policy-v1");
+    assert.deepEqual(records[0]?.policyTrace, auditRecord.policyTrace);
     assert.deepEqual(records[0]?.decision, auditRecord.decision);
   });
 

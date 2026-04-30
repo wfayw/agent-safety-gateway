@@ -60,6 +60,14 @@
 {
   "auditId": "<audit-id>",
   "riskLevel": "<risk-level>",
+  "policyVersion": "<policy-version>",
+  "policyTrace": {
+    "thresholds": {},
+    "weights": {},
+    "hardRules": [],
+    "matchedRuleIds": [],
+    "weightedFactors": []
+  },
   "decision": {
     "type": "<allow|sandbox|require_approval|rewrite|block>",
     "reason": "<decision-reason>"
@@ -82,7 +90,7 @@
 
 - 审计 ID：`<audit-id>`
 - 审计存储路径：`<audit-log-path>`
-- 审计记录摘要：记录原始请求、动作元组、影响资源、风险因子、风险等级、执行决策和时间戳是否完整。
+- 审计记录摘要：记录原始请求、动作元组、影响资源、风险因子、风险等级、`policyVersion`、`policyTrace`、执行决策和时间戳是否完整。
 
 ## 验证步骤
 

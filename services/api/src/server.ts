@@ -441,6 +441,8 @@ export const buildServer = (options: ApiServerOptions = {}) => {
         riskFactors: result.riskFactors,
         riskScore: result.riskScore,
         riskLevel: result.riskLevel,
+        policyVersion: result.policyVersion,
+        policyTrace: result.policyTrace,
         executionDecision: result.executionDecision,
         reasons: result.riskScore.reasons,
         auditId: result.auditRecordId,

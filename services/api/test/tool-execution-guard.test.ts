@@ -39,6 +39,38 @@ const createTempDataDir = async () => {
   return tempDir;
 };
 
+const policyVersion = "local-risk-policy-v1";
+
+const policyTrace = {
+  thresholds: {
+    medium: 30,
+    high: 90,
+    prohibited: 120,
+  },
+  weights: {
+    operation: 1,
+    environment: 1,
+    resource_criticality: 1,
+    dependency_impact: 1,
+    validation_state: 1,
+    reversibility: 1,
+  },
+  hardRules: [
+    {
+      id: "production_delete_on_critical_resource",
+      description: "Block production DELETE operations that touch critical resources.",
+      matched: false,
+    },
+    {
+      id: "production_deploy_with_failed_tests",
+      description: "Block production deployments with failed validation tests.",
+      matched: false,
+    },
+  ],
+  matchedRuleIds: [],
+  weightedFactors: [],
+};
+
 afterEach(async () => {
   await Promise.all(
     tempDirs.splice(0).map((tempDir) =>
@@ -97,8 +129,12 @@ const createApprovalAnalysisResult = (
       explanation: "Risk level is high from weighted score 95.",
       reasons: ["Production deploy requires risk owner review."],
       appliedHardRules: [],
+      policyVersion,
+      policyTrace,
     },
     riskLevel: RiskLevel.High,
+    policyVersion,
+    policyTrace,
     executionDecision,
     auditRecordId: "audit-approval-production-deploy",
     auditRecord: {
@@ -110,6 +146,8 @@ const createApprovalAnalysisResult = (
       impactPaths: [],
       riskFactors: [],
       riskLevel: RiskLevel.High,
+      policyVersion,
+      policyTrace,
       decision: executionDecision,
       createdAt: "2026-04-29T08:00:01.000Z",
     },
@@ -168,8 +206,12 @@ const createAllowedAnalysisResult = (
       explanation: "Risk level is low from weighted score 10.",
       reasons: ["Read-only operation."],
       appliedHardRules: [],
+      policyVersion,
+      policyTrace,
     },
     riskLevel: RiskLevel.Low,
+    policyVersion,
+    policyTrace,
     executionDecision,
     auditRecordId: "audit-sql-readonly-orders",
     auditRecord: {
@@ -181,6 +223,8 @@ const createAllowedAnalysisResult = (
       impactPaths: [],
       riskFactors: [],
       riskLevel: RiskLevel.Low,
+      policyVersion,
+      policyTrace,
       decision: executionDecision,
       createdAt: "2026-04-29T08:10:01.000Z",
     },

@@ -5,6 +5,7 @@ import {
   ActionTupleSchema,
   CiCdScenarioFixtureId,
   ConfigScenarioFixtureId,
+  AuditRecordSchema,
   DecisionType,
   Environment,
   OperationType,
@@ -184,4 +185,80 @@ test("scenario fixture requests and action tuples match runtime schemas", () => 
       true,
     );
   }
+});
+
+test("validates audit records with policy version and trace evidence", () => {
+  const auditRecord = {
+    id: "audit-policy-trace-001",
+    request: sqlScenarioFixtures[0].request,
+    actionTuple: sqlScenarioFixtures[0].expectedActionTuple,
+    directResources: sqlScenarioFixtures[0].fixtures.resources,
+    indirectResources: [],
+    impactPaths: [],
+    riskFactors: [
+      {
+        category: "operation",
+        label: "Destructive SQL DELETE",
+        severity: "critical",
+        score: 50,
+        reason: "DELETE can remove production order data.",
+      },
+    ],
+    riskLevel: RiskLevel.Prohibited,
+    policyVersion: "local-risk-policy-v1",
+    policyTrace: {
+      thresholds: {
+        medium: 30,
+        high: 90,
+        prohibited: 120,
+      },
+      weights: {
+        operation: 1,
+        environment: 1,
+        resource_criticality: 1,
+        dependency_impact: 1,
+        validation_state: 1,
+        reversibility: 1,
+      },
+      hardRules: [
+        {
+          id: "production_delete_on_critical_resource",
+          description:
+            "Block production DELETE operations that touch critical resources.",
+          matched: true,
+        },
+      ],
+      matchedRuleIds: [
+        "operation.destructive_sql_delete.1",
+        "production_delete_on_critical_resource",
+      ],
+      weightedFactors: [
+        {
+          id: "operation.destructive_sql_delete.1",
+          category: "operation",
+          label: "Destructive SQL DELETE",
+          score: 50,
+          weight: 1,
+          weightedScore: 50,
+        },
+      ],
+    },
+    decision: {
+      type: DecisionType.Block,
+      code: "risk.prohibited.block",
+      reason: "Production DELETE on critical orders must not execute.",
+      recommendedAction: "Review the affected rows with a SELECT query first.",
+      rewrittenRequest: null,
+    },
+    createdAt: "2026-04-28T06:00:02.000Z",
+  };
+
+  const result = AuditRecordSchema.safeParse(auditRecord);
+
+  assert.equal(result.success, true);
+  assert.equal(result.data.policyVersion, "local-risk-policy-v1");
+  assert.deepEqual(result.data.policyTrace.matchedRuleIds, [
+    "operation.destructive_sql_delete.1",
+    "production_delete_on_critical_resource",
+  ]);
 });

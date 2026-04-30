@@ -9,6 +9,7 @@ import {
   configScenarioFixtures,
   DecisionType,
   RiskLevel,
+  RiskFactorCategory,
   sqlScenarioFixtures,
   ToolType,
   type Scenario,
@@ -20,7 +21,9 @@ import { initializeLocalStorage, type LocalStorageLayout } from "../src/storage.
 import {
   createDefaultToolCallAnalysisService,
   ToolCallAnalysisError,
+  type ToolCallAnalysisResult,
 } from "../src/tool-call-analysis-service.js";
+import { DEFAULT_LOCAL_POLICY_VERSION } from "../src/risk-level-scorer.js";
 
 const dataDirs: string[] = [];
 
@@ -73,6 +76,24 @@ const assertActionMatchesFixture = (
   }
 };
 
+const assertPolicyEvidence = (result: ToolCallAnalysisResult) => {
+  assert.equal(result.policyVersion, DEFAULT_LOCAL_POLICY_VERSION);
+  assert.equal(result.auditRecord.policyVersion, DEFAULT_LOCAL_POLICY_VERSION);
+  assert.deepEqual(result.auditRecord.policyTrace, result.policyTrace);
+  assert.equal(result.riskScore.policyVersion, DEFAULT_LOCAL_POLICY_VERSION);
+  assert.deepEqual(result.riskScore.policyTrace, result.policyTrace);
+  assert.equal(result.policyTrace.thresholds.medium, 30);
+  assert.equal(result.policyTrace.thresholds.high, 90);
+  assert.equal(result.policyTrace.thresholds.prohibited, 120);
+  assert.equal(result.policyTrace.weights[RiskFactorCategory.Operation], 1);
+  assert.equal(
+    result.policyTrace.weightedFactors.length,
+    result.riskFactors.length,
+  );
+  assert.ok(result.policyTrace.hardRules.length > 0);
+  assert.ok(result.policyTrace.matchedRuleIds.length > 0);
+};
+
 afterEach(async () => {
   await Promise.all(
     dataDirs.splice(0).map((dataDir) =>
@@ -108,12 +129,20 @@ describe("tool call analysis service", () => {
     assert.equal(result.auditRecordId, "audit-test-1");
     assert.equal(result.auditRecord.id, result.auditRecordId);
     assert.equal(result.auditRecord.riskLevel, RiskLevel.Prohibited);
+    assertPolicyEvidence(result);
+    assert.ok(
+      result.policyTrace.matchedRuleIds.includes(
+        "production_delete_on_critical_resource",
+      ),
+    );
 
     const auditRepository = createAuditRepository(layout);
     const auditRecords = await auditRepository.listAuditRecords();
     assert.equal(auditRecords.length, 1);
     assert.equal(auditRecords[0]?.id, result.auditRecordId);
     assert.equal(auditRecords[0]?.decision.type, DecisionType.Block);
+    assert.equal(auditRecords[0]?.policyVersion, DEFAULT_LOCAL_POLICY_VERSION);
+    assert.deepEqual(auditRecords[0]?.policyTrace, result.policyTrace);
   });
 
   it("allows the low-risk SQL SELECT control fixture", async () => {
@@ -133,6 +162,7 @@ describe("tool call analysis service", () => {
     assert.equal(result.riskLevel, scenario.expectedRiskLevel);
     assert.equal(result.executionDecision.type, DecisionType.Allow);
     assert.equal(result.riskScore.appliedHardRules.length, 0);
+    assertPolicyEvidence(result);
   });
 
   it("blocks the failed production CI/CD deploy fixture", async () => {
@@ -153,6 +183,26 @@ describe("tool call analysis service", () => {
     assert.equal(result.riskLevel, scenario.expectedRiskLevel);
     assert.equal(result.executionDecision.type, scenario.expectedDecisionType);
     assert.match(result.executionDecision.reason, /payment-service/);
+    assertPolicyEvidence(result);
+  });
+
+  it("adds policy version and trace to approval decisions", async () => {
+    const layout = await createSeededLayout();
+    const service = createDefaultToolCallAnalysisService(layout, {
+      idFactory: createAuditIdFactory(),
+    });
+    const scenario = findScenario(
+      cicdScenarioFixtures,
+      ToolType.CiCd,
+      RiskLevel.Medium,
+    );
+
+    const result = await service.analyzeToolCall(scenario.request);
+
+    assertActionMatchesFixture(result.actionTuple, scenario.expectedActionTuple);
+    assert.equal(result.riskLevel, scenario.expectedRiskLevel);
+    assert.equal(result.executionDecision.type, DecisionType.RequireApproval);
+    assertPolicyEvidence(result);
   });
 
   it("sandboxes the production config update fixture", async () => {
@@ -173,6 +223,7 @@ describe("tool call analysis service", () => {
     assert.equal(result.riskLevel, scenario.expectedRiskLevel);
     assert.equal(result.executionDecision.type, DecisionType.Sandbox);
     assert.ok(result.executionDecision.rewrittenRequest);
+    assertPolicyEvidence(result);
   });
 
   it("raises structured parse errors before impact analysis", async () => {

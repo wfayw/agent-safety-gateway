@@ -123,6 +123,7 @@ describe("RV-003 Agent production release blocking validation", () => {
       analysisResult.auditRecordId,
       "audit-rv-003-production-release-block",
     );
+    assert.equal(analysisResult.policyVersion, "local-risk-policy-v1");
     assert.ok(
       analysisResult.riskFactors.some(
         (factor) =>
@@ -167,6 +168,12 @@ describe("RV-003 Agent production release blocking validation", () => {
     assert.equal(audit.riskLevel, RiskLevel.Prohibited);
     assert.equal(audit.actionTuple.operation, OperationType.Deploy);
     assert.equal(audit.directResources[0]?.name, "payment-service");
+    assert.equal(audit.policyVersion, "local-risk-policy-v1");
+    assert.ok(
+      audit.policyTrace.matchedRuleIds.includes(
+        "production_deploy_with_failed_tests",
+      ),
+    );
 
     const report = await readFile(reportPath, "utf8");
 

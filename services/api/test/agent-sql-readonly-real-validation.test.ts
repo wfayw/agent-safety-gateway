@@ -85,6 +85,7 @@ describe("RV-002 Agent SQL readonly allow validation", () => {
       analysisResult.auditRecordId,
       "audit-rv-002-sql-readonly-allow",
     );
+    assert.equal(analysisResult.policyVersion, "local-risk-policy-v1");
 
     const executionLogRepository = createExecutionLogRepository(layout);
     await executionLogRepository.clearExecutionLogs();
@@ -153,6 +154,9 @@ describe("RV-002 Agent SQL readonly allow validation", () => {
     assert.equal(audit.riskLevel, RiskLevel.Low);
     assert.equal(audit.actionTuple.operation, OperationType.Read);
     assert.equal(audit.directResources[0]?.name, "orders");
+    assert.equal(audit.policyVersion, "local-risk-policy-v1");
+    assert.equal(audit.policyTrace.thresholds.high, 90);
+    assert.ok(audit.policyTrace.weightedFactors.length > 0);
 
     const report = await readFile(reportPath, "utf8");
 

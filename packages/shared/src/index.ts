@@ -209,6 +209,35 @@ export type RiskFactor = {
   reason: string;
 };
 
+export type PolicyThresholds = {
+  medium: number;
+  high: number;
+  prohibited: number;
+};
+
+export type PolicyTraceHardRule = {
+  id: string;
+  description: string;
+  matched: boolean;
+};
+
+export type PolicyTraceWeightedFactor = {
+  id: string;
+  category: RiskFactorCategory;
+  label: string;
+  score: number;
+  weight: number;
+  weightedScore: number;
+};
+
+export type PolicyTrace = {
+  thresholds: PolicyThresholds;
+  weights: Record<RiskFactorCategory, number>;
+  hardRules: PolicyTraceHardRule[];
+  matchedRuleIds: string[];
+  weightedFactors: PolicyTraceWeightedFactor[];
+};
+
 export type ExecutionDecision = {
   type: DecisionType;
   code: string;
@@ -226,6 +255,8 @@ export type AuditRecord = {
   impactPaths: ImpactPath[];
   riskFactors: RiskFactor[];
   riskLevel: RiskLevel;
+  policyVersion: string;
+  policyTrace: PolicyTrace;
   decision: ExecutionDecision;
   createdAt: IsoTimestamp;
 };
@@ -967,6 +998,144 @@ const validateRiskFactor = (
   };
 };
 
+const validatePolicyTraceHardRule = (
+  input: unknown,
+  path: string,
+  collector: IssueCollector,
+): PolicyTraceHardRule => {
+  const record = readObject(input, path, collector);
+  const matched = record.matched;
+
+  if (typeof matched !== "boolean") {
+    addIssue(
+      collector,
+      childPath(path, "matched"),
+      "invalid_boolean",
+      "Expected a boolean.",
+    );
+  }
+
+  return {
+    id: readString(record, "id", path, collector),
+    description: readString(record, "description", path, collector),
+    matched: typeof matched === "boolean" ? matched : false,
+  };
+};
+
+const validatePolicyTraceWeightedFactor = (
+  input: unknown,
+  path: string,
+  collector: IssueCollector,
+): PolicyTraceWeightedFactor => {
+  const record = readObject(input, path, collector);
+
+  return {
+    id: readString(record, "id", path, collector),
+    category: readEnum(record, "category", RiskFactorCategory, path, collector),
+    label: readString(record, "label", path, collector),
+    score: readNumber(record, "score", path, collector),
+    weight: readNumber(record, "weight", path, collector),
+    weightedScore: readNumber(record, "weightedScore", path, collector),
+  };
+};
+
+const validatePolicyThresholds = (
+  input: unknown,
+  path: string,
+  collector: IssueCollector,
+): PolicyThresholds => {
+  const record = readObject(input, path, collector);
+
+  return {
+    medium: readNumber(record, "medium", path, collector),
+    high: readNumber(record, "high", path, collector),
+    prohibited: readNumber(record, "prohibited", path, collector),
+  };
+};
+
+const validatePolicyWeights = (
+  input: unknown,
+  path: string,
+  collector: IssueCollector,
+): Record<RiskFactorCategory, number> => {
+  const record = readObject(input, path, collector);
+
+  return {
+    [RiskFactorCategory.Operation]: readNumber(
+      record,
+      RiskFactorCategory.Operation,
+      path,
+      collector,
+    ),
+    [RiskFactorCategory.Environment]: readNumber(
+      record,
+      RiskFactorCategory.Environment,
+      path,
+      collector,
+    ),
+    [RiskFactorCategory.ResourceCriticality]: readNumber(
+      record,
+      RiskFactorCategory.ResourceCriticality,
+      path,
+      collector,
+    ),
+    [RiskFactorCategory.DependencyImpact]: readNumber(
+      record,
+      RiskFactorCategory.DependencyImpact,
+      path,
+      collector,
+    ),
+    [RiskFactorCategory.ValidationState]: readNumber(
+      record,
+      RiskFactorCategory.ValidationState,
+      path,
+      collector,
+    ),
+    [RiskFactorCategory.Reversibility]: readNumber(
+      record,
+      RiskFactorCategory.Reversibility,
+      path,
+      collector,
+    ),
+  };
+};
+
+const validatePolicyTrace = (
+  input: unknown,
+  path: string,
+  collector: IssueCollector,
+): PolicyTrace => {
+  const record = readObject(input, path, collector);
+
+  return {
+    thresholds: validatePolicyThresholds(
+      record.thresholds,
+      childPath(path, "thresholds"),
+      collector,
+    ),
+    weights: validatePolicyWeights(
+      record.weights,
+      childPath(path, "weights"),
+      collector,
+    ),
+    hardRules: readArray(
+      record,
+      "hardRules",
+      path,
+      collector,
+      validatePolicyTraceHardRule,
+    ),
+    matchedRuleIds: readStringArray(record, "matchedRuleIds", path, collector),
+    weightedFactors: readArray(
+      record,
+      "weightedFactors",
+      path,
+      collector,
+      validatePolicyTraceWeightedFactor,
+    ),
+  };
+};
+
 const validateExecutionDecision = (
   input: unknown,
   path: string,
@@ -1048,6 +1217,12 @@ const validateAuditRecord = (
       validateRiskFactor,
     ),
     riskLevel: readEnum(record, "riskLevel", RiskLevel, path, collector),
+    policyVersion: readString(record, "policyVersion", path, collector),
+    policyTrace: validatePolicyTrace(
+      record.policyTrace,
+      childPath(path, "policyTrace"),
+      collector,
+    ),
     decision: validateExecutionDecision(
       record.decision,
       childPath(path, "decision"),

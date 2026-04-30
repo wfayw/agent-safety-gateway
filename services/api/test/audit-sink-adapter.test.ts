@@ -75,6 +75,27 @@ const decision: ExecutionDecision = {
   rewrittenRequest: null,
 };
 
+const policyVersion = "local-risk-policy-v1";
+
+const policyTrace = {
+  thresholds: {
+    medium: 30,
+    high: 90,
+    prohibited: 120,
+  },
+  weights: {
+    operation: 1,
+    environment: 1,
+    resource_criticality: 1,
+    dependency_impact: 1,
+    validation_state: 1,
+    reversibility: 1,
+  },
+  hardRules: [],
+  matchedRuleIds: [],
+  weightedFactors: [],
+};
+
 const analysisResult: ToolCallAnalysisResult = {
   request,
   actionTuple,
@@ -88,8 +109,12 @@ const analysisResult: ToolCallAnalysisResult = {
     explanation: "Risk level is low.",
     reasons: ["Read-only operation."],
     appliedHardRules: [],
+    policyVersion,
+    policyTrace,
   },
   riskLevel: RiskLevel.Low,
+  policyVersion,
+  policyTrace,
   executionDecision: decision,
   auditRecordId: "audit-sql-readonly-orders",
   auditRecord: {
@@ -101,6 +126,8 @@ const analysisResult: ToolCallAnalysisResult = {
     impactPaths: [],
     riskFactors: [],
     riskLevel: RiskLevel.Low,
+    policyVersion,
+    policyTrace,
     decision,
     createdAt: "2026-04-29T08:00:01.000Z",
   },

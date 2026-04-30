@@ -75,6 +75,7 @@ describe("RV-001 Agent SQL delete blocking validation", () => {
     assert.equal(analysisResult.actionTuple.target, "orders");
     assert.equal(analysisResult.directResources[0]?.name, "orders");
     assert.equal(analysisResult.auditRecordId, "audit-rv-001-sql-delete-block");
+    assert.equal(analysisResult.policyVersion, "local-risk-policy-v1");
 
     const executionLogRepository = createExecutionLogRepository(layout);
     await executionLogRepository.clearExecutionLogs();
@@ -104,6 +105,12 @@ describe("RV-001 Agent SQL delete blocking validation", () => {
     assert.equal(audit.decision.type, DecisionType.Block);
     assert.equal(audit.riskLevel, RiskLevel.Prohibited);
     assert.equal(audit.directResources[0]?.name, "orders");
+    assert.equal(audit.policyVersion, "local-risk-policy-v1");
+    assert.ok(
+      audit.policyTrace.matchedRuleIds.includes(
+        "production_delete_on_critical_resource",
+      ),
+    );
 
     const report = await readFile(reportPath, "utf8");
 

@@ -173,7 +173,7 @@ bash scripts/local-start.sh --no-functional
    ```
 
 4. 核对报告：`docs/evidence/real-validation/RV-001-sql-delete-block.md`。
-5. 预期结论：网关返回 `riskLevel=prohibited` 和 `decision.type=block`，`ToolExecutionGuard` 不调用 SQL executor，审计记录包含请求、影响资源、风险因子和阻断决策。
+5. 预期结论：网关返回 `riskLevel=prohibited` 和 `decision.type=block`，`ToolExecutionGuard` 不调用 SQL executor，审计记录包含请求、影响资源、风险因子、`policyVersion`、`policyTrace` 和阻断决策。
 
 也可以在 API 启动后通过 Web 选择高风险 SQL 删除场景，提交分析并进入审计回放页核对同一决策链路。首版验证仍使用本地 fixture 和 mock executor，不连接真实生产数据库。
 

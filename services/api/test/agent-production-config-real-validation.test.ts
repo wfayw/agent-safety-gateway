@@ -137,6 +137,7 @@ describe("RV-004 Agent production config change validation", () => {
       analysisResult.auditRecordId,
       "audit-rv-004-production-config-sandbox",
     );
+    assert.equal(analysisResult.policyVersion, "local-risk-policy-v1");
     assert.equal(
       analysisResult.executionDecision.rewrittenRequest?.environment,
       "staging",
@@ -177,6 +178,9 @@ describe("RV-004 Agent production config change validation", () => {
     assert.equal(audit.riskLevel, RiskLevel.Medium);
     assert.equal(audit.actionTuple.operation, OperationType.Update);
     assert.equal(audit.directResources[0]?.name, "payment.timeout");
+    assert.equal(audit.policyVersion, "local-risk-policy-v1");
+    assert.equal(audit.policyTrace.thresholds.medium, 30);
+    assert.ok(audit.policyTrace.weightedFactors.length > 0);
 
     const report = await readFile(reportPath, "utf8");
 

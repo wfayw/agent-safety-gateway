@@ -17,7 +17,10 @@ import {
   type RiskFactor,
 } from "@agent-safety-gateway/shared";
 
-import { createRiskLevelScorer } from "../src/risk-level-scorer.js";
+import {
+  createRiskLevelScorer,
+  DEFAULT_LOCAL_POLICY_VERSION,
+} from "../src/risk-level-scorer.js";
 
 const createActionTuple = (
   overrides: Partial<ActionTuple> = {},
@@ -70,6 +73,22 @@ describe("risk level scorer", () => {
     assert.equal(result.score, 10);
     assert.match(result.explanation, /weighted score 10/);
     assert.deepEqual(result.appliedHardRules, []);
+    assert.equal(result.policyVersion, DEFAULT_LOCAL_POLICY_VERSION);
+    assert.deepEqual(result.policyTrace.thresholds, {
+      medium: 30,
+      high: 90,
+      prohibited: 120,
+    });
+    assert.equal(result.policyTrace.weights[RiskFactorCategory.Operation], 1);
+    assert.equal(result.policyTrace.weightedFactors[0]?.score, 10);
+    assert.equal(result.policyTrace.weightedFactors[0]?.weight, 1);
+    assert.equal(result.policyTrace.weightedFactors[0]?.weightedScore, 10);
+    assert.equal(result.policyTrace.hardRules.every((rule) => !rule.matched), true);
+    assert.ok(
+      result.policyTrace.matchedRuleIds.includes(
+        result.policyTrace.weightedFactors[0]?.id ?? "",
+      ),
+    );
   });
 
   it("scores medium risk from configurable weighted thresholds", () => {
@@ -94,6 +113,8 @@ describe("risk level scorer", () => {
     assert.equal(result.riskLevel, RiskLevel.Medium);
     assert.equal(result.score, 40);
     assert.match(result.explanation, /medium/);
+    assert.equal(result.policyTrace.weights[RiskFactorCategory.Operation], 2);
+    assert.equal(result.policyTrace.weightedFactors[0]?.weightedScore, 40);
   });
 
   it("scores high risk when weighted score reaches the high threshold", () => {
@@ -154,6 +175,17 @@ describe("risk level scorer", () => {
       "production_delete_on_critical_resource",
     ]);
     assert.match(result.explanation, /hard blocking rules/);
+    assert.ok(
+      result.policyTrace.hardRules.some(
+        (rule) =>
+          rule.id === "production_delete_on_critical_resource" && rule.matched,
+      ),
+    );
+    assert.ok(
+      result.policyTrace.matchedRuleIds.includes(
+        "production_delete_on_critical_resource",
+      ),
+    );
   });
 
   it("applies hard block for failed production deploys on critical resources", () => {

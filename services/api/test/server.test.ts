@@ -207,6 +207,13 @@ describe("API server", () => {
     assert.equal(body.riskLevel, RiskLevel.Prohibited);
     assert.equal(body.riskScore.riskLevel, RiskLevel.Prohibited);
     assert.equal(body.executionDecision.type, DecisionType.Block);
+    assert.equal(body.policyVersion, "local-risk-policy-v1");
+    assert.equal(body.policyTrace.thresholds.medium, 30);
+    assert.ok(
+      body.policyTrace.matchedRuleIds.includes(
+        "production_delete_on_critical_resource",
+      ),
+    );
     assert.ok(body.riskFactors.length > 0);
     assert.ok(body.reasons.length > 0);
     assert.equal(body.auditId, "audit-route-1");
@@ -234,6 +241,12 @@ describe("API server", () => {
     assert.equal(body.analysisResult.auditRecordId, "audit-route-1");
     assert.equal(body.analysisResult.riskLevel, RiskLevel.Prohibited);
     assert.equal(body.analysisResult.executionDecision.type, DecisionType.Block);
+    assert.equal(body.analysisResult.policyVersion, "local-risk-policy-v1");
+    assert.ok(
+      body.analysisResult.policyTrace.matchedRuleIds.includes(
+        "production_delete_on_critical_resource",
+      ),
+    );
   });
 
   it("returns not_configured for read-only SQL when no safe executor is configured", async () => {
@@ -258,6 +271,8 @@ describe("API server", () => {
     assert.equal(body.analysisResult.auditRecordId, "audit-route-1");
     assert.equal(body.analysisResult.riskLevel, RiskLevel.Low);
     assert.equal(body.analysisResult.executionDecision.type, DecisionType.Allow);
+    assert.equal(body.analysisResult.policyVersion, "local-risk-policy-v1");
+    assert.equal(body.analysisResult.policyTrace.thresholds.high, 90);
   });
 
   it("lists audit records and filters by decision, risk, tool, and environment", async () => {
@@ -547,6 +562,12 @@ describe("API server", () => {
     assert.equal(body.audit.actionTuple.operation, fixture.expectedActionTuple.operation);
     assert.equal(body.audit.riskLevel, RiskLevel.Prohibited);
     assert.equal(body.audit.decision.type, DecisionType.Block);
+    assert.equal(body.audit.policyVersion, "local-risk-policy-v1");
+    assert.ok(
+      body.audit.policyTrace.matchedRuleIds.includes(
+        "production_delete_on_critical_resource",
+      ),
+    );
     assert.ok(body.audit.directResources.length > 0);
     assert.ok(body.audit.indirectResources.length > 0);
     assert.ok(body.audit.impactPaths.length > 0);

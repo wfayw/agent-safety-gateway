@@ -7,6 +7,7 @@ import {
   ToolType,
   type ActionTuple,
   type AffectedResource,
+  type PolicyTrace,
   type RiskFactor,
   type RiskFactorCategory as RiskFactorCategoryValue,
   type RiskLevel as RiskLevelValue,
@@ -25,6 +26,7 @@ export type RiskFactorWeights = Partial<
 export type RiskLevelScorerOptions = {
   thresholds?: Partial<RiskLevelThresholds>;
   factorWeights?: RiskFactorWeights;
+  policyVersion?: string;
 };
 
 export type RiskLevelScorerInput = {
@@ -40,6 +42,8 @@ export type RiskLevelScore = {
   explanation: string;
   reasons: string[];
   appliedHardRules: string[];
+  policyVersion: string;
+  policyTrace: PolicyTrace;
 };
 
 export type RiskLevelScorer = {
@@ -60,6 +64,49 @@ const defaultFactorWeights: Required<RiskFactorWeights> = {
   [RiskFactorCategory.ValidationState]: 1,
   [RiskFactorCategory.Reversibility]: 1,
 };
+
+export const DEFAULT_LOCAL_POLICY_VERSION = "local-risk-policy-v1";
+
+type HardBlockingRule = {
+  id: string;
+  description: string;
+  matches: (input: RiskLevelScorerInput) => boolean;
+};
+
+const hardBlockingRules: readonly HardBlockingRule[] = [
+  {
+    id: "production_delete_on_critical_resource",
+    description: "Block production DELETE operations that touch critical resources.",
+    matches: ({ actionTuple, directResources, indirectResources = [] }) => {
+      const affectedResources = [...directResources, ...indirectResources];
+
+      return (
+        actionTuple.environment === Environment.Production &&
+        actionTuple.operation === OperationType.Delete &&
+        affectedResources.some(
+          (resource) => resource.criticalityLevel === CriticalityLevel.Critical,
+        )
+      );
+    },
+  },
+  {
+    id: "production_deploy_with_failed_tests",
+    description: "Block production deployments with failed validation tests.",
+    matches: ({ actionTuple, directResources, indirectResources = [] }) => {
+      const affectedResources = [...directResources, ...indirectResources];
+
+      return (
+        actionTuple.toolType === ToolType.CiCd &&
+        actionTuple.environment === Environment.Production &&
+        actionTuple.operation === OperationType.Deploy &&
+        actionTuple.parameters.testStatus === "failed" &&
+        affectedResources.some(
+          (resource) => resource.criticalityLevel === CriticalityLevel.Critical,
+        )
+      );
+    },
+  },
+];
 
 const riskLevelByScore = (
   score: number,
@@ -89,35 +136,56 @@ const getWeightedScore = (
     0,
   );
 
-const getHardBlockingRules = ({
-  actionTuple,
-  directResources,
-  indirectResources = [],
-}: RiskLevelScorerInput) => {
-  const affectedResources = [...directResources, ...indirectResources];
-  const isProductionDelete =
-    actionTuple.environment === Environment.Production &&
-    actionTuple.operation === OperationType.Delete;
-  const isFailedProductionDeploy =
-    actionTuple.toolType === ToolType.CiCd &&
-    actionTuple.environment === Environment.Production &&
-    actionTuple.operation === OperationType.Deploy &&
-    actionTuple.parameters.testStatus === "failed";
-  const touchesCriticalResource = affectedResources.some(
-    (resource) => resource.criticalityLevel === CriticalityLevel.Critical,
-  );
+const evaluateHardRules = (input: RiskLevelScorerInput) =>
+  hardBlockingRules.map((rule) => ({
+    id: rule.id,
+    description: rule.description,
+    matched: rule.matches(input),
+  }));
 
-  const hardRules: string[] = [];
+const createRiskFactorTraceId = (factor: RiskFactor, index: number) => {
+  const normalizedLabel = factor.label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
 
-  if (isProductionDelete && touchesCriticalResource) {
-    hardRules.push("production_delete_on_critical_resource");
-  }
+  return `${factor.category}.${normalizedLabel || "factor"}.${index + 1}`;
+};
 
-  if (isFailedProductionDeploy && touchesCriticalResource) {
-    hardRules.push("production_deploy_with_failed_tests");
-  }
+const createPolicyTrace = ({
+  input,
+  thresholds,
+  factorWeights,
+  hardRules,
+}: {
+  input: RiskLevelScorerInput;
+  thresholds: RiskLevelThresholds;
+  factorWeights: Required<RiskFactorWeights>;
+  hardRules: PolicyTrace["hardRules"];
+}): PolicyTrace => {
+  const weightedFactors = input.riskFactors.map((factor, index) => {
+    const weight = factorWeights[factor.category];
 
-  return hardRules;
+    return {
+      id: createRiskFactorTraceId(factor, index),
+      category: factor.category,
+      label: factor.label,
+      score: factor.score,
+      weight,
+      weightedScore: factor.score * weight,
+    };
+  });
+
+  return {
+    thresholds,
+    weights: factorWeights,
+    hardRules,
+    matchedRuleIds: [
+      ...weightedFactors.map((factor) => factor.id),
+      ...hardRules.filter((rule) => rule.matched).map((rule) => rule.id),
+    ],
+    weightedFactors,
+  };
 };
 
 const createReasons = (
@@ -161,15 +229,25 @@ export const createRiskLevelScorer = (
     ...defaultFactorWeights,
     ...options.factorWeights,
   };
+  const policyVersion = options.policyVersion ?? DEFAULT_LOCAL_POLICY_VERSION;
 
   return {
     scoreRiskLevel(input) {
       const score = getWeightedScore(input.riskFactors, factorWeights);
-      const appliedHardRules = getHardBlockingRules(input);
+      const hardRules = evaluateHardRules(input);
+      const appliedHardRules = hardRules
+        .filter((rule) => rule.matched)
+        .map((rule) => rule.id);
       const riskLevel =
         appliedHardRules.length > 0
           ? RiskLevel.Prohibited
           : riskLevelByScore(score, thresholds);
+      const policyTrace = createPolicyTrace({
+        input,
+        thresholds,
+        factorWeights,
+        hardRules,
+      });
 
       return {
         riskLevel,
@@ -182,6 +260,8 @@ export const createRiskLevelScorer = (
         }),
         reasons: createReasons(input.riskFactors, appliedHardRules),
         appliedHardRules,
+        policyVersion,
+        policyTrace,
       };
     },
   };
