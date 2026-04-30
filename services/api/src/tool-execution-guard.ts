@@ -14,8 +14,14 @@ export type ToolExecutor<ExecutorResult> = (
   analysisResult: ToolCallAnalysisResult,
 ) => ExecutorResult | Promise<ExecutorResult>;
 
+export type GuardedExecutionStatus =
+  | "executed"
+  | "blocked"
+  | "held"
+  | "not_configured";
+
 export type GuardedExecutionResult<ExecutorResult> = {
-  status: "executed" | "blocked" | "held";
+  status: GuardedExecutionStatus;
   requestId: string;
   executorInvoked: boolean;
   riskLevel: ToolCallAnalysisResult["riskLevel"];
@@ -33,7 +39,7 @@ export type ToolExecutionGuard<ExecutorResult> = {
 
 export type ToolExecutionGuardDependencies<ExecutorResult> = {
   analysisService: ToolCallAnalysisService;
-  executor: ToolExecutor<ExecutorResult>;
+  executor?: ToolExecutor<ExecutorResult>;
 };
 
 const getPreventedStatus = (analysisResult: ToolCallAnalysisResult) =>
@@ -56,6 +62,19 @@ export const createToolExecutionGuard = <ExecutorResult>({
     if (!canInvokeExecutor(analysisResult)) {
       return {
         status: getPreventedStatus(analysisResult),
+        requestId: request.id,
+        executorInvoked: false,
+        riskLevel: analysisResult.riskLevel,
+        decision: analysisResult.executionDecision,
+        auditId: analysisResult.auditRecordId,
+        analysisResult,
+        executorResult: null,
+      };
+    }
+
+    if (!executor) {
+      return {
+        status: "not_configured",
         requestId: request.id,
         executorInvoked: false,
         riskLevel: analysisResult.riskLevel,

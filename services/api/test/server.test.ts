@@ -196,6 +196,54 @@ describe("API server", () => {
     assert.equal(body.auditId, "audit-route-1");
   });
 
+  it("guards SQL execution and blocks production DELETE before executor invocation", async () => {
+    const server = await createAnalysisServer();
+    const fixture = getSqlDeleteFixture();
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/tool-calls/sql/execute",
+      payload: fixture.request,
+    });
+    const body = response.json();
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(body.status, "blocked");
+    assert.equal(body.requestId, fixture.request.id);
+    assert.equal(body.auditId, "audit-route-1");
+    assert.equal(body.riskLevel, RiskLevel.Prohibited);
+    assert.equal(body.decision.type, DecisionType.Block);
+    assert.equal(body.executorInvoked, false);
+    assert.equal(body.executorResult, null);
+    assert.equal(body.analysisResult.auditRecordId, "audit-route-1");
+    assert.equal(body.analysisResult.riskLevel, RiskLevel.Prohibited);
+    assert.equal(body.analysisResult.executionDecision.type, DecisionType.Block);
+  });
+
+  it("returns not_configured for read-only SQL when no safe executor is configured", async () => {
+    const server = await createAnalysisServer();
+    const fixture = getSqlReadFixture();
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/tool-calls/sql/execute",
+      payload: fixture.request,
+    });
+    const body = response.json();
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(body.status, "not_configured");
+    assert.equal(body.requestId, fixture.request.id);
+    assert.equal(body.auditId, "audit-route-1");
+    assert.equal(body.riskLevel, RiskLevel.Low);
+    assert.equal(body.decision.type, DecisionType.Allow);
+    assert.equal(body.executorInvoked, false);
+    assert.equal(body.executorResult, null);
+    assert.equal(body.analysisResult.auditRecordId, "audit-route-1");
+    assert.equal(body.analysisResult.riskLevel, RiskLevel.Low);
+    assert.equal(body.analysisResult.executionDecision.type, DecisionType.Allow);
+  });
+
   it("lists audit records and filters by decision, risk, tool, and environment", async () => {
     const server = await createAnalysisServer();
     const sqlDeleteFixture = getSqlDeleteFixture();

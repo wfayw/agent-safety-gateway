@@ -28,6 +28,12 @@ import {
   ToolCallAnalysisError,
   type ToolCallAnalysisService,
 } from "./tool-call-analysis-service.js";
+import type { SqlDryRunExecutorResult } from "./real-component-adapters.js";
+import {
+  createToolExecutionGuard,
+  type GuardedExecutionResult,
+  type ToolExecutor,
+} from "./tool-execution-guard.js";
 
 export type ApiLoggerOption = boolean | { level: ApiLogLevel };
 
@@ -38,6 +44,7 @@ export type ApiServerOptions = {
   auditRepository?: AuditRepository;
   scenarioRepository?: ScenarioRepository;
   toolCallAnalysisService?: ToolCallAnalysisService;
+  sqlExecutor?: ToolExecutor<SqlDryRunExecutorResult>;
 };
 
 const enumValues = <T extends Record<string, string>>(values: T) =>
@@ -50,6 +57,19 @@ const createLoggerOption = (config: ApiConfig): ApiLoggerOption => {
 
   return { level: config.logLevel };
 };
+
+const createGuardedExecutionResponse = <ExecutorResult>(
+  result: GuardedExecutionResult<ExecutorResult>,
+) => ({
+  status: result.status,
+  requestId: result.requestId,
+  auditId: result.auditId,
+  riskLevel: result.riskLevel,
+  decision: result.decision,
+  executorInvoked: result.executorInvoked,
+  executorResult: result.executorResult,
+  analysisResult: result.analysisResult,
+});
 
 export const buildServer = (options: ApiServerOptions = {}) => {
   const config = options.config ?? createApiConfig();
@@ -211,6 +231,53 @@ export const buildServer = (options: ApiServerOptions = {}) => {
       return { scenario };
     },
   );
+
+  server.post("/api/tool-calls/sql/execute", async (request, reply) => {
+    const parseResult = ToolCallRequestSchema.safeParse(request.body);
+
+    if (!parseResult.success) {
+      return sendErrorResponse(reply, 400, {
+        code: "INVALID_TOOL_CALL_REQUEST",
+        message: "Invalid tool call request",
+        details: {
+          issues: parseResult.issues,
+        },
+      });
+    }
+
+    if (parseResult.data.toolType !== ToolType.Sql) {
+      return sendErrorResponse(reply, 400, {
+        code: "UNSUPPORTED_GUARDED_EXECUTION_TOOL",
+        message: "Guarded SQL execution only accepts SQL tool calls",
+        details: {
+          requestId: parseResult.data.id,
+          toolType: parseResult.data.toolType,
+        },
+      });
+    }
+
+    try {
+      const guard = createToolExecutionGuard<SqlDryRunExecutorResult>({
+        analysisService: toolCallAnalysisService,
+        ...(options.sqlExecutor ? { executor: options.sqlExecutor } : {}),
+      });
+      const result = await guard.execute(parseResult.data);
+
+      return createGuardedExecutionResponse(result);
+    } catch (error: unknown) {
+      if (error instanceof ToolCallAnalysisError) {
+        return sendErrorResponse(reply, 400, {
+          code: "TOOL_CALL_ANALYSIS_FAILED",
+          message: "Tool call analysis failed",
+          details: {
+            errors: error.errors,
+          },
+        });
+      }
+
+      throw error;
+    }
+  });
 
   server.post("/api/tool-calls/analyze", async (request, reply) => {
     const parseResult = ToolCallRequestSchema.safeParse(request.body);

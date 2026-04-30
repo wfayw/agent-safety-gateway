@@ -24,7 +24,7 @@ import { createDefaultToolCallAnalysisService } from "../services/api/src/tool-c
 
 type DemoPathSummary = {
   requestId: string;
-  status: "executed" | "blocked" | "held";
+  status: "executed" | "blocked" | "held" | "not_configured";
   executorInvoked: boolean;
   riskLevel: string;
   decisionType: string;
