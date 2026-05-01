@@ -453,6 +453,9 @@ describe("tool execution guard approval control", () => {
       analysisService: createApprovalAnalysisService(),
       approvalAdapter,
       defaultApproverGroup: "release-risk-owners",
+      contextEvidenceProvider: createContextEvidenceProvider(
+        createContextSufficiencyState(),
+      ),
       async executor() {
         executorCallCount += 1;
         return { ok: true };
@@ -692,6 +695,203 @@ describe("tool execution guard context preflight", () => {
 });
 
 describe("tool execution guard permit gate", () => {
+  it("runs the patent pre-execution pipeline in deterministic order", async () => {
+    const filePath = join(
+      await createTempDataDir(),
+      "pipeline-order-approvals.jsonl",
+    );
+    const approvalAdapter = createFileApprovalAdapter({ filePath });
+    const approvedRequest = {
+      requestId: "req-approval-production-deploy",
+      auditId: "audit-approval-production-deploy",
+      actor: "agent:release-bot",
+      target: "payment-service",
+      riskLevel: RiskLevel.High,
+      decisionReason:
+        "Risk level is high for payment-service production deployment.",
+      approverGroup: "release-risk-owners",
+      status: ApprovalRequestStatus.Approved,
+      createdAt: "2026-04-29T08:05:00.000Z",
+    };
+    const pipelineEvents: string[] = [];
+    const contextState = createContextSufficiencyState();
+    const contextAdequacyEvidenceHash =
+      "sha256:tool-guard-context-pipeline-order";
+    const permitSnapshot = createCompletePermitSnapshot();
+    const guard = createToolExecutionGuard({
+      analysisService: createApprovalAnalysisService(),
+      approvalAdapter,
+      contextEvidenceProvider: {
+        getContextSufficiencyState() {
+          pipelineEvents.push("context obligation proof");
+
+          return {
+            contextSufficiencyState: contextState,
+            contextAdequacyEvidenceHash,
+          };
+        },
+      },
+      permitEvidenceProvider: {
+        getEvidenceSnapshot() {
+          pipelineEvents.push("forbidden-effect obligation proof");
+
+          return permitSnapshot;
+        },
+        appendPermitBinding() {
+          pipelineEvents.push("permit decision");
+        },
+      },
+      permitNonceFactory: () => "nonce-pipeline-order-permit",
+      now: () => new Date("2026-04-29T08:10:00.000Z"),
+      async executor(request) {
+        pipelineEvents.push("executor invocation");
+
+        return { ok: true, requestId: request.id };
+      },
+    });
+
+    await appendFile(filePath, `${JSON.stringify(approvedRequest)}\n`, "utf8");
+
+    const result = await guard.execute(approvalRequest);
+
+    assert.equal(result.status, "executed");
+    assert.equal(result.executorInvoked, true);
+    assert.deepEqual(pipelineEvents, [
+      "context obligation proof",
+      "forbidden-effect obligation proof",
+      "permit decision",
+      "executor invocation",
+    ]);
+    assert.equal(
+      result.permitBinding?.contextAdequacyEvidenceHash,
+      contextAdequacyEvidenceHash,
+    );
+  });
+
+  it("stops high-risk execution before approval and evidence runners when context proof is absent", async () => {
+    const pipelineEvents: string[] = [];
+    const guard = createToolExecutionGuard({
+      analysisService: createApprovalAnalysisService(),
+      approvalAdapter: {
+        async getApprovalRequest() {
+          pipelineEvents.push("approval lookup");
+
+          return null;
+        },
+        async createApprovalRequest() {
+          pipelineEvents.push("approval creation");
+
+          return null;
+        },
+      },
+      permitEvidenceProvider: {
+        getEvidenceSnapshot() {
+          pipelineEvents.push("forbidden-effect obligation proof");
+
+          return createCompletePermitSnapshot();
+        },
+      },
+      async executor() {
+        pipelineEvents.push("executor invocation");
+
+        return { ok: true };
+      },
+    });
+
+    const result = await guard.execute(approvalRequest);
+
+    assert.equal(result.status, "blocked");
+    assert.equal(result.executorInvoked, false);
+    assert.equal(result.decision.code, "context.evidence_required.deny");
+    assert.equal(result.approvalRequest, null);
+    assert.equal(result.permitBinding, null);
+    assert.equal(result.permitDeniedEvidence, null);
+    assert.deepEqual(pipelineEvents, []);
+  });
+
+  it("stops after forbidden-effect failure when context proof is sufficient", async () => {
+    const filePath = join(
+      await createTempDataDir(),
+      "pipeline-denied-approvals.jsonl",
+    );
+    const approvalAdapter = createFileApprovalAdapter({ filePath });
+    const approvedRequest = {
+      requestId: "req-approval-production-deploy",
+      auditId: "audit-approval-production-deploy",
+      actor: "agent:release-bot",
+      target: "payment-service",
+      riskLevel: RiskLevel.High,
+      decisionReason:
+        "Risk level is high for payment-service production deployment.",
+      approverGroup: "release-risk-owners",
+      status: ApprovalRequestStatus.Approved,
+      createdAt: "2026-04-29T08:05:00.000Z",
+    };
+    const pipelineEvents: string[] = [];
+    const failedCoverageEntry = createCoverageEntry({
+      status: EvidenceCoverageStatus.Failed,
+      covered: false,
+      evidenceHashes: ["sha256:tool-guard-pipeline-failed-evidence"],
+      reason: "side-effect probe detected a blocked mutation path",
+    });
+    const failedSnapshot = {
+      safetyState: createSafetyState({
+        state: ExecutorSafetyEvidenceStateName.EvidenceFailed,
+        allObligationsCovered: false,
+        coveredObligationIds: [],
+        blockedObligationIds: [failedCoverageEntry.obligationId],
+        blockingStatuses: [EvidenceCoverageStatus.Failed],
+        transitionReason: "side-effect proof failed before permit issuance",
+      }),
+      coverageMap: createCoverageMap([failedCoverageEntry]),
+      forbiddenEffectObligations: [createForbiddenEffectObligation()],
+    } satisfies ToolExecutionPermitEvidenceSnapshot;
+    const guard = createToolExecutionGuard({
+      analysisService: createApprovalAnalysisService(),
+      approvalAdapter,
+      contextEvidenceProvider: {
+        getContextSufficiencyState() {
+          pipelineEvents.push("context obligation proof");
+
+          return createContextSufficiencyState();
+        },
+      },
+      permitEvidenceProvider: {
+        getEvidenceSnapshot() {
+          pipelineEvents.push("forbidden-effect obligation proof");
+
+          return failedSnapshot;
+        },
+        appendPermitDeniedEvidence() {
+          pipelineEvents.push("permit decision");
+        },
+      },
+      now: () => new Date("2026-04-29T08:10:00.000Z"),
+      async executor() {
+        pipelineEvents.push("executor invocation");
+
+        return { ok: true };
+      },
+    });
+
+    await appendFile(filePath, `${JSON.stringify(approvedRequest)}\n`, "utf8");
+
+    const result = await guard.execute(approvalRequest);
+
+    assert.equal(result.status, "blocked");
+    assert.equal(result.executorInvoked, false);
+    assert.equal(result.permitBinding, null);
+    assert.equal(
+      result.permitDeniedEvidence?.reason,
+      failedSnapshot.safetyState.transitionReason,
+    );
+    assert.deepEqual(pipelineEvents, [
+      "context obligation proof",
+      "forbidden-effect obligation proof",
+      "permit decision",
+    ]);
+  });
+
   it("issues a PermitBinding before executor invocation when safety evidence is complete", async () => {
     let executorCallCount = 0;
     const permitEvidence = createPermitEvidenceProvider();

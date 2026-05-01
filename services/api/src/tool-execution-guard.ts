@@ -533,6 +533,20 @@ const hasContextSufficientForPermit = (
 const requiresContextBeforePermit = (analysisResult: ToolCallAnalysisResult) =>
   CONTEXT_REQUIRED_PERMIT_RISK_LEVELS.has(analysisResult.riskLevel);
 
+const canReachPermitGate = (analysisResult: ToolCallAnalysisResult) =>
+  requiresApproval(analysisResult) || canInvokeExecutor(analysisResult);
+
+const shouldBlockForMissingContextBeforePermit = ({
+  analysisResult,
+  contextSufficiencyState,
+}: {
+  analysisResult: ToolCallAnalysisResult;
+  contextSufficiencyState: ContextSufficiencyState | null;
+}) =>
+  requiresContextBeforePermit(analysisResult) &&
+  canReachPermitGate(analysisResult) &&
+  !hasContextSufficientForPermit(contextSufficiencyState);
+
 const createContextPermitPreconditionDecision = (
   contextSufficiencyState: ContextSufficiencyState | null,
 ): ExecutionDecision => ({
@@ -980,6 +994,46 @@ export const createToolExecutionGuard = <ExecutorResult>({
     });
   };
 
+  const createContextPermitPreconditionResult = async ({
+    request,
+    analysisResult,
+    approvalRequest,
+    contextSufficiencyState,
+    contextAction,
+  }: {
+    request: ToolCallRequest;
+    analysisResult: ToolCallAnalysisResult;
+    approvalRequest: ApprovalRequest | null;
+    contextSufficiencyState: ContextSufficiencyState | null;
+    contextAction: ContextGatewayAction | null;
+  }) => {
+    const executionDecision = createContextPermitPreconditionDecision(
+      contextSufficiencyState,
+    );
+
+    analysisResult.executionDecision = executionDecision;
+    analysisResult.auditRecord.decision = executionDecision;
+
+    await updateAuditExecutorSafetyEvidence({
+      analysisResult,
+      snapshot: null,
+      permitBinding: null,
+      permitDeniedEvidence: null,
+      executorInvoked: false,
+    });
+
+    return createFinalResult({
+      status: "blocked",
+      request,
+      analysisResult,
+      executorInvoked: false,
+      contextSufficiencyState,
+      contextAction,
+      executorResult: null,
+      approvalRequest,
+    });
+  };
+
   const executeWithPermitGate = async ({
     request,
     analysisResult,
@@ -996,33 +1050,17 @@ export const createToolExecutionGuard = <ExecutorResult>({
     contextAction: ContextGatewayAction | null;
   }) => {
     if (
-      requiresContextBeforePermit(analysisResult) &&
-      !hasContextSufficientForPermit(contextSufficiencyState)
-    ) {
-      const executionDecision = createContextPermitPreconditionDecision(
-        contextSufficiencyState,
-      );
-
-      analysisResult.executionDecision = executionDecision;
-      analysisResult.auditRecord.decision = executionDecision;
-
-      await updateAuditExecutorSafetyEvidence({
+      shouldBlockForMissingContextBeforePermit({
         analysisResult,
-        snapshot: null,
-        permitBinding: null,
-        permitDeniedEvidence: null,
-        executorInvoked: false,
-      });
-
-      return createFinalResult({
-        status: "blocked",
+        contextSufficiencyState,
+      })
+    ) {
+      return createContextPermitPreconditionResult({
         request,
         analysisResult,
-        executorInvoked: false,
+        approvalRequest,
         contextSufficiencyState,
         contextAction,
-        executorResult: null,
-        approvalRequest,
       });
     }
 
@@ -1165,6 +1203,21 @@ export const createToolExecutionGuard = <ExecutorResult>({
       const contextAdequacyEvidenceHash =
         contextDecision?.contextAdequacyEvidenceHash ?? null;
       const contextAction = contextDecision?.contextAction ?? null;
+
+      if (
+        shouldBlockForMissingContextBeforePermit({
+          analysisResult,
+          contextSufficiencyState,
+        })
+      ) {
+        return createContextPermitPreconditionResult({
+          request,
+          analysisResult,
+          approvalRequest: null,
+          contextSufficiencyState,
+          contextAction,
+        });
+      }
 
       if (requiresApproval(analysisResult)) {
         const existingApprovalRequest =
