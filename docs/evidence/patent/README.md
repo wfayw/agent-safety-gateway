@@ -36,15 +36,25 @@ Fixture JSON：`docs/evidence/patent/fixtures/PAG-046-sql-end-to-end-patent-scen
 
 Fixture JSON：`docs/evidence/patent/fixtures/PAG-047-cicd-end-to-end-patent-scenario.json`。
 
+## PAG-048 Config 端到端组合链路
+
+| 场景 | 证明目标 | 文档 |
+| --- | --- | --- |
+| Config sandbox patent E2E | 从 production config change Agent task 和 `PromptAssemblyManifest` 开始，证明 namespace constraint、sandbox-only 审批、当前配置、rollback plan 和无生产配置写入证据共同约束 sandbox executor 许可。 | `docs/evidence/patent/PAG-048-config-end-to-end-patent.md` |
+
+Fixture JSON：`docs/evidence/patent/fixtures/PAG-048-config-end-to-end-patent-scenario.json`。
+
 ## 复验命令
 
 ```bash
 PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm --filter @agent-safety-gateway/api exec node --import tsx --test test/sql-negative-capability-fixture-runner.test.ts test/sql-side-effect-snapshot-fixture-runner.test.ts test/cicd-negative-capability-fixture-runner.test.ts test/cicd-side-effect-snapshot-fixture-runner.test.ts test/config-negative-capability-fixture-runner.test.ts test/config-side-effect-snapshot-fixture-runner.test.ts test/executor-drift-invalidation-service.test.ts test/tool-execution-guard.test.ts
 PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm --filter @agent-safety-gateway/api exec node --import tsx --test test/sql-patent-e2e-scenario.test.ts
 PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm --filter @agent-safety-gateway/api exec node --import tsx --test test/cicd-patent-e2e-scenario.test.ts
+PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm --filter @agent-safety-gateway/api exec node --import tsx --test test/config-patent-e2e-scenario.test.ts
 python3 -m json.tool docs/evidence/patent/fixtures/PAG-044-context-retention-scenarios.json >/tmp/pag044-context-retention-scenarios.json
 python3 -m json.tool docs/evidence/patent/fixtures/PAG-046-sql-end-to-end-patent-scenario.json >/tmp/pag046-sql-end-to-end-patent-scenario.json
 python3 -m json.tool docs/evidence/patent/fixtures/PAG-047-cicd-end-to-end-patent-scenario.json >/tmp/pag047-cicd-end-to-end-patent-scenario.json
+python3 -m json.tool docs/evidence/patent/fixtures/PAG-048-config-end-to-end-patent-scenario.json >/tmp/pag048-config-end-to-end-patent-scenario.json
 ```
 
 ## 结论口径
