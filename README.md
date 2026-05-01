@@ -115,7 +115,7 @@ PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm --filter @agent-safety-ga
   --bundle-id <bundle-id>
 ```
 
-可用 `--request-id <id[,id]>` 按请求导出，或用 `--all` 导出本地 store 中全部证据。用法说明见 `docs/evidence/patent-validation/README.md`，claim mapping 见 `docs/patent/claim-mapping.md`。
+可用 `--request-id <id[,id]>` 按请求导出，或用 `--all` 导出本地 store 中全部证据。用法说明见 `docs/evidence/patent-validation/README.md`，双专利状态机本地验证 runbook 见 `docs/runbooks/patent-state-machines.md`，claim mapping 见 `docs/patent/claim-mapping.md`。
 
 ### 运行 API 和 Web
 
@@ -261,6 +261,7 @@ cd services/api && node --import tsx --test test/agent-production-config-real-va
 - 接入说明：`docs/integration/real-component-onboarding.md`
 - Codex 接入说明：`docs/integration/codex-integration.md`
 - 本地启动 runbook：`docs/runbooks/local-startup.md`
+- 专利状态机验证 runbook：`docs/runbooks/patent-state-machines.md`
 - 配置模板：`docs/integration/real-component-profile.example.json`
 - 复验报告模板：`docs/evidence/real-validation/templates/RV-real-component-report.template.md`
 - 代码契约：`services/api/src/real-component-adapters.ts`
