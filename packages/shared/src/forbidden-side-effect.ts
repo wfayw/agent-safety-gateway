@@ -322,6 +322,7 @@ export type PermitBinding = {
   coverageMapHash: PatentProofHash;
   deniedEvidenceHash: PatentProofHash;
   sideEffectEvidenceHash: PatentProofHash;
+  contextAdequacyEvidenceHash?: PatentProofHash;
   ttl: number;
   nonce: string;
 };
@@ -1515,6 +1516,31 @@ const readPermitBindingString = (
   return value;
 };
 
+const readOptionalPermitBindingString = (
+  input: Record<string, unknown>,
+  key: string,
+  path: string,
+  collector: PermitBindingIssueCollector,
+): string | undefined => {
+  const value = input[key];
+
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== "string" || value.length === 0) {
+    addPermitBindingIssue(
+      collector,
+      permitBindingChildPath(path, key),
+      "invalid_string",
+      "Expected a non-empty string when provided.",
+    );
+    return undefined;
+  }
+
+  return value;
+};
+
 const readPermitBindingPositiveInteger = (
   input: Record<string, unknown>,
   key: string,
@@ -2345,8 +2371,14 @@ const validatePermitBindingShape = (
 
   const record = input as Record<string, unknown>;
   const path = "$";
+  const contextAdequacyEvidenceHash = readOptionalPermitBindingString(
+    record,
+    "contextAdequacyEvidenceHash",
+    path,
+    collector,
+  );
 
-  return {
+  const binding: PermitBinding = {
     requestHash: readPermitBindingString(
       record,
       "requestHash",
@@ -2381,6 +2413,12 @@ const validatePermitBindingShape = (
     ttl: readPermitBindingPositiveInteger(record, "ttl", path, collector),
     nonce: readPermitBindingString(record, "nonce", path, collector),
   };
+
+  if (contextAdequacyEvidenceHash !== undefined) {
+    binding.contextAdequacyEvidenceHash = contextAdequacyEvidenceHash;
+  }
+
+  return binding;
 };
 
 const validatePermitDeniedEvidenceShape = (
@@ -4841,7 +4879,18 @@ export const buildDeniedCapabilityEvidenceHashPayload = (
 export const buildPermitBindingHashPayload = (input: unknown): string => {
   const binding = PermitBindingSchema.parse(input);
 
-  return JSON.stringify({
+  const payload: {
+    schema: string;
+    requestHash: PatentProofHash;
+    executorId: string;
+    safetyEvidenceVersion: string;
+    coverageMapHash: PatentProofHash;
+    deniedEvidenceHash: PatentProofHash;
+    sideEffectEvidenceHash: PatentProofHash;
+    contextAdequacyEvidenceHash?: PatentProofHash;
+    ttl: number;
+    nonce: string;
+  } = {
     schema: "agent-safety-gateway.forbidden-side-effect.PermitBinding.v1",
     requestHash: binding.requestHash,
     executorId: binding.executorId,
@@ -4851,7 +4900,13 @@ export const buildPermitBindingHashPayload = (input: unknown): string => {
     sideEffectEvidenceHash: binding.sideEffectEvidenceHash,
     ttl: binding.ttl,
     nonce: binding.nonce,
-  });
+  };
+
+  if (binding.contextAdequacyEvidenceHash !== undefined) {
+    payload.contextAdequacyEvidenceHash = binding.contextAdequacyEvidenceHash;
+  }
+
+  return JSON.stringify(payload);
 };
 
 export const buildPermitDeniedEvidenceHashPayload = (

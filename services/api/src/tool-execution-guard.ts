@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   type AuditExecutorSafetyEvidence,
   DecisionType,
+  type ExecutionDecision,
   type JsonValue,
   RiskLevel,
   type ToolCallRequest,
@@ -19,7 +20,10 @@ import {
   type PermitBinding,
   type PermitDeniedEvidence,
 } from "@agent-safety-gateway/shared/forbidden-side-effect";
-import type { ContextSufficiencyState } from "@agent-safety-gateway/shared/context-retention";
+import {
+  ContextSufficiencyStateName,
+  type ContextSufficiencyState,
+} from "@agent-safety-gateway/shared/context-retention";
 import type { PatentProofHash } from "@agent-safety-gateway/shared/patent-state-machine";
 
 import {
@@ -126,13 +130,22 @@ export type ToolExecutionPermitEvidenceProvider = {
 
 export type ToolExecutionContextEvidenceInput = ToolExecutionPermitEvidenceInput;
 
+export type ToolExecutionContextEvidenceSnapshot = {
+  contextSufficiencyState: ContextSufficiencyState;
+  contextAdequacyEvidenceHash?: PatentProofHash;
+};
+
+export type ToolExecutionContextEvidenceResult =
+  | ContextSufficiencyState
+  | ToolExecutionContextEvidenceSnapshot;
+
 export type ToolExecutionContextEvidenceProvider = {
   getContextSufficiencyState: (
     input: ToolExecutionContextEvidenceInput,
   ) =>
-    | ContextSufficiencyState
+    | ToolExecutionContextEvidenceResult
     | null
-    | Promise<ContextSufficiencyState | null>;
+    | Promise<ToolExecutionContextEvidenceResult | null>;
 };
 
 export type ToolExecutionGuardDependencies<ExecutorResult> = {
@@ -194,6 +207,10 @@ const SIDE_EFFECT_COVERAGE_TYPES: ReadonlySet<ForbiddenEffectEvidenceTypeValue> 
     ForbiddenEffectEvidenceType.NoTriggerSideEffect,
     ForbiddenEffectEvidenceType.NoExternalSideEffect,
   ]);
+
+const CONTEXT_REQUIRED_PERMIT_RISK_LEVELS: ReadonlySet<
+  ToolCallAnalysisResult["riskLevel"]
+> = new Set([RiskLevel.High]);
 
 const isTimestampAtOrBefore = (
   timestamp: string | undefined,
@@ -375,6 +392,7 @@ const createPermitBinding = ({
   snapshot,
   safetyState,
   evaluatedAt,
+  contextAdequacyEvidenceHash,
   nonce,
   defaultTtlMs,
 }: {
@@ -382,35 +400,45 @@ const createPermitBinding = ({
   snapshot: ToolExecutionPermitEvidenceSnapshot;
   safetyState: ExecutorSafetyEvidenceState;
   evaluatedAt: string;
+  contextAdequacyEvidenceHash: PatentProofHash | null;
   nonce: string;
   defaultTtlMs: number;
-}): PermitBinding => ({
-  requestHash: createToolCallRequestHash(request),
-  executorId: safetyState.executorId,
-  safetyEvidenceVersion: safetyState.safetyEvidenceVersion ?? safetyState.stateId,
-  coverageMapHash: createCoverageMapHash({
-    safetyState,
-    coverageMap: snapshot.coverageMap,
-  }),
-  deniedEvidenceHash:
-    snapshot.deniedEvidenceHash ??
-    createAggregateEvidenceHash({
-      coverageMap: snapshot.coverageMap,
+}): PermitBinding => {
+  const permitBinding: PermitBinding = {
+    requestHash: createToolCallRequestHash(request),
+    executorId: safetyState.executorId,
+    safetyEvidenceVersion: safetyState.safetyEvidenceVersion ?? safetyState.stateId,
+    coverageMapHash: createCoverageMapHash({
       safetyState,
-      evidenceKind: "denied-capability",
-      filter: (entry) => !SIDE_EFFECT_COVERAGE_TYPES.has(entry.requiredEvidenceType),
-    }),
-  sideEffectEvidenceHash:
-    snapshot.sideEffectEvidenceHash ??
-    createAggregateEvidenceHash({
       coverageMap: snapshot.coverageMap,
-      safetyState,
-      evidenceKind: "side-effect",
-      filter: (entry) => SIDE_EFFECT_COVERAGE_TYPES.has(entry.requiredEvidenceType),
     }),
-  ttl: getPermitBindingTtl({ safetyState, evaluatedAt, defaultTtlMs }),
-  nonce,
-});
+    deniedEvidenceHash:
+      snapshot.deniedEvidenceHash ??
+      createAggregateEvidenceHash({
+        coverageMap: snapshot.coverageMap,
+        safetyState,
+        evidenceKind: "denied-capability",
+        filter: (entry) =>
+          !SIDE_EFFECT_COVERAGE_TYPES.has(entry.requiredEvidenceType),
+      }),
+    sideEffectEvidenceHash:
+      snapshot.sideEffectEvidenceHash ??
+      createAggregateEvidenceHash({
+        coverageMap: snapshot.coverageMap,
+        safetyState,
+        evidenceKind: "side-effect",
+        filter: (entry) => SIDE_EFFECT_COVERAGE_TYPES.has(entry.requiredEvidenceType),
+      }),
+    ttl: getPermitBindingTtl({ safetyState, evaluatedAt, defaultTtlMs }),
+    nonce,
+  };
+
+  if (contextAdequacyEvidenceHash !== null) {
+    permitBinding.contextAdequacyEvidenceHash = contextAdequacyEvidenceHash;
+  }
+
+  return permitBinding;
+};
 
 const createPermitDeniedEvidence = ({
   request,
@@ -473,6 +501,51 @@ const toJsonValue = (value: unknown): JsonValue | null => {
 
   return JSON.parse(JSON.stringify(value)) as JsonValue;
 };
+
+const isContextEvidenceSnapshot = (
+  input: ToolExecutionContextEvidenceResult,
+): input is ToolExecutionContextEvidenceSnapshot =>
+  "contextSufficiencyState" in input;
+
+const normalizeContextEvidenceSnapshot = (
+  input: ToolExecutionContextEvidenceResult | null,
+): ToolExecutionContextEvidenceSnapshot | null => {
+  if (input === null) {
+    return null;
+  }
+
+  if (isContextEvidenceSnapshot(input)) {
+    return input;
+  }
+
+  return { contextSufficiencyState: input };
+};
+
+const hasContextSufficientForPermit = (
+  contextSufficiencyState: ContextSufficiencyState | null,
+) =>
+  contextSufficiencyState !== null &&
+  contextSufficiencyState.sufficient &&
+  (contextSufficiencyState.state === ContextSufficiencyStateName.Sufficient ||
+    contextSufficiencyState.state ===
+      ContextSufficiencyStateName.SufficientByCertifiedSummary);
+
+const requiresContextBeforePermit = (analysisResult: ToolCallAnalysisResult) =>
+  CONTEXT_REQUIRED_PERMIT_RISK_LEVELS.has(analysisResult.riskLevel);
+
+const createContextPermitPreconditionDecision = (
+  contextSufficiencyState: ContextSufficiencyState | null,
+): ExecutionDecision => ({
+  type: DecisionType.Block,
+  code: "context.evidence_required.deny",
+  reason:
+    contextSufficiencyState === null
+      ? "High-risk tool call requires sufficient context adequacy evidence before executor permit evaluation."
+      : `Context sufficiency state ${contextSufficiencyState.state}: ${contextSufficiencyState.transitionReason}.`,
+  recommendedAction:
+    "Persist a sufficient ContextSufficiencyState and ContextAdequacyEvidence record, then retry the tool call before executor safety permit evaluation.",
+  rewrittenRequest: null,
+});
 
 const createAuditSinkInput = <ExecutorResult>({
   request,
@@ -751,7 +824,10 @@ export const createToolExecutionGuard = <ExecutorResult>({
   const checkPermitGate = async ({
     request,
     analysisResult,
-  }: ToolExecutionPermitEvidenceInput) => {
+    contextAdequacyEvidenceHash,
+  }: ToolExecutionPermitEvidenceInput & {
+    contextAdequacyEvidenceHash: PatentProofHash | null;
+  }) => {
     if (!permitEvidenceProvider) {
       return {
         permitBinding: null,
@@ -793,6 +869,7 @@ export const createToolExecutionGuard = <ExecutorResult>({
       snapshot: normalizedSnapshot,
       safetyState,
       evaluatedAt,
+      contextAdequacyEvidenceHash,
       nonce: permitNonceFactory(),
       defaultTtlMs: permitTtlMs,
     });
@@ -830,15 +907,18 @@ export const createToolExecutionGuard = <ExecutorResult>({
       return null;
     }
 
-    const contextSufficiencyState =
+    const contextEvidenceSnapshot = normalizeContextEvidenceSnapshot(
       await contextEvidenceProvider.getContextSufficiencyState({
         request,
         analysisResult,
-      });
+      }),
+    );
 
-    if (!contextSufficiencyState) {
+    if (!contextEvidenceSnapshot) {
       return null;
     }
+
+    const { contextSufficiencyState } = contextEvidenceSnapshot;
 
     const contextDecision = contextDecisionEngine.decideContextExecution({
       request,
@@ -848,7 +928,11 @@ export const createToolExecutionGuard = <ExecutorResult>({
 
     applyContextExecutionDecision({ analysisResult, contextDecision });
 
-    return contextDecision;
+    return {
+      ...contextDecision,
+      contextAdequacyEvidenceHash:
+        contextEvidenceSnapshot.contextAdequacyEvidenceHash ?? null,
+    };
   };
 
   const createContextApprovalRequest = async ({
@@ -901,14 +985,47 @@ export const createToolExecutionGuard = <ExecutorResult>({
     analysisResult,
     approvalRequest,
     contextSufficiencyState,
+    contextAdequacyEvidenceHash,
     contextAction,
   }: {
     request: ToolCallRequest;
     analysisResult: ToolCallAnalysisResult;
     approvalRequest: ApprovalRequest | null;
     contextSufficiencyState: ContextSufficiencyState | null;
+    contextAdequacyEvidenceHash: PatentProofHash | null;
     contextAction: ContextGatewayAction | null;
   }) => {
+    if (
+      requiresContextBeforePermit(analysisResult) &&
+      !hasContextSufficientForPermit(contextSufficiencyState)
+    ) {
+      const executionDecision = createContextPermitPreconditionDecision(
+        contextSufficiencyState,
+      );
+
+      analysisResult.executionDecision = executionDecision;
+      analysisResult.auditRecord.decision = executionDecision;
+
+      await updateAuditExecutorSafetyEvidence({
+        analysisResult,
+        snapshot: null,
+        permitBinding: null,
+        permitDeniedEvidence: null,
+        executorInvoked: false,
+      });
+
+      return createFinalResult({
+        status: "blocked",
+        request,
+        analysisResult,
+        executorInvoked: false,
+        contextSufficiencyState,
+        contextAction,
+        executorResult: null,
+        approvalRequest,
+      });
+    }
+
     if (!executor) {
       return createFinalResult({
         status: "not_configured",
@@ -940,7 +1057,11 @@ export const createToolExecutionGuard = <ExecutorResult>({
       });
     }
 
-    const permitDecision = await checkPermitGate({ request, analysisResult });
+    const permitDecision = await checkPermitGate({
+      request,
+      analysisResult,
+      contextAdequacyEvidenceHash,
+    });
 
     if (permitDecision.permitDeniedEvidence) {
       await updateAuditExecutorSafetyEvidence({
@@ -1041,6 +1162,8 @@ export const createToolExecutionGuard = <ExecutorResult>({
 
       const contextSufficiencyState =
         contextDecision?.contextSufficiencyState ?? null;
+      const contextAdequacyEvidenceHash =
+        contextDecision?.contextAdequacyEvidenceHash ?? null;
       const contextAction = contextDecision?.contextAction ?? null;
 
       if (requiresApproval(analysisResult)) {
@@ -1073,6 +1196,7 @@ export const createToolExecutionGuard = <ExecutorResult>({
           analysisResult,
           approvalRequest,
           contextSufficiencyState,
+          contextAdequacyEvidenceHash,
           contextAction,
         });
       }
@@ -1095,6 +1219,7 @@ export const createToolExecutionGuard = <ExecutorResult>({
         analysisResult,
         approvalRequest: null,
         contextSufficiencyState,
+        contextAdequacyEvidenceHash,
         contextAction,
       });
     },

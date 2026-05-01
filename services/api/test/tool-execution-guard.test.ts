@@ -51,6 +51,7 @@ import type {
 } from "../src/tool-call-analysis-service.js";
 import {
   createToolExecutionGuard,
+  type ToolExecutionContextEvidenceSnapshot,
   type ToolExecutionPermitEvidenceSnapshot,
   type ToolExecutionContextEvidenceProvider,
   type ToolExecutionPermitEvidenceProvider,
@@ -214,10 +215,10 @@ const createContextSufficiencyState = (
 });
 
 const createContextEvidenceProvider = (
-  state: ContextSufficiencyState,
+  result: ContextSufficiencyState | ToolExecutionContextEvidenceSnapshot,
 ): ToolExecutionContextEvidenceProvider => ({
   getContextSufficiencyState() {
-    return state;
+    return result;
   },
 });
 
@@ -505,6 +506,9 @@ describe("tool execution guard approval control", () => {
     const guard = createToolExecutionGuard({
       analysisService: createApprovalAnalysisService(),
       approvalAdapter,
+      contextEvidenceProvider: createContextEvidenceProvider(
+        createContextSufficiencyState(),
+      ),
       permitEvidenceProvider: permitEvidence.provider,
       permitNonceFactory: () => "nonce-approved-approval-path",
       now: () => new Date("2026-04-29T08:10:00.000Z"),
@@ -720,6 +724,115 @@ describe("tool execution guard permit gate", () => {
     });
     assert.match(result.permitBinding?.requestHash ?? "", /^sha256:/);
     assert.deepEqual(permitEvidence.permits, [result.permitBinding]);
+  });
+
+  it("binds sufficient high-risk context adequacy evidence to PermitBinding", async () => {
+    const filePath = join(await createTempDataDir(), "context-bound-approvals.jsonl");
+    const approvalAdapter = createFileApprovalAdapter({ filePath });
+    const approvedRequest = {
+      requestId: "req-approval-production-deploy",
+      auditId: "audit-approval-production-deploy",
+      actor: "agent:release-bot",
+      target: "payment-service",
+      riskLevel: RiskLevel.High,
+      decisionReason:
+        "Risk level is high for payment-service production deployment.",
+      approverGroup: "release-risk-owners",
+      status: ApprovalRequestStatus.Approved,
+      createdAt: "2026-04-29T08:05:00.000Z",
+    };
+    const contextState = createContextSufficiencyState();
+    const contextAdequacyEvidenceHash =
+      "sha256:tool-guard-context-adequacy-evidence";
+    let executorCallCount = 0;
+    const permitEvidence = createPermitEvidenceProvider();
+    const guard = createToolExecutionGuard({
+      analysisService: createApprovalAnalysisService(),
+      approvalAdapter,
+      contextEvidenceProvider: createContextEvidenceProvider({
+        contextSufficiencyState: contextState,
+        contextAdequacyEvidenceHash,
+      }),
+      permitEvidenceProvider: permitEvidence.provider,
+      permitNonceFactory: () => "nonce-context-bound-permit",
+      now: () => new Date("2026-04-29T08:10:00.000Z"),
+      async executor(request) {
+        executorCallCount += 1;
+        return { ok: true, requestId: request.id };
+      },
+    });
+
+    await appendFile(filePath, `${JSON.stringify(approvedRequest)}\n`, "utf8");
+
+    const result = await guard.execute(approvalRequest);
+
+    assert.equal(result.status, "executed");
+    assert.equal(result.executorInvoked, true);
+    assert.equal(executorCallCount, 1);
+    assert.deepEqual(result.contextSufficiencyState, contextState);
+    assert.equal(
+      result.permitBinding?.contextAdequacyEvidenceHash,
+      contextAdequacyEvidenceHash,
+    );
+    assert.equal(
+      permitEvidence.permits[0]?.contextAdequacyEvidenceHash,
+      contextAdequacyEvidenceHash,
+    );
+    assert.equal(result.permitBinding?.nonce, "nonce-context-bound-permit");
+    assert.equal(result.permitDeniedEvidence, null);
+  });
+
+  it("blocks high-risk permit evaluation when context evidence is missing", async () => {
+    const filePath = join(await createTempDataDir(), "missing-context-approvals.jsonl");
+    const approvalAdapter = createFileApprovalAdapter({ filePath });
+    const approvedRequest = {
+      requestId: "req-approval-production-deploy",
+      auditId: "audit-approval-production-deploy",
+      actor: "agent:release-bot",
+      target: "payment-service",
+      riskLevel: RiskLevel.High,
+      decisionReason:
+        "Risk level is high for payment-service production deployment.",
+      approverGroup: "release-risk-owners",
+      status: ApprovalRequestStatus.Approved,
+      createdAt: "2026-04-29T08:05:00.000Z",
+    };
+    const layout = await initializeLocalStorage(await createTempDataDir());
+    const auditRepository = createAuditRepository(layout);
+    const permitEvidence = createCountingPermitEvidenceProvider();
+    let executorCallCount = 0;
+    const guard = createToolExecutionGuard({
+      analysisService: createApprovalAnalysisService(),
+      approvalAdapter,
+      auditRepository,
+      permitEvidenceProvider: permitEvidence.provider,
+      async executor() {
+        executorCallCount += 1;
+        return { ok: true };
+      },
+    });
+
+    await appendFile(filePath, `${JSON.stringify(approvedRequest)}\n`, "utf8");
+    await auditRepository.createAuditRecord(
+      createApprovalAnalysisResult(approvalRequest).auditRecord,
+    );
+
+    const result = await guard.execute(approvalRequest);
+    const auditRecord = await auditRepository.getAuditRecordById(result.auditId);
+
+    assert.equal(result.status, "blocked");
+    assert.equal(result.executorInvoked, false);
+    assert.equal(executorCallCount, 0);
+    assert.equal(permitEvidence.snapshotCallCount, 0);
+    assert.equal(result.decision.code, "context.evidence_required.deny");
+    assert.equal(result.contextSufficiencyState, null);
+    assert.equal(result.contextAction, null);
+    assert.equal(result.permitBinding, null);
+    assert.equal(result.permitDeniedEvidence, null);
+    assert.equal(auditRecord?.permitIssued, false);
+    assert.equal(auditRecord?.executorInvoked, false);
+    assert.equal(auditRecord?.permitBinding, null);
+    assert.equal(auditRecord?.permitDeniedEvidence, null);
   });
 
   it("routes executor invocation through the broker and rejects mismatched executor permits", async () => {

@@ -39,6 +39,25 @@ const expectedPermitBindingHashPayload = JSON.stringify({
   nonce: validPermitBinding.nonce,
 });
 
+const validContextBoundPermitBinding = {
+  ...validPermitBinding,
+  contextAdequacyEvidenceHash: "sha256:context-adequacy-evidence-001",
+};
+
+const expectedContextBoundPermitBindingHashPayload = JSON.stringify({
+  schema: "agent-safety-gateway.forbidden-side-effect.PermitBinding.v1",
+  requestHash: validContextBoundPermitBinding.requestHash,
+  executorId: validContextBoundPermitBinding.executorId,
+  safetyEvidenceVersion: validContextBoundPermitBinding.safetyEvidenceVersion,
+  coverageMapHash: validContextBoundPermitBinding.coverageMapHash,
+  deniedEvidenceHash: validContextBoundPermitBinding.deniedEvidenceHash,
+  sideEffectEvidenceHash: validContextBoundPermitBinding.sideEffectEvidenceHash,
+  ttl: validContextBoundPermitBinding.ttl,
+  nonce: validContextBoundPermitBinding.nonce,
+  contextAdequacyEvidenceHash:
+    validContextBoundPermitBinding.contextAdequacyEvidenceHash,
+});
+
 const validPermitDeniedEvidence = {
   requestHash: "sha256:request-readonly-orders-002",
   executorId: "sql-readonly-prod-001",
@@ -88,6 +107,30 @@ test("validates PermitBinding records bound to safety evidence", () => {
   assert.equal(isPermitBinding(validPermitBinding), true);
 });
 
+test("validates PermitBinding records bound to context adequacy evidence", () => {
+  const result = PermitBindingSchema.safeParse(validContextBoundPermitBinding);
+
+  assert.equal(result.success, true);
+  assert.equal(
+    result.data.contextAdequacyEvidenceHash,
+    validContextBoundPermitBinding.contextAdequacyEvidenceHash,
+  );
+  assert.equal(isPermitBinding(validContextBoundPermitBinding), true);
+});
+
+test("rejects malformed PermitBinding context evidence hashes", () => {
+  const result = validatePermitBinding({
+    ...validPermitBinding,
+    contextAdequacyEvidenceHash: "",
+  });
+
+  assert.equal(result.success, false);
+  assert.deepEqual(
+    result.issues.map((issue) => issue.path),
+    ["$.contextAdequacyEvidenceHash"],
+  );
+});
+
 test("rejects malformed PermitBinding fields", () => {
   const result = validatePermitBinding({
     requestHash: "",
@@ -121,6 +164,10 @@ test("builds a stable PermitBinding hash payload", () => {
   assert.equal(
     buildPermitBindingHashPayload(validPermitBinding),
     expectedPermitBindingHashPayload,
+  );
+  assert.equal(
+    buildPermitBindingHashPayload(validContextBoundPermitBinding),
+    expectedContextBoundPermitBindingHashPayload,
   );
 });
 
