@@ -1,0 +1,58 @@
+{
+  "storyId": "PAG-046",
+  "title": "SQL end-to-end patent pre-execution scenario",
+  "source": {
+    "agentTaskPath": "sample-workspace/agent-tasks/sql-delete-pending-orders.md",
+    "requestId": "req-agent-task-sql-delete-pending-orders",
+    "promptAssemblyManifestId": "prompt-manifest-agent-task-sql-delete-pending-orders",
+    "inferenceId": "inference-agent-task-sql-delete-pending-orders",
+    "sql": "DELETE FROM orders WHERE status='PENDING'"
+  },
+  "requiredContext": {
+    "compiler": "compileSqlRequiredContextObligations",
+    "operation": "delete",
+    "obligationKind": "write_context",
+    "obligationId": "rco-sql-req-agent-task-sql-delete-pending-orders-write-context-orders",
+    "requiredAnchorIds": [
+      "ctx-source-task-sql-delete-pending-orders",
+      "ctx-system-policy-sql-production",
+      "ctx-resource-state-orders-prod",
+      "ctx-rollback-orders-prod"
+    ],
+    "invalidContextState": "Conflicting",
+    "validContextState": "Sufficient"
+  },
+  "forbiddenEffect": {
+    "compiler": "compileSqlForbiddenEffectObligations",
+    "operation": "delete",
+    "obligationKind": "destructive_mutation",
+    "obligationId": "feo-sql-req-agent-task-sql-delete-pending-orders-destructive_mutation-orders",
+    "requiredEvidenceTypes": [
+      "delete_denial",
+      "no_row_mutation",
+      "no_trigger_side_effect",
+      "no_external_side_effect"
+    ],
+    "executorSafetyStateWhenOnlyDeleteDenialExists": "EvidencePartial",
+    "coverageMapId": "coverage-map-pag046-sql-delete-missing-side-effect"
+  },
+  "outcomes": {
+    "invalidContext": {
+      "decisionCode": "context.conflicting.deny",
+      "permitIssued": false,
+      "executorInvoked": false,
+      "reason": "Context proof fails before forbidden-effect evidence runner and executor invocation."
+    },
+    "missingSideEffectEvidence": {
+      "decisionCode": "risk.high.require_approval",
+      "permitIssued": false,
+      "executorInvoked": false,
+      "missingEvidence": [
+        "no_external_side_effect",
+        "no_row_mutation",
+        "no_trigger_side_effect"
+      ],
+      "reason": "Valid context reaches the permit gate, but incomplete side-effect evidence denies the DELETE permit."
+    }
+  }
+}
