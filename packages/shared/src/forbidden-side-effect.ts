@@ -167,6 +167,22 @@ export const SideEffectEvidenceTypeValues = Object.values(
   SideEffectEvidenceType,
 ) as SideEffectEvidenceType[];
 
+export const EvidenceCoverageStatus = {
+  Covered: "covered",
+  Missing: "missing",
+  Stale: "stale",
+  Invalidated: "invalidated",
+  Failed: "failed",
+  NotApplicable: "notApplicable",
+} as const;
+
+export type EvidenceCoverageStatus =
+  (typeof EvidenceCoverageStatus)[keyof typeof EvidenceCoverageStatus];
+
+export const EvidenceCoverageStatusValues = Object.values(
+  EvidenceCoverageStatus,
+) as EvidenceCoverageStatus[];
+
 export type EvidencePlanTimeoutStrategy = {
   timeoutMs: number;
   onTimeout: EvidencePlanTimeoutAction;
@@ -252,6 +268,54 @@ export type SideEffectDeltaEvidence = {
   effectDelta: readonly SideEffectDeltaChange[];
   completedAt: ForbiddenSideEffectTimestamp;
   executorFingerprint?: ExecutorDriftFingerprintHash;
+};
+
+export type EvidenceCoverageRecord = {
+  obligationId: ForbiddenEffectObligationId;
+  requiredEvidenceType?: ForbiddenEffectEvidenceType;
+  evidenceType?: ForbiddenEffectEvidenceType;
+  evidenceHash: PatentProofHash;
+  status?: EvidenceCoverageStatus;
+  completedAt?: ForbiddenSideEffectTimestamp;
+  expiresAt?: ForbiddenSideEffectTimestamp;
+  invalidatedAt?: ForbiddenSideEffectTimestamp;
+  failureReason?: string;
+  evidence?: DeniedCapabilityEvidence | SideEffectDeltaEvidence;
+};
+
+export type EvidenceCoverageEntry = {
+  obligationId: ForbiddenEffectObligationId;
+  requiredEvidenceType: ForbiddenEffectEvidenceType;
+  status: EvidenceCoverageStatus;
+  covered: boolean;
+  evidenceHashes: readonly PatentProofHash[];
+  reason: string;
+  evaluatedAt: ForbiddenSideEffectTimestamp;
+  completedAt?: ForbiddenSideEffectTimestamp;
+  expiresAt?: ForbiddenSideEffectTimestamp;
+  invalidatedAt?: ForbiddenSideEffectTimestamp;
+};
+
+export type EvidenceCoverageObligation = {
+  obligationId: ForbiddenEffectObligationId;
+  status: EvidenceCoverageStatus;
+  covered: boolean;
+  requiredEvidence: readonly EvidenceCoverageEntry[];
+};
+
+export type EvidenceCoverageMap = {
+  coverageMapId: EvidenceCoverageMapId;
+  executorId: string;
+  evaluatedAt: ForbiddenSideEffectTimestamp;
+  coverage: readonly EvidenceCoverageEntry[];
+  obligations: readonly EvidenceCoverageObligation[];
+  allObligationsCovered: boolean;
+};
+
+export type EvidenceCoverageEvaluationOptions = {
+  coverageMapId?: EvidenceCoverageMapId;
+  executorId?: string;
+  evaluatedAt?: ForbiddenSideEffectTimestamp;
 };
 
 export type ForbiddenEffectObligation = {
@@ -1949,6 +2013,288 @@ export const isSideEffectDeltaEvidence = (
 ): input is SideEffectDeltaEvidence =>
   validateSideEffectDeltaEvidence(input).success;
 
+const evidenceCoverageMapDefaultEvaluatedAt = "1970-01-01T00:00:00.000Z";
+
+const isCoverageStatusFailClosed = (status: EvidenceCoverageStatus): boolean =>
+  status !== EvidenceCoverageStatus.Covered;
+
+const isTimestampAtOrBefore = (
+  timestamp: string | undefined,
+  evaluatedAt: string,
+): boolean => timestamp !== undefined && timestamp <= evaluatedAt;
+
+const getEvidenceCoverageRecordType = (
+  record: EvidenceCoverageRecord,
+): ForbiddenEffectEvidenceType | undefined =>
+  record.requiredEvidenceType ?? record.evidenceType;
+
+const getEvidenceCoverageRecordCompletedAt = (
+  record: EvidenceCoverageRecord,
+): ForbiddenSideEffectTimestamp | undefined => {
+  if (record.completedAt !== undefined) {
+    return record.completedAt;
+  }
+
+  return record.evidence?.completedAt;
+};
+
+const inferEvidenceCoverageRecordStatus = (
+  record: EvidenceCoverageRecord,
+  evaluatedAt: ForbiddenSideEffectTimestamp,
+): EvidenceCoverageStatus => {
+  if (isTimestampAtOrBefore(record.invalidatedAt, evaluatedAt)) {
+    return EvidenceCoverageStatus.Invalidated;
+  }
+
+  if (record.status !== undefined) {
+    if (
+      record.status === EvidenceCoverageStatus.Covered &&
+      isTimestampAtOrBefore(record.expiresAt, evaluatedAt)
+    ) {
+      return EvidenceCoverageStatus.Stale;
+    }
+
+    return record.status;
+  }
+
+  if (isTimestampAtOrBefore(record.expiresAt, evaluatedAt)) {
+    return EvidenceCoverageStatus.Stale;
+  }
+
+  const evidence = record.evidence;
+
+  if (evidence !== undefined && "observedRejection" in evidence) {
+    if (evidence.observedRejection === DeniedCapabilityProbeOutcome.Rejected) {
+      return EvidenceCoverageStatus.Covered;
+    }
+
+    if (evidence.observedRejection === DeniedCapabilityProbeOutcome.Skipped) {
+      return EvidenceCoverageStatus.NotApplicable;
+    }
+
+    return EvidenceCoverageStatus.Failed;
+  }
+
+  if (evidence !== undefined && "forbiddenEffectsObserved" in evidence) {
+    return evidence.forbiddenEffectsObserved.length === 0
+      ? EvidenceCoverageStatus.Covered
+      : EvidenceCoverageStatus.Failed;
+  }
+
+  return EvidenceCoverageStatus.Covered;
+};
+
+const selectEvidenceCoverageStatus = (
+  records: readonly EvidenceCoverageRecord[],
+  evaluatedAt: ForbiddenSideEffectTimestamp,
+): EvidenceCoverageStatus => {
+  if (records.length === 0) {
+    return EvidenceCoverageStatus.Missing;
+  }
+
+  const statuses = new Set(
+    records.map((record) =>
+      inferEvidenceCoverageRecordStatus(record, evaluatedAt),
+    ),
+  );
+
+  if (statuses.has(EvidenceCoverageStatus.Failed)) {
+    return EvidenceCoverageStatus.Failed;
+  }
+
+  if (statuses.has(EvidenceCoverageStatus.Covered)) {
+    return EvidenceCoverageStatus.Covered;
+  }
+
+  if (statuses.has(EvidenceCoverageStatus.Invalidated)) {
+    return EvidenceCoverageStatus.Invalidated;
+  }
+
+  if (statuses.has(EvidenceCoverageStatus.Stale)) {
+    return EvidenceCoverageStatus.Stale;
+  }
+
+  if (statuses.has(EvidenceCoverageStatus.NotApplicable)) {
+    return EvidenceCoverageStatus.NotApplicable;
+  }
+
+  return EvidenceCoverageStatus.Missing;
+};
+
+const getEvidenceCoverageReason = (
+  status: EvidenceCoverageStatus,
+): string => {
+  switch (status) {
+    case EvidenceCoverageStatus.Covered:
+      return "required evidence is covered by valid evidence records";
+    case EvidenceCoverageStatus.Missing:
+      return "required evidence is missing";
+    case EvidenceCoverageStatus.Stale:
+      return "required evidence is stale";
+    case EvidenceCoverageStatus.Invalidated:
+      return "required evidence was invalidated";
+    case EvidenceCoverageStatus.Failed:
+      return "required evidence reported a failed safety proof";
+    case EvidenceCoverageStatus.NotApplicable:
+      return "required evidence was marked not applicable";
+  }
+};
+
+const selectEvidenceCoverageObligationStatus = (
+  entries: readonly EvidenceCoverageEntry[],
+): EvidenceCoverageStatus => {
+  if (entries.length === 0) {
+    return EvidenceCoverageStatus.NotApplicable;
+  }
+
+  if (
+    entries.every((entry) => entry.status === EvidenceCoverageStatus.Covered)
+  ) {
+    return EvidenceCoverageStatus.Covered;
+  }
+
+  if (entries.some((entry) => entry.status === EvidenceCoverageStatus.Failed)) {
+    return EvidenceCoverageStatus.Failed;
+  }
+
+  if (
+    entries.some((entry) => entry.status === EvidenceCoverageStatus.Invalidated)
+  ) {
+    return EvidenceCoverageStatus.Invalidated;
+  }
+
+  if (entries.some((entry) => entry.status === EvidenceCoverageStatus.Stale)) {
+    return EvidenceCoverageStatus.Stale;
+  }
+
+  if (entries.some((entry) => entry.status === EvidenceCoverageStatus.Missing)) {
+    return EvidenceCoverageStatus.Missing;
+  }
+
+  return EvidenceCoverageStatus.NotApplicable;
+};
+
+const getLatestDefinedTimestamp = (
+  timestamps: readonly (ForbiddenSideEffectTimestamp | undefined)[],
+): ForbiddenSideEffectTimestamp | undefined => {
+  const definedTimestamps = timestamps.filter(
+    (timestamp): timestamp is ForbiddenSideEffectTimestamp =>
+      timestamp !== undefined,
+  );
+
+  if (definedTimestamps.length === 0) {
+    return undefined;
+  }
+
+  return definedTimestamps.sort().at(-1);
+};
+
+const getEvidenceCoverageMapId = (
+  obligations: readonly ForbiddenEffectObligation[],
+  executorId: string,
+  evaluatedAt: ForbiddenSideEffectTimestamp,
+): EvidenceCoverageMapId => {
+  const obligationKey = obligations
+    .map((obligation) => obligation.obligationId)
+    .sort()
+    .join("+");
+
+  return `coverage-map:${executorId}:${evaluatedAt}:${obligationKey}`;
+};
+
+export const evaluateEvidenceCoverageMap = (
+  obligationsInput: readonly ForbiddenEffectObligation[],
+  evidenceRecordsInput: readonly EvidenceCoverageRecord[],
+  options: EvidenceCoverageEvaluationOptions = {},
+): EvidenceCoverageMap => {
+  const evaluatedAt =
+    options.evaluatedAt ?? evidenceCoverageMapDefaultEvaluatedAt;
+  const executorId = options.executorId ?? "unbound-executor";
+  const obligations = [...obligationsInput].sort((left, right) =>
+    left.obligationId.localeCompare(right.obligationId),
+  );
+  const evidenceRecords = [...evidenceRecordsInput].sort((left, right) => {
+    const leftKey = `${left.obligationId}:${getEvidenceCoverageRecordType(left) ?? ""}:${left.evidenceHash}`;
+    const rightKey = `${right.obligationId}:${getEvidenceCoverageRecordType(right) ?? ""}:${right.evidenceHash}`;
+
+    return leftKey.localeCompare(rightKey);
+  });
+
+  const coverage: EvidenceCoverageEntry[] = [];
+  const coverageObligations = obligations.map((obligation) => {
+    const requiredEvidence = [...obligation.requiredEvidenceTypes]
+      .sort()
+      .map((requiredEvidenceType) => {
+        const matchingRecords = evidenceRecords.filter(
+          (record) =>
+            record.obligationId === obligation.obligationId &&
+            getEvidenceCoverageRecordType(record) === requiredEvidenceType,
+        );
+        const status = selectEvidenceCoverageStatus(
+          matchingRecords,
+          evaluatedAt,
+        );
+        const entry: EvidenceCoverageEntry = {
+          obligationId: obligation.obligationId,
+          requiredEvidenceType,
+          status,
+          covered: !isCoverageStatusFailClosed(status),
+          evidenceHashes: Array.from(
+            new Set(matchingRecords.map((record) => record.evidenceHash)),
+          ).sort(),
+          reason: getEvidenceCoverageReason(status),
+          evaluatedAt,
+        };
+        const completedAt = getLatestDefinedTimestamp(
+          matchingRecords.map(getEvidenceCoverageRecordCompletedAt),
+        );
+        const expiresAt = getLatestDefinedTimestamp(
+          matchingRecords.map((record) => record.expiresAt),
+        );
+        const invalidatedAt = getLatestDefinedTimestamp(
+          matchingRecords.map((record) => record.invalidatedAt),
+        );
+
+        if (completedAt !== undefined) {
+          entry.completedAt = completedAt;
+        }
+
+        if (expiresAt !== undefined) {
+          entry.expiresAt = expiresAt;
+        }
+
+        if (invalidatedAt !== undefined) {
+          entry.invalidatedAt = invalidatedAt;
+        }
+
+        coverage.push(entry);
+
+        return entry;
+      });
+    const status = selectEvidenceCoverageObligationStatus(requiredEvidence);
+
+    return {
+      obligationId: obligation.obligationId,
+      status,
+      covered: !isCoverageStatusFailClosed(status),
+      requiredEvidence,
+    };
+  });
+
+  return {
+    coverageMapId:
+      options.coverageMapId ??
+      getEvidenceCoverageMapId(obligations, executorId, evaluatedAt),
+    executorId,
+    evaluatedAt,
+    coverage,
+    obligations: coverageObligations,
+    allObligationsCovered: coverageObligations.every(
+      (obligation) => obligation.covered,
+    ),
+  };
+};
+
 type SideEffectObservedEventHashPayload = {
   evidenceType: SideEffectEvidenceType;
   target: string;
@@ -2318,6 +2664,7 @@ export const ForbiddenSideEffectDomain = {
   stateMachine: "executor-safety-evidence",
   obligation: "ForbiddenEffectObligation",
   evidencePlan: "EvidencePlan",
+  coverageMap: "EvidenceCoverageMap",
   evidence: ["DeniedCapabilityEvidence", "SideEffectDeltaEvidence"],
   permitExit: "PermitBinding",
 } as const;
