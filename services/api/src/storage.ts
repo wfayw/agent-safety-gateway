@@ -8,6 +8,7 @@ export const LocalStoreName = {
   Scenarios: "scenarios",
   ExecutionLogs: "executionLogs",
   HookDecisions: "hookDecisions",
+  ExecutorSafetyEvidence: "executorSafetyEvidence",
 } as const;
 
 export type LocalStoreName = (typeof LocalStoreName)[keyof typeof LocalStoreName];
@@ -24,6 +25,7 @@ const LOCAL_STORE_FILES = {
   [LocalStoreName.Scenarios]: "scenarios.json",
   [LocalStoreName.ExecutionLogs]: "execution-log.jsonl",
   [LocalStoreName.HookDecisions]: "hook-decisions.jsonl",
+  [LocalStoreName.ExecutorSafetyEvidence]: "executor-safety-evidence.jsonl",
 } as const satisfies Record<LocalStoreName, string>;
 
 const INITIAL_STORE_CONTENT = {
@@ -33,6 +35,7 @@ const INITIAL_STORE_CONTENT = {
   [LocalStoreName.Scenarios]: "[]\n",
   [LocalStoreName.ExecutionLogs]: "",
   [LocalStoreName.HookDecisions]: "",
+  [LocalStoreName.ExecutorSafetyEvidence]: "",
 } as const satisfies Record<LocalStoreName, string>;
 
 type NodeError = Error & { code?: string };
@@ -66,6 +69,10 @@ export const createLocalStorageLayout = (dataDir: string): LocalStorageLayout =>
       [LocalStoreName.HookDecisions]: join(
         absoluteDataDir,
         LOCAL_STORE_FILES[LocalStoreName.HookDecisions],
+      ),
+      [LocalStoreName.ExecutorSafetyEvidence]: join(
+        absoluteDataDir,
+        LOCAL_STORE_FILES[LocalStoreName.ExecutorSafetyEvidence],
       ),
     },
   };
@@ -117,6 +124,10 @@ export const initializeLocalStorage = async (
     createStoreFileIfMissing(
       layout.stores.hookDecisions,
       INITIAL_STORE_CONTENT[LocalStoreName.HookDecisions],
+    ),
+    createStoreFileIfMissing(
+      layout.stores.executorSafetyEvidence,
+      INITIAL_STORE_CONTENT[LocalStoreName.ExecutorSafetyEvidence],
     ),
   ]);
 

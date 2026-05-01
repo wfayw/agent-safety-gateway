@@ -33,6 +33,7 @@ describe("local storage", () => {
       "audits",
       "dependencies",
       "executionLogs",
+      "executorSafetyEvidence",
       "hookDecisions",
       "resources",
       "scenarios",
@@ -43,6 +44,7 @@ describe("local storage", () => {
     assert.equal(await readFile(layout.stores.scenarios, "utf8"), "[]\n");
     assert.equal(await readFile(layout.stores.executionLogs, "utf8"), "");
     assert.equal(await readFile(layout.stores.hookDecisions, "utf8"), "");
+    assert.equal(await readFile(layout.stores.executorSafetyEvidence, "utf8"), "");
   });
 
   it("keeps existing local data when initialization is repeated", async () => {
@@ -54,6 +56,10 @@ describe("local storage", () => {
     await writeFile(layout.stores.audits, '{"auditId":"audit-1"}\n');
     await writeFile(layout.stores.executionLogs, '{"requestId":"req-1"}\n');
     await writeFile(layout.stores.hookDecisions, '{"id":"hook-1"}\n');
+    await writeFile(
+      layout.stores.executorSafetyEvidence,
+      '{"id":"evidence-record-1"}\n',
+    );
 
     await initializeLocalStorage(dataDir);
 
@@ -69,6 +75,10 @@ describe("local storage", () => {
     assert.equal(
       await readFile(layout.stores.hookDecisions, "utf8"),
       '{"id":"hook-1"}\n',
+    );
+    assert.equal(
+      await readFile(layout.stores.executorSafetyEvidence, "utf8"),
+      '{"id":"evidence-record-1"}\n',
     );
   });
 });
