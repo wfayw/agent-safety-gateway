@@ -1,0 +1,773 @@
+{
+  "schema": "agent-safety-gateway.patent.context-retention-scenario.v1",
+  "storyId": "PAG-044",
+  "generatedAt": "2026-05-01T13:40:00.000Z",
+  "scenarios": [
+    {
+      "id": "PAG-044-A",
+      "title": "Missing latest user instruction requires regrounding",
+      "request": {
+        "requestId": "req-pag-044-missing-user-instruction",
+        "toolType": "sql",
+        "environment": "production",
+        "candidate": "DELETE FROM orders WHERE status = 'PENDING'"
+      },
+      "anchors": [
+        {
+          "anchorId": "ctx-pag044-user-instruction-latest-orders",
+          "anchorType": "user_instruction",
+          "sourceIdentity": "user:ops-lead",
+          "authorityLevel": "requester",
+          "resourceScope": "database:orders",
+          "createdAt": "2026-05-01T13:18:00.000Z",
+          "expiresAt": "2026-05-01T13:48:00.000Z",
+          "contentDigest": "sha256:pag044-latest-orders-instruction-verbatim",
+          "semanticClaimsDigest": "sha256:pag044-latest-orders-instruction-claims",
+          "mustBeVerbatim": true,
+          "allowCertifiedSummary": false,
+          "allowRetrievableReference": false,
+          "trustTier": "high"
+        },
+        {
+          "anchorId": "ctx-pag044-sql-policy-production",
+          "anchorType": "system_policy",
+          "sourceIdentity": "policy:sql-production-v3",
+          "authorityLevel": "policy_admin",
+          "resourceScope": "database:orders",
+          "createdAt": "2026-05-01T12:00:00.000Z",
+          "expiresAt": "2026-05-01T16:00:00.000Z",
+          "contentDigest": "sha256:pag044-sql-policy-verbatim",
+          "semanticClaimsDigest": "sha256:pag044-sql-policy-claims",
+          "mustBeVerbatim": false,
+          "allowCertifiedSummary": true,
+          "allowRetrievableReference": true,
+          "trustTier": "high"
+        },
+        {
+          "anchorId": "ctx-pag044-orders-state",
+          "anchorType": "resource_state",
+          "sourceIdentity": "catalog:postgres/orders",
+          "authorityLevel": "catalog",
+          "resourceScope": "database:orders",
+          "createdAt": "2026-05-01T13:20:00.000Z",
+          "expiresAt": "2026-05-01T13:50:00.000Z",
+          "contentDigest": "sha256:pag044-orders-state-verbatim",
+          "semanticClaimsDigest": "sha256:pag044-orders-state-claims",
+          "mustBeVerbatim": false,
+          "allowCertifiedSummary": true,
+          "allowRetrievableReference": true,
+          "trustTier": "high"
+        },
+        {
+          "anchorId": "ctx-pag044-orders-rollback",
+          "anchorType": "retrieved_document",
+          "sourceIdentity": "runbook:orders-rollback",
+          "authorityLevel": "operator_runbook",
+          "resourceScope": "database:orders:rollback",
+          "createdAt": "2026-05-01T13:05:00.000Z",
+          "expiresAt": "2026-05-01T15:05:00.000Z",
+          "contentDigest": "sha256:pag044-orders-rollback-verbatim",
+          "semanticClaimsDigest": "sha256:pag044-orders-rollback-claims",
+          "mustBeVerbatim": false,
+          "allowCertifiedSummary": true,
+          "allowRetrievableReference": true,
+          "trustTier": "medium"
+        }
+      ],
+      "manifest": {
+        "manifestId": "manifest-pag044-missing-user-instruction",
+        "inferenceId": "inference-pag044-missing-user-instruction",
+        "modelId": "deterministic-agent-adapter-v1",
+        "promptDigest": "sha256:pag044-missing-user-instruction-prompt",
+        "contextUnitDigests": [
+          {
+            "contextUnitId": "ctx-pag044-sql-policy-production",
+            "digest": "sha256:pag044-sql-policy-verbatim"
+          },
+          {
+            "contextUnitId": "ctx-pag044-orders-state",
+            "digest": "sha256:pag044-orders-state-verbatim"
+          },
+          {
+            "contextUnitId": "ctx-pag044-orders-rollback",
+            "digest": "sha256:pag044-orders-rollback-verbatim"
+          }
+        ],
+        "contextUnitOrder": [
+          "ctx-pag044-sql-policy-production",
+          "ctx-pag044-orders-state",
+          "ctx-pag044-orders-rollback"
+        ],
+        "tokenPositionRanges": [
+          {
+            "contextUnitId": "ctx-pag044-sql-policy-production",
+            "startToken": 16,
+            "endToken": 44
+          },
+          {
+            "contextUnitId": "ctx-pag044-orders-state",
+            "startToken": 45,
+            "endToken": 73
+          },
+          {
+            "contextUnitId": "ctx-pag044-orders-rollback",
+            "startToken": 74,
+            "endToken": 108
+          }
+        ],
+        "summaryDerivationDigests": [],
+        "retrievalQueryDigest": "sha256:pag044-missing-user-instruction-retrieval-query",
+        "retrievedDocumentDigests": [
+          "sha256:pag044-orders-rollback-verbatim"
+        ],
+        "memorySnapshotDigest": "sha256:pag044-missing-user-instruction-memory",
+        "systemPolicyDigest": "sha256:pag044-sql-policy-verbatim"
+      },
+      "obligations": [
+        {
+          "obligationId": "rco-pag044-missing-user-instruction",
+          "toolCallDigest": "sha256:pag044-sql-delete-tool-call",
+          "actionImpactClass": "database_write",
+          "requiredAnchors": [
+            "ctx-pag044-user-instruction-latest-orders",
+            "ctx-pag044-sql-policy-production",
+            "ctx-pag044-orders-state",
+            "ctx-pag044-orders-rollback"
+          ],
+          "freshnessWindow": "PT30M",
+          "minimumRetentionMode": "verbatim",
+          "conflictPolicy": "deny_on_omitted_conflict",
+          "taintPolicy": "deny_on_untrusted_instruction",
+          "missingAnchorAction": "reground_or_deny"
+        }
+      ],
+      "retentionEvidence": [
+        {
+          "evidenceId": "cre-rco-pag044-missing-user-instruction-ctx-pag044-user-instruction-latest-orders",
+          "obligationId": "rco-pag044-missing-user-instruction",
+          "toolCallDigest": "sha256:pag044-sql-delete-tool-call",
+          "promptAssemblyManifestId": "manifest-pag044-missing-user-instruction",
+          "inferenceId": "inference-pag044-missing-user-instruction",
+          "anchorId": "ctx-pag044-user-instruction-latest-orders",
+          "retentionMode": "missing",
+          "minimumRetentionMode": "verbatim",
+          "coverageScore": 0,
+          "freshnessScore": 1,
+          "trustScore": 1,
+          "conflictEvidence": [],
+          "summaryVerifierResult": "not_applicable",
+          "referenceVerifierResult": "not_applicable",
+          "matchedContextUnitId": null,
+          "matchedDigest": null
+        },
+        {
+          "evidenceId": "cre-rco-pag044-missing-user-instruction-ctx-pag044-sql-policy-production",
+          "obligationId": "rco-pag044-missing-user-instruction",
+          "toolCallDigest": "sha256:pag044-sql-delete-tool-call",
+          "promptAssemblyManifestId": "manifest-pag044-missing-user-instruction",
+          "inferenceId": "inference-pag044-missing-user-instruction",
+          "anchorId": "ctx-pag044-sql-policy-production",
+          "retentionMode": "verbatim",
+          "minimumRetentionMode": "verbatim",
+          "coverageScore": 1,
+          "freshnessScore": 1,
+          "trustScore": 1,
+          "conflictEvidence": [],
+          "summaryVerifierResult": "not_applicable",
+          "referenceVerifierResult": "not_applicable",
+          "matchedContextUnitId": "ctx-pag044-sql-policy-production",
+          "matchedDigest": "sha256:pag044-sql-policy-verbatim"
+        },
+        {
+          "evidenceId": "cre-rco-pag044-missing-user-instruction-ctx-pag044-orders-state",
+          "obligationId": "rco-pag044-missing-user-instruction",
+          "toolCallDigest": "sha256:pag044-sql-delete-tool-call",
+          "promptAssemblyManifestId": "manifest-pag044-missing-user-instruction",
+          "inferenceId": "inference-pag044-missing-user-instruction",
+          "anchorId": "ctx-pag044-orders-state",
+          "retentionMode": "verbatim",
+          "minimumRetentionMode": "verbatim",
+          "coverageScore": 1,
+          "freshnessScore": 1,
+          "trustScore": 1,
+          "conflictEvidence": [],
+          "summaryVerifierResult": "not_applicable",
+          "referenceVerifierResult": "not_applicable",
+          "matchedContextUnitId": "ctx-pag044-orders-state",
+          "matchedDigest": "sha256:pag044-orders-state-verbatim"
+        },
+        {
+          "evidenceId": "cre-rco-pag044-missing-user-instruction-ctx-pag044-orders-rollback",
+          "obligationId": "rco-pag044-missing-user-instruction",
+          "toolCallDigest": "sha256:pag044-sql-delete-tool-call",
+          "promptAssemblyManifestId": "manifest-pag044-missing-user-instruction",
+          "inferenceId": "inference-pag044-missing-user-instruction",
+          "anchorId": "ctx-pag044-orders-rollback",
+          "retentionMode": "verbatim",
+          "minimumRetentionMode": "verbatim",
+          "coverageScore": 1,
+          "freshnessScore": 1,
+          "trustScore": 1,
+          "conflictEvidence": [],
+          "summaryVerifierResult": "not_applicable",
+          "referenceVerifierResult": "not_applicable",
+          "matchedContextUnitId": "ctx-pag044-orders-rollback",
+          "matchedDigest": "sha256:pag044-orders-rollback-verbatim"
+        }
+      ],
+      "state": {
+        "stateId": "css:rco-pag044-missing-user-instruction:RegroundRequired:2026-05-01T13:40:00.000Z",
+        "obligationId": "rco-pag044-missing-user-instruction",
+        "toolCallDigest": "sha256:pag044-sql-delete-tool-call",
+        "promptAssemblyManifestId": "manifest-pag044-missing-user-instruction",
+        "inferenceId": "inference-pag044-missing-user-instruction",
+        "state": "RegroundRequired",
+        "sufficient": false,
+        "evaluatedAt": "2026-05-01T13:40:00.000Z",
+        "requiredAnchorIds": [
+          "ctx-pag044-user-instruction-latest-orders",
+          "ctx-pag044-sql-policy-production",
+          "ctx-pag044-orders-state",
+          "ctx-pag044-orders-rollback"
+        ],
+        "coveredAnchorIds": [
+          "ctx-pag044-sql-policy-production",
+          "ctx-pag044-orders-state",
+          "ctx-pag044-orders-rollback"
+        ],
+        "blockedAnchorIds": [
+          "ctx-pag044-user-instruction-latest-orders"
+        ],
+        "missingAnchorIds": [
+          "ctx-pag044-user-instruction-latest-orders"
+        ],
+        "staleAnchorIds": [],
+        "conflictingAnchorIds": [],
+        "contaminatedAnchorIds": [],
+        "verbatimAnchorIds": [
+          "ctx-pag044-sql-policy-production",
+          "ctx-pag044-orders-state",
+          "ctx-pag044-orders-rollback"
+        ],
+        "certifiedSummaryAnchorIds": [],
+        "retrievableReferenceAnchorIds": [],
+        "transitionReason": "one or more required context anchors are missing and policy allows regrounding"
+      },
+      "decision": {
+        "shouldContinueToPermit": false,
+        "executionDecision": {
+          "type": "rewrite",
+          "code": "context.reground_required",
+          "reason": "Context sufficiency state RegroundRequired: one or more required context anchors are missing and policy allows regrounding.",
+          "recommendedAction": "Reground the agent prompt with the listed required context anchors, regenerate the tool call, and rerun gateway checks before executor safety evidence is evaluated.",
+          "rewrittenRequest": null
+        },
+        "contextAction": {
+          "type": "reground",
+          "nextStep": "regenerate_tool_call_after_regrounding",
+          "missingAnchorIds": [
+            "ctx-pag044-user-instruction-latest-orders"
+          ],
+          "blockedAnchorIds": [
+            "ctx-pag044-user-instruction-latest-orders"
+          ]
+        }
+      }
+    },
+    {
+      "id": "PAG-044-B",
+      "title": "Expired dry-run-only approval requires reapproval",
+      "request": {
+        "requestId": "req-pag-044-expired-dry-run-approval",
+        "toolType": "cicd",
+        "environment": "production",
+        "candidate": "Deploy payment-service 2.0.0 with requiredExecutionMode=dry_run"
+      },
+      "manifest": {
+        "manifestId": "manifest-pag044-expired-dry-run-approval",
+        "inferenceId": "inference-pag044-expired-dry-run-approval",
+        "modelId": "deterministic-agent-adapter-v1",
+        "promptDigest": "sha256:pag044-expired-dry-run-approval-prompt",
+        "contextUnitDigests": [
+          {
+            "contextUnitId": "ctx-pag044-release-user-instruction",
+            "digest": "sha256:pag044-release-user-instruction-verbatim"
+          },
+          {
+            "contextUnitId": "ctx-pag044-test-result-payment-release",
+            "digest": "sha256:pag044-test-result-payment-release-verbatim"
+          },
+          {
+            "contextUnitId": "ctx-pag044-release-policy-production",
+            "digest": "sha256:pag044-release-policy-production-verbatim"
+          },
+          {
+            "contextUnitId": "ctx-pag044-pipeline-state-payment-release",
+            "digest": "sha256:pag044-pipeline-state-payment-release-verbatim"
+          }
+        ],
+        "contextUnitOrder": [
+          "ctx-pag044-release-user-instruction",
+          "ctx-pag044-test-result-payment-release",
+          "ctx-pag044-release-policy-production",
+          "ctx-pag044-pipeline-state-payment-release"
+        ],
+        "tokenPositionRanges": [
+          {
+            "contextUnitId": "ctx-pag044-release-user-instruction",
+            "startToken": 11,
+            "endToken": 25
+          },
+          {
+            "contextUnitId": "ctx-pag044-test-result-payment-release",
+            "startToken": 26,
+            "endToken": 43
+          },
+          {
+            "contextUnitId": "ctx-pag044-release-policy-production",
+            "startToken": 44,
+            "endToken": 68
+          },
+          {
+            "contextUnitId": "ctx-pag044-pipeline-state-payment-release",
+            "startToken": 69,
+            "endToken": 92
+          }
+        ],
+        "summaryDerivationDigests": [],
+        "retrievalQueryDigest": "sha256:pag044-expired-dry-run-approval-retrieval-query",
+        "retrievedDocumentDigests": [],
+        "memorySnapshotDigest": "sha256:pag044-expired-dry-run-approval-memory",
+        "systemPolicyDigest": "sha256:pag044-release-policy-production-verbatim"
+      },
+      "obligations": [
+        {
+          "obligationId": "rco-pag044-expired-dry-run-approval",
+          "toolCallDigest": "sha256:pag044-cicd-dry-run-tool-call",
+          "actionImpactClass": "production_deploy_dry_run",
+          "requiredAnchors": [
+            "ctx-pag044-release-user-instruction",
+            "ctx-pag044-approval-dry-run-only-payment-release",
+            "ctx-pag044-test-result-payment-release",
+            "ctx-pag044-release-policy-production",
+            "ctx-pag044-pipeline-state-payment-release"
+          ],
+          "freshnessWindow": "PT30M",
+          "minimumRetentionMode": "verbatim",
+          "conflictPolicy": "deny_on_omitted_conflict",
+          "taintPolicy": "deny_on_untrusted_instruction",
+          "missingAnchorAction": "reapproval"
+        }
+      ],
+      "retentionEvidence": [
+        {
+          "evidenceId": "cre-rco-pag044-expired-dry-run-approval-ctx-pag044-release-user-instruction",
+          "obligationId": "rco-pag044-expired-dry-run-approval",
+          "toolCallDigest": "sha256:pag044-cicd-dry-run-tool-call",
+          "promptAssemblyManifestId": "manifest-pag044-expired-dry-run-approval",
+          "inferenceId": "inference-pag044-expired-dry-run-approval",
+          "anchorId": "ctx-pag044-release-user-instruction",
+          "retentionMode": "verbatim",
+          "minimumRetentionMode": "verbatim",
+          "coverageScore": 1,
+          "freshnessScore": 1,
+          "trustScore": 1,
+          "conflictEvidence": [],
+          "summaryVerifierResult": "not_applicable",
+          "referenceVerifierResult": "not_applicable",
+          "matchedContextUnitId": "ctx-pag044-release-user-instruction",
+          "matchedDigest": "sha256:pag044-release-user-instruction-verbatim"
+        },
+        {
+          "evidenceId": "cre-rco-pag044-expired-dry-run-approval-ctx-pag044-approval-dry-run-only-payment-release",
+          "obligationId": "rco-pag044-expired-dry-run-approval",
+          "toolCallDigest": "sha256:pag044-cicd-dry-run-tool-call",
+          "promptAssemblyManifestId": "manifest-pag044-expired-dry-run-approval",
+          "inferenceId": "inference-pag044-expired-dry-run-approval",
+          "anchorId": "ctx-pag044-approval-dry-run-only-payment-release",
+          "retentionMode": "missing",
+          "minimumRetentionMode": "verbatim",
+          "coverageScore": 0,
+          "freshnessScore": 0,
+          "trustScore": 1,
+          "conflictEvidence": [],
+          "summaryVerifierResult": "not_applicable",
+          "referenceVerifierResult": "not_applicable",
+          "matchedContextUnitId": null,
+          "matchedDigest": null
+        },
+        {
+          "evidenceId": "cre-rco-pag044-expired-dry-run-approval-ctx-pag044-test-result-payment-release",
+          "obligationId": "rco-pag044-expired-dry-run-approval",
+          "toolCallDigest": "sha256:pag044-cicd-dry-run-tool-call",
+          "promptAssemblyManifestId": "manifest-pag044-expired-dry-run-approval",
+          "inferenceId": "inference-pag044-expired-dry-run-approval",
+          "anchorId": "ctx-pag044-test-result-payment-release",
+          "retentionMode": "verbatim",
+          "minimumRetentionMode": "verbatim",
+          "coverageScore": 1,
+          "freshnessScore": 1,
+          "trustScore": 1,
+          "conflictEvidence": [],
+          "summaryVerifierResult": "not_applicable",
+          "referenceVerifierResult": "not_applicable",
+          "matchedContextUnitId": "ctx-pag044-test-result-payment-release",
+          "matchedDigest": "sha256:pag044-test-result-payment-release-verbatim"
+        },
+        {
+          "evidenceId": "cre-rco-pag044-expired-dry-run-approval-ctx-pag044-release-policy-production",
+          "obligationId": "rco-pag044-expired-dry-run-approval",
+          "toolCallDigest": "sha256:pag044-cicd-dry-run-tool-call",
+          "promptAssemblyManifestId": "manifest-pag044-expired-dry-run-approval",
+          "inferenceId": "inference-pag044-expired-dry-run-approval",
+          "anchorId": "ctx-pag044-release-policy-production",
+          "retentionMode": "verbatim",
+          "minimumRetentionMode": "verbatim",
+          "coverageScore": 1,
+          "freshnessScore": 1,
+          "trustScore": 1,
+          "conflictEvidence": [],
+          "summaryVerifierResult": "not_applicable",
+          "referenceVerifierResult": "not_applicable",
+          "matchedContextUnitId": "ctx-pag044-release-policy-production",
+          "matchedDigest": "sha256:pag044-release-policy-production-verbatim"
+        },
+        {
+          "evidenceId": "cre-rco-pag044-expired-dry-run-approval-ctx-pag044-pipeline-state-payment-release",
+          "obligationId": "rco-pag044-expired-dry-run-approval",
+          "toolCallDigest": "sha256:pag044-cicd-dry-run-tool-call",
+          "promptAssemblyManifestId": "manifest-pag044-expired-dry-run-approval",
+          "inferenceId": "inference-pag044-expired-dry-run-approval",
+          "anchorId": "ctx-pag044-pipeline-state-payment-release",
+          "retentionMode": "verbatim",
+          "minimumRetentionMode": "verbatim",
+          "coverageScore": 1,
+          "freshnessScore": 1,
+          "trustScore": 1,
+          "conflictEvidence": [],
+          "summaryVerifierResult": "not_applicable",
+          "referenceVerifierResult": "not_applicable",
+          "matchedContextUnitId": "ctx-pag044-pipeline-state-payment-release",
+          "matchedDigest": "sha256:pag044-pipeline-state-payment-release-verbatim"
+        }
+      ],
+      "state": {
+        "stateId": "css:rco-pag044-expired-dry-run-approval:ReapprovalRequired:2026-05-01T13:40:00.000Z",
+        "obligationId": "rco-pag044-expired-dry-run-approval",
+        "toolCallDigest": "sha256:pag044-cicd-dry-run-tool-call",
+        "promptAssemblyManifestId": "manifest-pag044-expired-dry-run-approval",
+        "inferenceId": "inference-pag044-expired-dry-run-approval",
+        "state": "ReapprovalRequired",
+        "sufficient": false,
+        "evaluatedAt": "2026-05-01T13:40:00.000Z",
+        "requiredAnchorIds": [
+          "ctx-pag044-release-user-instruction",
+          "ctx-pag044-approval-dry-run-only-payment-release",
+          "ctx-pag044-test-result-payment-release",
+          "ctx-pag044-release-policy-production",
+          "ctx-pag044-pipeline-state-payment-release"
+        ],
+        "coveredAnchorIds": [
+          "ctx-pag044-release-user-instruction",
+          "ctx-pag044-test-result-payment-release",
+          "ctx-pag044-release-policy-production",
+          "ctx-pag044-pipeline-state-payment-release"
+        ],
+        "blockedAnchorIds": [
+          "ctx-pag044-approval-dry-run-only-payment-release"
+        ],
+        "missingAnchorIds": [
+          "ctx-pag044-approval-dry-run-only-payment-release"
+        ],
+        "staleAnchorIds": [],
+        "conflictingAnchorIds": [],
+        "contaminatedAnchorIds": [],
+        "verbatimAnchorIds": [
+          "ctx-pag044-release-user-instruction",
+          "ctx-pag044-test-result-payment-release",
+          "ctx-pag044-release-policy-production",
+          "ctx-pag044-pipeline-state-payment-release"
+        ],
+        "certifiedSummaryAnchorIds": [],
+        "retrievableReferenceAnchorIds": [],
+        "transitionReason": "required approval note is missing verbatim retention and policy requires reapproval"
+      },
+      "decision": {
+        "shouldContinueToPermit": false,
+        "executionDecision": {
+          "type": "require_approval",
+          "code": "context.reapproval_required",
+          "reason": "Context sufficiency state ReapprovalRequired: required approval note is missing verbatim retention and policy requires reapproval.",
+          "recommendedAction": "Create or reference a human approval flow, then regenerate the tool call with the approval note retained verbatim before executor safety checks.",
+          "rewrittenRequest": null
+        },
+        "contextAction": {
+          "type": "reapproval",
+          "nextStep": "request_reapproval_before_regeneration",
+          "approvalFlowRequired": true,
+          "missingAnchorIds": [
+            "ctx-pag044-approval-dry-run-only-payment-release"
+          ]
+        }
+      }
+    },
+    {
+      "id": "PAG-044-C",
+      "title": "Omitted negative evidence causes conflict denial",
+      "request": {
+        "requestId": "req-pag-044-omitted-negative-evidence",
+        "toolType": "config",
+        "environment": "production",
+        "candidate": "Set payment-service production allowManualCapture=true"
+      },
+      "manifest": {
+        "manifestId": "manifest-pag044-omitted-negative-evidence",
+        "inferenceId": "inference-pag044-omitted-negative-evidence",
+        "modelId": "deterministic-agent-adapter-v1",
+        "promptDigest": "sha256:pag044-omitted-negative-evidence-prompt",
+        "contextUnitDigests": [
+          {
+            "contextUnitId": "ctx-pag044-config-user-instruction",
+            "digest": "sha256:pag044-config-user-instruction-verbatim"
+          },
+          {
+            "contextUnitId": "ctx-pag044-config-policy-production",
+            "digest": "sha256:pag044-config-policy-production-verbatim"
+          },
+          {
+            "contextUnitId": "ctx-pag044-config-state-production",
+            "digest": "sha256:pag044-config-state-production-verbatim"
+          },
+          {
+            "contextUnitId": "ctx-pag044-config-rollback-plan",
+            "digest": "sha256:pag044-config-rollback-plan-verbatim"
+          }
+        ],
+        "contextUnitOrder": [
+          "ctx-pag044-config-user-instruction",
+          "ctx-pag044-config-policy-production",
+          "ctx-pag044-config-state-production",
+          "ctx-pag044-config-rollback-plan"
+        ],
+        "tokenPositionRanges": [
+          {
+            "contextUnitId": "ctx-pag044-config-user-instruction",
+            "startToken": 9,
+            "endToken": 22
+          },
+          {
+            "contextUnitId": "ctx-pag044-config-policy-production",
+            "startToken": 23,
+            "endToken": 49
+          },
+          {
+            "contextUnitId": "ctx-pag044-config-state-production",
+            "startToken": 50,
+            "endToken": 76
+          },
+          {
+            "contextUnitId": "ctx-pag044-config-rollback-plan",
+            "startToken": 77,
+            "endToken": 105
+          }
+        ],
+        "summaryDerivationDigests": [],
+        "retrievalQueryDigest": "sha256:pag044-omitted-negative-evidence-retrieval-query",
+        "retrievedDocumentDigests": [
+          "sha256:pag044-config-rollback-plan-verbatim"
+        ],
+        "memorySnapshotDigest": "sha256:pag044-omitted-negative-evidence-memory",
+        "systemPolicyDigest": "sha256:pag044-config-policy-production-verbatim"
+      },
+      "obligations": [
+        {
+          "obligationId": "rco-pag044-omitted-negative-evidence",
+          "toolCallDigest": "sha256:pag044-config-production-tool-call",
+          "actionImpactClass": "production_config_change",
+          "requiredAnchors": [
+            "ctx-pag044-config-user-instruction",
+            "ctx-pag044-config-policy-production",
+            "ctx-pag044-config-state-production",
+            "ctx-pag044-config-rollback-plan",
+            "ctx-pag044-negative-freeze-window"
+          ],
+          "freshnessWindow": "PT30M",
+          "minimumRetentionMode": "verbatim",
+          "conflictPolicy": "deny_on_omitted_conflict",
+          "taintPolicy": "deny_on_untrusted_instruction",
+          "missingAnchorAction": "reapproval"
+        }
+      ],
+      "retentionEvidence": [
+        {
+          "obligationId": "rco-pag044-omitted-negative-evidence",
+          "toolCallDigest": "sha256:pag044-config-production-tool-call",
+          "promptAssemblyManifestId": "manifest-pag044-omitted-negative-evidence",
+          "inferenceId": "inference-pag044-omitted-negative-evidence",
+          "retentionMode": "conflicting",
+          "minimumRetentionMode": "verbatim",
+          "coverageScore": 1,
+          "freshnessScore": 1,
+          "trustScore": 1,
+          "conflictEvidence": [
+            "ctx-pag044-negative-freeze-window"
+          ],
+          "summaryVerifierResult": "not_applicable",
+          "referenceVerifierResult": "not_applicable",
+          "evidenceId": "cre-rco-pag044-omitted-negative-evidence-ctx-pag044-config-user-instruction",
+          "anchorId": "ctx-pag044-config-user-instruction",
+          "matchedContextUnitId": "ctx-pag044-config-user-instruction",
+          "matchedDigest": "sha256:pag044-config-user-instruction-verbatim"
+        },
+        {
+          "obligationId": "rco-pag044-omitted-negative-evidence",
+          "toolCallDigest": "sha256:pag044-config-production-tool-call",
+          "promptAssemblyManifestId": "manifest-pag044-omitted-negative-evidence",
+          "inferenceId": "inference-pag044-omitted-negative-evidence",
+          "retentionMode": "conflicting",
+          "minimumRetentionMode": "verbatim",
+          "coverageScore": 1,
+          "freshnessScore": 1,
+          "trustScore": 1,
+          "conflictEvidence": [
+            "ctx-pag044-negative-freeze-window"
+          ],
+          "summaryVerifierResult": "not_applicable",
+          "referenceVerifierResult": "not_applicable",
+          "evidenceId": "cre-rco-pag044-omitted-negative-evidence-ctx-pag044-config-policy-production",
+          "anchorId": "ctx-pag044-config-policy-production",
+          "matchedContextUnitId": "ctx-pag044-config-policy-production",
+          "matchedDigest": "sha256:pag044-config-policy-production-verbatim"
+        },
+        {
+          "obligationId": "rco-pag044-omitted-negative-evidence",
+          "toolCallDigest": "sha256:pag044-config-production-tool-call",
+          "promptAssemblyManifestId": "manifest-pag044-omitted-negative-evidence",
+          "inferenceId": "inference-pag044-omitted-negative-evidence",
+          "retentionMode": "conflicting",
+          "minimumRetentionMode": "verbatim",
+          "coverageScore": 1,
+          "freshnessScore": 1,
+          "trustScore": 1,
+          "conflictEvidence": [
+            "ctx-pag044-negative-freeze-window"
+          ],
+          "summaryVerifierResult": "not_applicable",
+          "referenceVerifierResult": "not_applicable",
+          "evidenceId": "cre-rco-pag044-omitted-negative-evidence-ctx-pag044-config-state-production",
+          "anchorId": "ctx-pag044-config-state-production",
+          "matchedContextUnitId": "ctx-pag044-config-state-production",
+          "matchedDigest": "sha256:pag044-config-state-production-verbatim"
+        },
+        {
+          "obligationId": "rco-pag044-omitted-negative-evidence",
+          "toolCallDigest": "sha256:pag044-config-production-tool-call",
+          "promptAssemblyManifestId": "manifest-pag044-omitted-negative-evidence",
+          "inferenceId": "inference-pag044-omitted-negative-evidence",
+          "retentionMode": "conflicting",
+          "minimumRetentionMode": "verbatim",
+          "coverageScore": 1,
+          "freshnessScore": 1,
+          "trustScore": 1,
+          "conflictEvidence": [
+            "ctx-pag044-negative-freeze-window"
+          ],
+          "summaryVerifierResult": "not_applicable",
+          "referenceVerifierResult": "not_applicable",
+          "evidenceId": "cre-rco-pag044-omitted-negative-evidence-ctx-pag044-config-rollback-plan",
+          "anchorId": "ctx-pag044-config-rollback-plan",
+          "matchedContextUnitId": "ctx-pag044-config-rollback-plan",
+          "matchedDigest": "sha256:pag044-config-rollback-plan-verbatim"
+        },
+        {
+          "obligationId": "rco-pag044-omitted-negative-evidence",
+          "toolCallDigest": "sha256:pag044-config-production-tool-call",
+          "promptAssemblyManifestId": "manifest-pag044-omitted-negative-evidence",
+          "inferenceId": "inference-pag044-omitted-negative-evidence",
+          "retentionMode": "conflicting",
+          "minimumRetentionMode": "verbatim",
+          "coverageScore": 0,
+          "freshnessScore": 1,
+          "trustScore": 1,
+          "conflictEvidence": [
+            "ctx-pag044-negative-freeze-window"
+          ],
+          "summaryVerifierResult": "not_applicable",
+          "referenceVerifierResult": "not_applicable",
+          "evidenceId": "cre-rco-pag044-omitted-negative-evidence-ctx-pag044-negative-freeze-window",
+          "anchorId": "ctx-pag044-negative-freeze-window",
+          "matchedContextUnitId": null,
+          "matchedDigest": null
+        }
+      ],
+      "state": {
+        "stateId": "css:rco-pag044-omitted-negative-evidence:Conflicting:2026-05-01T13:40:00.000Z",
+        "obligationId": "rco-pag044-omitted-negative-evidence",
+        "toolCallDigest": "sha256:pag044-config-production-tool-call",
+        "promptAssemblyManifestId": "manifest-pag044-omitted-negative-evidence",
+        "inferenceId": "inference-pag044-omitted-negative-evidence",
+        "state": "Conflicting",
+        "sufficient": false,
+        "evaluatedAt": "2026-05-01T13:40:00.000Z",
+        "requiredAnchorIds": [
+          "ctx-pag044-config-user-instruction",
+          "ctx-pag044-config-policy-production",
+          "ctx-pag044-config-state-production",
+          "ctx-pag044-config-rollback-plan",
+          "ctx-pag044-negative-freeze-window"
+        ],
+        "coveredAnchorIds": [],
+        "blockedAnchorIds": [
+          "ctx-pag044-config-user-instruction",
+          "ctx-pag044-config-policy-production",
+          "ctx-pag044-config-state-production",
+          "ctx-pag044-config-rollback-plan",
+          "ctx-pag044-negative-freeze-window"
+        ],
+        "missingAnchorIds": [
+          "ctx-pag044-negative-freeze-window"
+        ],
+        "staleAnchorIds": [],
+        "conflictingAnchorIds": [
+          "ctx-pag044-config-user-instruction",
+          "ctx-pag044-config-policy-production",
+          "ctx-pag044-config-state-production",
+          "ctx-pag044-config-rollback-plan",
+          "ctx-pag044-negative-freeze-window"
+        ],
+        "contaminatedAnchorIds": [],
+        "verbatimAnchorIds": [
+          "ctx-pag044-config-user-instruction",
+          "ctx-pag044-config-policy-production",
+          "ctx-pag044-config-state-production",
+          "ctx-pag044-config-rollback-plan"
+        ],
+        "certifiedSummaryAnchorIds": [],
+        "retrievableReferenceAnchorIds": [],
+        "transitionReason": "one or more required context anchors have conflicting evidence"
+      },
+      "decision": {
+        "shouldContinueToPermit": false,
+        "executionDecision": {
+          "type": "block",
+          "code": "context.conflicting.deny",
+          "reason": "Context sufficiency state Conflicting: one or more required context anchors have conflicting evidence.",
+          "recommendedAction": "Deny the tool call before executor safety checks and resolve the context sufficiency failure before retrying.",
+          "rewrittenRequest": null
+        },
+        "contextAction": {
+          "type": "deny",
+          "nextStep": "deny_before_executor_safety_check",
+          "denialReason": "one or more required context anchors have conflicting evidence",
+          "conflictingAnchorIds": [
+            "ctx-pag044-config-user-instruction",
+            "ctx-pag044-config-policy-production",
+            "ctx-pag044-config-state-production",
+            "ctx-pag044-config-rollback-plan",
+            "ctx-pag044-negative-freeze-window"
+          ]
+        }
+      }
+    }
+  ]
+}

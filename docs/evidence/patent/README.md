@@ -10,10 +10,21 @@
 | CI/CD dry-run | dry-run executor 未触发生产部署、webhook、artifact promotion，并在执行器漂移后使旧证据失效。 | `docs/evidence/patent/PAG-027-cicd-dry-run-drift.md` |
 | Config sandbox | sandbox 配置 executor 拒绝生产命名空间、生产凭据和生产写端点，且只允许 sandbox 版本变化。 | `docs/evidence/patent/PAG-027-config-sandbox.md` |
 
+## PAG-044 同推理上下文锚点保留证明状态机
+
+| 场景 | 证明目标 | 文档 |
+| --- | --- | --- |
+| 缺失最新用户指令 | 生产 SQL 写请求缺少最新用户指令 required anchor 时，在 permit 前进入 `RegroundRequired` 并生成 `context.reground_required`。 | `docs/evidence/patent/PAG-044-missing-user-instruction.md` |
+| Dry-run-only 审批过期 | 生产 CI/CD dry-run 请求缺少新鲜且 verbatim 保留的审批 note 时，进入 `ReapprovalRequired` 并生成 `context.reapproval_required`。 | `docs/evidence/patent/PAG-044-expired-dry-run-approval.md` |
+| 遗漏 negative evidence | 生产配置写请求遗漏冻结窗口反证时，进入 `Conflicting` 并生成 `context.conflicting.deny`。 | `docs/evidence/patent/PAG-044-omitted-negative-evidence.md` |
+
+Fixture JSON：`docs/evidence/patent/fixtures/PAG-044-context-retention-scenarios.json`。
+
 ## 复验命令
 
 ```bash
 PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm --filter @agent-safety-gateway/api exec node --import tsx --test test/sql-negative-capability-fixture-runner.test.ts test/sql-side-effect-snapshot-fixture-runner.test.ts test/cicd-negative-capability-fixture-runner.test.ts test/cicd-side-effect-snapshot-fixture-runner.test.ts test/config-negative-capability-fixture-runner.test.ts test/config-side-effect-snapshot-fixture-runner.test.ts test/executor-drift-invalidation-service.test.ts test/tool-execution-guard.test.ts
+python3 -m json.tool docs/evidence/patent/fixtures/PAG-044-context-retention-scenarios.json >/tmp/pag044-context-retention-scenarios.json
 ```
 
 ## 结论口径
