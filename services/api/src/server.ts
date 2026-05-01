@@ -59,6 +59,7 @@ import {
   createToolExecutionGuard,
   type GuardedExecutionResult,
   type ToolExecutor,
+  type ToolExecutionPermitEvidenceProvider,
 } from "./tool-execution-guard.js";
 
 export type ApiLoggerOption = boolean | { level: ApiLogLevel };
@@ -83,6 +84,7 @@ export type ApiServerOptions = {
     ExternalAuditSinkAdapter,
     "appendControlEvidence" | "health"
   >;
+  permitEvidenceProvider?: ToolExecutionPermitEvidenceProvider;
   auditSinkStrict?: boolean;
   defaultApproverGroup?: string;
 };
@@ -252,6 +254,8 @@ const createGuardedExecutionResponse = <ExecutorResult>(
   executorInvoked: result.executorInvoked,
   executorResult: result.executorResult,
   approvalRequest: result.approvalRequest,
+  permitBinding: result.permitBinding,
+  permitDeniedEvidence: result.permitDeniedEvidence,
   auditSinkResult: result.auditSinkResult,
   analysisResult: result.analysisResult,
 });
@@ -668,6 +672,9 @@ export const buildServer = (options: ApiServerOptions = {}) => {
           : {}),
         ...(options.auditSinkAdapter
           ? { auditSinkAdapter: options.auditSinkAdapter }
+          : {}),
+        ...(options.permitEvidenceProvider
+          ? { permitEvidenceProvider: options.permitEvidenceProvider }
           : {}),
         ...(options.auditSinkStrict === undefined
           ? {}

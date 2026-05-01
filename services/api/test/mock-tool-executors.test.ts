@@ -17,7 +17,10 @@ import { createMockSqlExecutor } from "../src/mock-tool-executors.js";
 import { seedLocalData } from "../src/seed.js";
 import { initializeLocalStorage } from "../src/storage.js";
 import { createDefaultToolCallAnalysisService } from "../src/tool-call-analysis-service.js";
-import { createToolExecutionGuard } from "../src/tool-execution-guard.js";
+import {
+  createToolExecutionGuard,
+  type ToolExecutionPermitEvidenceProvider,
+} from "../src/tool-execution-guard.js";
 
 const tempDirs: string[] = [];
 
@@ -56,6 +59,30 @@ const createAuditIdFactory = () => {
   };
 };
 
+const createCompletePermitEvidenceProvider = (): ToolExecutionPermitEvidenceProvider => ({
+  getEvidenceSnapshot() {
+    return {
+      safetyState: {
+        stateId: "safety-state-mock-executor-sql-readonly",
+        executorId: "executor-mock-sql-readonly",
+        coverageMapId: "coverage-map-mock-sql-readonly",
+        state: "EvidenceComplete",
+        allObligationsCovered: true,
+        evaluatedAt: "2026-04-28T08:10:00.000Z",
+        coveredObligationIds: ["obligation-mock-sql-readonly"],
+        blockedObligationIds: [],
+        blockingStatuses: [],
+        transitionReason: "all required obligations are covered by valid evidence",
+        validUntil: "2026-04-28T08:15:00.000Z",
+        coverageMapHash: "sha256:mock-executor-coverage-map",
+        safetyEvidenceVersion: "sev-mock-executor-001",
+      },
+      deniedEvidenceHash: "sha256:mock-executor-denied-evidence",
+      sideEffectEvidenceHash: "sha256:mock-executor-side-effect-evidence",
+    };
+  },
+});
+
 describe("mock tool executors", () => {
   it("proves blocked calls skip the executor and allowed calls write execution logs", async () => {
     const layout = await initializeLocalStorage(await createTempDataDir());
@@ -68,6 +95,9 @@ describe("mock tool executors", () => {
     });
     const guard = createToolExecutionGuard({
       analysisService,
+      permitEvidenceProvider: createCompletePermitEvidenceProvider(),
+      permitNonceFactory: () => "nonce-mock-executor",
+      now: () => new Date("2026-04-28T08:10:01.000Z"),
       executor: createMockSqlExecutor({
         executionLogRepository,
         scenarioId: SqlScenarioFixtureId.LowRiskReadOrders,

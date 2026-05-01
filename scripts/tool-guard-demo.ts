@@ -19,6 +19,7 @@ import { initializeLocalStorage } from "../services/api/src/storage.js";
 import {
   createToolExecutionGuard,
   type GuardedExecutionResult,
+  type ToolExecutionPermitEvidenceProvider,
 } from "../services/api/src/tool-execution-guard.js";
 import { createDefaultToolCallAnalysisService } from "../services/api/src/tool-call-analysis-service.js";
 
@@ -71,6 +72,30 @@ const createAuditIdFactory = () => {
   };
 };
 
+const createDemoPermitEvidenceProvider = (): ToolExecutionPermitEvidenceProvider => ({
+  getEvidenceSnapshot() {
+    return {
+      safetyState: {
+        stateId: "safety-state-tool-guard-demo-sql-readonly",
+        executorId: "executor-tool-guard-demo-sql-readonly",
+        coverageMapId: "coverage-map-tool-guard-demo-sql-readonly",
+        state: "EvidenceComplete",
+        allObligationsCovered: true,
+        evaluatedAt: "2026-04-28T08:00:00.000Z",
+        coveredObligationIds: ["obligation-tool-guard-demo-readonly"],
+        blockedObligationIds: [],
+        blockingStatuses: [],
+        transitionReason: "all required obligations are covered by valid evidence",
+        validUntil: "2026-04-28T08:05:00.000Z",
+        coverageMapHash: "sha256:tool-guard-demo-coverage-map",
+        safetyEvidenceVersion: "sev-tool-guard-demo-001",
+      },
+      deniedEvidenceHash: "sha256:tool-guard-demo-denied-evidence",
+      sideEffectEvidenceHash: "sha256:tool-guard-demo-side-effect-evidence",
+    };
+  },
+});
+
 export const runToolGuardDemo = async (
   dataDir = process.env.TOOL_GUARD_DEMO_DATA_DIR,
 ): Promise<ToolGuardDemoResult> => {
@@ -89,6 +114,9 @@ export const runToolGuardDemo = async (
     });
     const guard = createToolExecutionGuard<MockToolExecutorResult>({
       analysisService,
+      permitEvidenceProvider: createDemoPermitEvidenceProvider(),
+      permitNonceFactory: () => "nonce-tool-guard-demo",
+      now: () => new Date("2026-04-28T08:00:01.000Z"),
       executor: createMockSqlExecutor({
         executionLogRepository,
         resolveScenarioId: (request) =>

@@ -18,7 +18,10 @@ import { createExecutionLogRepository } from "../src/execution-log-repository.js
 import { seedLocalData } from "../src/seed.js";
 import { initializeLocalStorage, type LocalStorageLayout } from "../src/storage.js";
 import { createDefaultToolCallAnalysisService } from "../src/tool-call-analysis-service.js";
-import { createToolExecutionGuard } from "../src/tool-execution-guard.js";
+import {
+  createToolExecutionGuard,
+  type ToolExecutionPermitEvidenceProvider,
+} from "../src/tool-execution-guard.js";
 
 const dataDirs: string[] = [];
 const testDir = dirname(fileURLToPath(import.meta.url));
@@ -39,6 +42,30 @@ const createSeededLayout = async (): Promise<LocalStorageLayout> => {
   await seedLocalData(layout);
   return layout;
 };
+
+const createCompletePermitEvidenceProvider = (): ToolExecutionPermitEvidenceProvider => ({
+  getEvidenceSnapshot() {
+    return {
+      safetyState: {
+        stateId: "safety-state-rv-002-sql-readonly",
+        executorId: "executor-rv-002-sql-readonly",
+        coverageMapId: "coverage-map-rv-002-sql-readonly",
+        state: "EvidenceComplete",
+        allObligationsCovered: true,
+        evaluatedAt: "2026-04-29T03:10:01.000Z",
+        coveredObligationIds: ["obligation-rv-002-sql-readonly"],
+        blockedObligationIds: [],
+        blockingStatuses: [],
+        transitionReason: "all required obligations are covered by valid evidence",
+        validUntil: "2026-04-29T03:15:00.000Z",
+        coverageMapHash: "sha256:rv-002-coverage-map",
+        safetyEvidenceVersion: "sev-rv-002-001",
+      },
+      deniedEvidenceHash: "sha256:rv-002-denied-evidence",
+      sideEffectEvidenceHash: "sha256:rv-002-side-effect-evidence",
+    };
+  },
+});
 
 afterEach(async () => {
   await Promise.all(
@@ -91,6 +118,9 @@ describe("RV-002 Agent SQL readonly allow validation", () => {
     await executionLogRepository.clearExecutionLogs();
     const guard = createToolExecutionGuard({
       analysisService,
+      permitEvidenceProvider: createCompletePermitEvidenceProvider(),
+      permitNonceFactory: () => "nonce-rv-002-sql-readonly",
+      now: () => new Date("2026-04-29T03:10:02.000Z"),
       executor: async (request, guardedAnalysisResult) => {
         assert.equal(request.toolType, ToolType.Sql);
         assert.equal(

@@ -14,6 +14,16 @@ import {
   type ExecutionDecision,
   type ToolCallRequest,
 } from "@agent-safety-gateway/shared";
+import {
+  EvidenceCoverageStatus,
+  ExecutorSafetyEvidenceStateName,
+  ForbiddenEffectEvidenceType,
+  type EvidenceCoverageEntry,
+  type EvidenceCoverageMap,
+  type ExecutorSafetyEvidenceState,
+  type PermitBinding,
+  type PermitDeniedEvidence,
+} from "@agent-safety-gateway/shared/forbidden-side-effect";
 
 import { runToolGuardDemo } from "../../../scripts/tool-guard-demo.js";
 import { createFileApprovalAdapter } from "../src/approval-adapter.js";
@@ -29,7 +39,11 @@ import type {
   ToolCallAnalysisResult,
   ToolCallAnalysisService,
 } from "../src/tool-call-analysis-service.js";
-import { createToolExecutionGuard } from "../src/tool-execution-guard.js";
+import {
+  createToolExecutionGuard,
+  type ToolExecutionPermitEvidenceSnapshot,
+  type ToolExecutionPermitEvidenceProvider,
+} from "../src/tool-execution-guard.js";
 
 const tempDirs: string[] = [];
 
@@ -37,6 +51,97 @@ const createTempDataDir = async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "asg-tool-guard-approval-"));
   tempDirs.push(tempDir);
   return tempDir;
+};
+
+const permitEvaluatedAt = "2026-04-29T08:09:00.000Z";
+const permitValidUntil = "2026-04-29T08:15:00.000Z";
+const permitExecutorId = "executor-sql-readonly-prod";
+
+const createCoverageEntry = (
+  overrides: Partial<EvidenceCoverageEntry> = {},
+): EvidenceCoverageEntry => ({
+  obligationId: "obligation-tool-guard-write-denial",
+  requiredEvidenceType: ForbiddenEffectEvidenceType.WriteDenial,
+  status: EvidenceCoverageStatus.Covered,
+  covered: true,
+  evidenceHashes: ["sha256:tool-guard-write-denial"],
+  reason: "readonly executor rejected write capability probe",
+  evaluatedAt: permitEvaluatedAt,
+  completedAt: "2026-04-29T08:08:00.000Z",
+  expiresAt: permitValidUntil,
+  ...overrides,
+});
+
+const createCoverageMap = (
+  entries: readonly EvidenceCoverageEntry[],
+): EvidenceCoverageMap => ({
+  coverageMapId: "coverage-map-tool-guard-sql-readonly",
+  executorId: permitExecutorId,
+  evaluatedAt: permitEvaluatedAt,
+  coverage: entries,
+  obligations: entries.map((entry) => ({
+    obligationId: entry.obligationId,
+    status: entry.status,
+    covered: entry.covered,
+    requiredEvidence: [entry],
+  })),
+  allObligationsCovered: entries.every(
+    (entry) => entry.status === EvidenceCoverageStatus.Covered && entry.covered,
+  ),
+});
+
+const createSafetyState = (
+  overrides: Partial<ExecutorSafetyEvidenceState> = {},
+): ExecutorSafetyEvidenceState => ({
+  stateId: "safety-state-tool-guard-sql-readonly",
+  executorId: permitExecutorId,
+  coverageMapId: "coverage-map-tool-guard-sql-readonly",
+  state: ExecutorSafetyEvidenceStateName.EvidenceComplete,
+  allObligationsCovered: true,
+  evaluatedAt: "2026-04-29T08:09:01.000Z",
+  coveredObligationIds: ["obligation-tool-guard-write-denial"],
+  blockedObligationIds: [],
+  blockingStatuses: [],
+  transitionReason: "all required obligations are covered by valid evidence",
+  validUntil: permitValidUntil,
+  coverageMapHash: "sha256:tool-guard-coverage-map",
+  safetyEvidenceVersion: "sev-tool-guard-001",
+  ...overrides,
+});
+
+const createCompletePermitSnapshot = (): ToolExecutionPermitEvidenceSnapshot => ({
+  safetyState: createSafetyState(),
+  coverageMap: createCoverageMap([
+    createCoverageEntry(),
+    createCoverageEntry({
+      obligationId: "obligation-tool-guard-no-row-mutation",
+      requiredEvidenceType: ForbiddenEffectEvidenceType.NoRowMutation,
+      evidenceHashes: ["sha256:tool-guard-no-row-mutation"],
+      reason: "sandbox snapshot observed no row mutation",
+    }),
+  ]),
+  deniedEvidenceHash: "sha256:tool-guard-denied-evidence-aggregate",
+  sideEffectEvidenceHash: "sha256:tool-guard-side-effect-aggregate",
+});
+
+const createPermitEvidenceProvider = (
+  snapshot: ToolExecutionPermitEvidenceSnapshot | null = createCompletePermitSnapshot(),
+) => {
+  const permits: PermitBinding[] = [];
+  const denials: PermitDeniedEvidence[] = [];
+  const provider: ToolExecutionPermitEvidenceProvider = {
+    getEvidenceSnapshot() {
+      return snapshot;
+    },
+    appendPermitBinding({ permitBinding }) {
+      permits.push(permitBinding);
+    },
+    appendPermitDeniedEvidence({ permitDeniedEvidence }) {
+      denials.push(permitDeniedEvidence);
+    },
+  };
+
+  return { provider, permits, denials };
 };
 
 const policyVersion = "local-risk-policy-v1";
@@ -319,9 +424,13 @@ describe("tool execution guard approval control", () => {
     await appendFile(filePath, `${JSON.stringify(approvedRequest)}\n`, "utf8");
 
     let executorCallCount = 0;
+    const permitEvidence = createPermitEvidenceProvider();
     const guard = createToolExecutionGuard({
       analysisService: createApprovalAnalysisService(),
       approvalAdapter,
+      permitEvidenceProvider: permitEvidence.provider,
+      permitNonceFactory: () => "nonce-approved-approval-path",
+      now: () => new Date("2026-04-29T08:10:00.000Z"),
       async executor(request) {
         executorCallCount += 1;
         return { ok: true, requestId: request.id };
@@ -334,6 +443,8 @@ describe("tool execution guard approval control", () => {
     assert.equal(result.executorInvoked, true);
     assert.equal(executorCallCount, 1);
     assert.deepEqual(result.approvalRequest, approvedRequest);
+    assert.equal(result.permitBinding?.nonce, "nonce-approved-approval-path");
+    assert.equal(permitEvidence.permits.length, 1);
     assert.deepEqual(result.executorResult, {
       ok: true,
       requestId: "req-approval-production-deploy",
@@ -341,11 +452,159 @@ describe("tool execution guard approval control", () => {
   });
 });
 
-describe("tool execution guard external audit sink", () => {
-  it("continues local execution when the audit sink is not configured outside strict mode", async () => {
+describe("tool execution guard permit gate", () => {
+  it("issues a PermitBinding before executor invocation when safety evidence is complete", async () => {
+    let executorCallCount = 0;
+    const permitEvidence = createPermitEvidenceProvider();
+    const guard = createToolExecutionGuard({
+      analysisService: createAllowedAnalysisService(),
+      permitEvidenceProvider: permitEvidence.provider,
+      permitNonceFactory: () => "nonce-complete-permit",
+      now: () => new Date("2026-04-29T08:10:00.000Z"),
+      async executor(request) {
+        executorCallCount += 1;
+        return { ok: true, requestId: request.id };
+      },
+    });
+
+    const result = await guard.execute(allowedRequest);
+
+    assert.equal(result.status, "executed");
+    assert.equal(result.executorInvoked, true);
+    assert.equal(executorCallCount, 1);
+    assert.equal(result.permitDeniedEvidence, null);
+    assert.deepEqual(result.permitBinding, {
+      requestHash: result.permitBinding?.requestHash,
+      executorId: permitExecutorId,
+      safetyEvidenceVersion: "sev-tool-guard-001",
+      coverageMapHash: "sha256:tool-guard-coverage-map",
+      deniedEvidenceHash: "sha256:tool-guard-denied-evidence-aggregate",
+      sideEffectEvidenceHash: "sha256:tool-guard-side-effect-aggregate",
+      ttl: 300000,
+      nonce: "nonce-complete-permit",
+    });
+    assert.match(result.permitBinding?.requestHash ?? "", /^sha256:/);
+    assert.deepEqual(permitEvidence.permits, [result.permitBinding]);
+  });
+
+  it("fails closed with PermitDeniedEvidence when no evidence provider is configured", async () => {
     let executorCallCount = 0;
     const guard = createToolExecutionGuard({
       analysisService: createAllowedAnalysisService(),
+      async executor() {
+        executorCallCount += 1;
+        return { ok: true };
+      },
+    });
+
+    const result = await guard.execute(allowedRequest);
+
+    assert.equal(result.status, "blocked");
+    assert.equal(result.executorInvoked, false);
+    assert.equal(result.executorResult, null);
+    assert.equal(executorCallCount, 0);
+    assert.equal(result.permitBinding, null);
+    assert.equal(
+      result.permitDeniedEvidence?.reason,
+      "executor safety evidence provider is not configured",
+    );
+    assert.equal(result.permitDeniedEvidence?.executorId, "unbound-executor");
+    assert.equal(result.permitDeniedEvidence?.permitIssued, false);
+    assert.equal(result.permitDeniedEvidence?.executorInvoked, false);
+  });
+
+  const deniedStateCases = [
+    {
+      name: "missing",
+      state: ExecutorSafetyEvidenceStateName.EvidenceMissing,
+      coverageStatus: EvidenceCoverageStatus.Missing,
+      reason: "no required evidence has been covered",
+    },
+    {
+      name: "partial",
+      state: ExecutorSafetyEvidenceStateName.EvidencePartial,
+      coverageStatus: EvidenceCoverageStatus.Missing,
+      reason:
+        "some required obligations are covered, but at least one required evidence type is incomplete",
+    },
+    {
+      name: "expired",
+      state: ExecutorSafetyEvidenceStateName.EvidenceExpired,
+      coverageStatus: EvidenceCoverageStatus.Stale,
+      reason: "one or more required evidence records are stale or past TTL",
+    },
+    {
+      name: "invalidated",
+      state: ExecutorSafetyEvidenceStateName.EvidenceInvalidated,
+      coverageStatus: EvidenceCoverageStatus.Invalidated,
+      reason: "one or more required evidence records were invalidated",
+    },
+    {
+      name: "failed",
+      state: ExecutorSafetyEvidenceStateName.EvidenceFailed,
+      coverageStatus: EvidenceCoverageStatus.Failed,
+      reason: "one or more required evidence records failed safety proof",
+    },
+  ];
+
+  for (const deniedCase of deniedStateCases) {
+    it(`creates PermitDeniedEvidence and skips executor for ${deniedCase.name} evidence`, async () => {
+      let executorCallCount = 0;
+      const coverageEntry = createCoverageEntry({
+        status: deniedCase.coverageStatus,
+        covered: false,
+        evidenceHashes: ["sha256:tool-guard-denied-state-evidence"],
+        ...(deniedCase.coverageStatus === EvidenceCoverageStatus.Invalidated
+          ? { invalidatedAt: "2026-04-29T08:09:30.000Z" }
+          : {}),
+      });
+      const snapshot = {
+        safetyState: createSafetyState({
+          state: deniedCase.state,
+          allObligationsCovered: false,
+          blockedObligationIds: [coverageEntry.obligationId],
+          blockingStatuses: [deniedCase.coverageStatus],
+          transitionReason: deniedCase.reason,
+          ...(deniedCase.state === ExecutorSafetyEvidenceStateName.EvidenceInvalidated
+            ? { invalidatedBy: "executor drift changed credential" }
+            : {}),
+        }),
+        coverageMap: createCoverageMap([coverageEntry]),
+      } satisfies ToolExecutionPermitEvidenceSnapshot;
+      const permitEvidence = createPermitEvidenceProvider(snapshot);
+      const guard = createToolExecutionGuard({
+        analysisService: createAllowedAnalysisService(),
+        permitEvidenceProvider: permitEvidence.provider,
+        now: () => new Date("2026-04-29T08:10:00.000Z"),
+        async executor() {
+          executorCallCount += 1;
+          return { ok: true };
+        },
+      });
+
+      const result = await guard.execute(allowedRequest);
+
+      assert.equal(result.status, "blocked");
+      assert.equal(result.executorInvoked, false);
+      assert.equal(executorCallCount, 0);
+      assert.equal(result.permitBinding, null);
+      assert.equal(result.permitDeniedEvidence?.executorId, permitExecutorId);
+      assert.deepEqual(result.permitDeniedEvidence?.missingEvidence, [
+        ForbiddenEffectEvidenceType.WriteDenial,
+      ]);
+      assert.deepEqual(permitEvidence.denials, [result.permitDeniedEvidence]);
+    });
+  }
+});
+
+describe("tool execution guard external audit sink", () => {
+  it("continues local execution when the audit sink is not configured outside strict mode", async () => {
+    let executorCallCount = 0;
+    const permitEvidence = createPermitEvidenceProvider();
+    const guard = createToolExecutionGuard({
+      analysisService: createAllowedAnalysisService(),
+      permitEvidenceProvider: permitEvidence.provider,
+      permitNonceFactory: () => "nonce-audit-not-configured-path",
       async executor(request) {
         executorCallCount += 1;
         return { ok: true, requestId: request.id };
@@ -358,6 +617,8 @@ describe("tool execution guard external audit sink", () => {
     assert.equal(result.status, "executed");
     assert.equal(result.executorInvoked, true);
     assert.equal(executorCallCount, 1);
+    assert.equal(result.permitBinding?.executorId, permitExecutorId);
+    assert.equal(permitEvidence.permits.length, 1);
     assert.deepEqual(result.executorResult, {
       ok: true,
       requestId: "req-sql-readonly-orders",
@@ -373,9 +634,12 @@ describe("tool execution guard external audit sink", () => {
       sinkName: "company-audit-log-sandbox",
       now: () => new Date("2026-04-29T08:10:03.000Z"),
     });
+    const permitEvidence = createPermitEvidenceProvider();
     const guard = createToolExecutionGuard({
       analysisService: createAllowedAnalysisService(),
       auditSinkAdapter,
+      permitEvidenceProvider: permitEvidence.provider,
+      permitNonceFactory: () => "nonce-external-audit-path",
       async executor(request) {
         return { ok: true, requestId: request.id, rowCount: 10 };
       },
@@ -386,6 +650,8 @@ describe("tool execution guard external audit sink", () => {
     const records = await readExternalAuditSinkRecords(filePath);
 
     assert.equal(result.status, "executed");
+    assert.equal(result.permitBinding?.nonce, "nonce-external-audit-path");
+    assert.equal(permitEvidence.permits.length, 1);
     assert.deepEqual(result.auditSinkResult, {
       ok: true,
       status: "appended",
