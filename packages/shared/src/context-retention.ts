@@ -257,6 +257,90 @@ export type SqlRequiredContextObligationCompilation =
     requiredAnchorRoles: readonly SqlRequiredContextAnchorRequirement[];
   };
 
+export const CiCdRequiredContextOperation = {
+  Deploy: "deploy",
+  Release: "release",
+  Promote: "promote",
+  Rollback: "rollback",
+  Unknown: "unknown",
+} as const;
+
+export type CiCdRequiredContextOperation =
+  (typeof CiCdRequiredContextOperation)[keyof typeof CiCdRequiredContextOperation];
+
+export const CiCdRequiredContextTestStatus = {
+  Passed: "passed",
+  Failed: "failed",
+  Unknown: "unknown",
+  Missing: "missing",
+} as const;
+
+export type CiCdRequiredContextTestStatus =
+  (typeof CiCdRequiredContextTestStatus)[keyof typeof CiCdRequiredContextTestStatus];
+
+export const CiCdRequiredContextObligationKind = {
+  ProductionDeployContext: "production_deploy_context",
+  DryRunDeployContext: "dry_run_deploy_context",
+  UncertainDeployContext: "uncertain_deploy_context",
+} as const;
+
+export type CiCdRequiredContextObligationKind =
+  (typeof CiCdRequiredContextObligationKind)[keyof typeof CiCdRequiredContextObligationKind];
+
+export const CiCdRequiredContextAnchorRole = {
+  LatestUserInstruction: "latest_user_instruction",
+  ApprovalNote: "approval_note",
+  TestResult: "test_result",
+  ReleasePolicy: "release_policy",
+  PipelineState: "pipeline_state",
+  NegativeTestEvidence: "negative_test_evidence",
+} as const;
+
+export type CiCdRequiredContextAnchorRole =
+  (typeof CiCdRequiredContextAnchorRole)[keyof typeof CiCdRequiredContextAnchorRole];
+
+export type CiCdRequiredContextToolCallCandidate = {
+  operation?: string;
+  service?: string;
+  pipeline?: string;
+  version?: string;
+  requestId?: string;
+  environment?: string;
+  targetEnvironment?: string;
+  requiredExecutionMode?: string;
+  dryRun?: boolean;
+  testStatus?: string;
+  resourceScope?: readonly string[];
+};
+
+export type CiCdRequiredContextObligationCompilerInput =
+  CiCdRequiredContextToolCallCandidate & {
+    toolCallDigest: PatentProofHash;
+    availableAnchors: readonly ContextAnchor[];
+    actionImpactClass?: ActionImpactClassId;
+  };
+
+export type CiCdRequiredContextAnchorRequirement = {
+  role: CiCdRequiredContextAnchorRole;
+  anchorId: ContextAnchorId;
+  anchorType: ContextAnchorType;
+  resourceScope: string;
+  minimumRetentionMode: RequiredContextMinimumRetentionMode;
+};
+
+export type CiCdRequiredContextObligationCompilation =
+  RequiredContextObligationCompilation & {
+    operation: CiCdRequiredContextOperation;
+    resourceScope: readonly string[];
+    targetEnvironment: string;
+    dryRun: boolean;
+    testStatus: CiCdRequiredContextTestStatus;
+    obligationKind: CiCdRequiredContextObligationKind;
+    requiresNegativeEvidenceAnchors: boolean;
+    dryRunOnlyApproval: boolean;
+    requiredAnchorRoles: readonly CiCdRequiredContextAnchorRequirement[];
+  };
+
 export type PromptContextUnitDigest = {
   contextUnitId: ContextAnchorId;
   digest: PatentProofHash;
@@ -1436,6 +1520,678 @@ export const SqlRequiredContextObligationCompiler: ToolSpecificRequiredContextOb
       }
 
       return compileSqlRequiredContextObligations(compilerInput);
+    },
+  };
+
+const CiCdRequiredContextUnresolvedResourceScope = "unresolved_cicd_release";
+
+const cicdRequiredContextOperationByKeyword: Record<
+  string,
+  CiCdRequiredContextOperation
+> = {
+  deploy: CiCdRequiredContextOperation.Deploy,
+  deployment: CiCdRequiredContextOperation.Deploy,
+  release: CiCdRequiredContextOperation.Release,
+  promote: CiCdRequiredContextOperation.Promote,
+  promotion: CiCdRequiredContextOperation.Promote,
+  rollback: CiCdRequiredContextOperation.Rollback,
+};
+
+const cicdRequiredContextProductionOperations =
+  new Set<CiCdRequiredContextOperation>([
+    CiCdRequiredContextOperation.Deploy,
+    CiCdRequiredContextOperation.Release,
+    CiCdRequiredContextOperation.Promote,
+    CiCdRequiredContextOperation.Rollback,
+  ]);
+
+const normalizeCiCdRequiredContextKeyword = (
+  value: string | undefined,
+): string =>
+  (value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+const normalizeCiCdRequiredContextScopeValue = (value: string): string =>
+  value.trim().replace(/\s+/g, " ");
+
+const uniqueCiCdRequiredContextStrings = (
+  values: readonly string[],
+): string[] => {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  values.forEach((value) => {
+    if (!seen.has(value)) {
+      seen.add(value);
+      result.push(value);
+    }
+  });
+
+  return result;
+};
+
+const getCiCdRequiredContextOperation = (
+  input: CiCdRequiredContextToolCallCandidate,
+): CiCdRequiredContextOperation => {
+  const normalizedOperation = normalizeCiCdRequiredContextKeyword(input.operation);
+
+  if (normalizedOperation.length > 0) {
+    return (
+      cicdRequiredContextOperationByKeyword[normalizedOperation] ??
+      CiCdRequiredContextOperation.Unknown
+    );
+  }
+
+  const normalizedExecutionMode = normalizeCiCdRequiredContextKeyword(
+    input.requiredExecutionMode,
+  );
+
+  if (
+    normalizedExecutionMode.includes("deploy") ||
+    normalizedExecutionMode.includes("deployment")
+  ) {
+    return CiCdRequiredContextOperation.Deploy;
+  }
+
+  if (normalizedExecutionMode.includes("release")) {
+    return CiCdRequiredContextOperation.Release;
+  }
+
+  if (normalizedExecutionMode.includes("promote")) {
+    return CiCdRequiredContextOperation.Promote;
+  }
+
+  if (normalizedExecutionMode.includes("rollback")) {
+    return CiCdRequiredContextOperation.Rollback;
+  }
+
+  return CiCdRequiredContextOperation.Unknown;
+};
+
+const getCiCdRequiredContextTestStatus = (
+  testStatus: string | undefined,
+): CiCdRequiredContextTestStatus => {
+  const normalizedStatus = normalizeCiCdRequiredContextKeyword(testStatus);
+
+  if (normalizedStatus.length === 0) {
+    return CiCdRequiredContextTestStatus.Missing;
+  }
+
+  if (["pass", "passed", "success", "succeeded"].includes(normalizedStatus)) {
+    return CiCdRequiredContextTestStatus.Passed;
+  }
+
+  if (
+    ["fail", "failed", "failure", "errored", "error"].includes(
+      normalizedStatus,
+    )
+  ) {
+    return CiCdRequiredContextTestStatus.Failed;
+  }
+
+  return CiCdRequiredContextTestStatus.Unknown;
+};
+
+const isCiCdRequiredContextDryRun = (
+  input: CiCdRequiredContextToolCallCandidate,
+): boolean => {
+  if (input.dryRun !== undefined) {
+    return input.dryRun;
+  }
+
+  const normalizedExecutionMode = normalizeCiCdRequiredContextKeyword(
+    input.requiredExecutionMode,
+  );
+
+  return (
+    normalizedExecutionMode.includes("dry_run") ||
+    normalizedExecutionMode.includes("dryrun")
+  );
+};
+
+const getCiCdRequiredContextTargetEnvironment = (
+  input: CiCdRequiredContextToolCallCandidate,
+): string => {
+  const targetEnvironment =
+    normalizeCiCdRequiredContextKeyword(input.targetEnvironment) ||
+    normalizeCiCdRequiredContextKeyword(input.environment);
+
+  return targetEnvironment || "production";
+};
+
+const getCiCdRequiredContextResourceScope = (
+  input: CiCdRequiredContextToolCallCandidate,
+  targetEnvironment: string,
+): string[] => {
+  const explicitResourceScope = uniqueCiCdRequiredContextStrings(
+    (input.resourceScope ?? [])
+      .map(normalizeCiCdRequiredContextScopeValue)
+      .filter((value) => value.length > 0),
+  );
+
+  if (explicitResourceScope.length > 0) {
+    return explicitResourceScope;
+  }
+
+  const inferredResourceScope = uniqueCiCdRequiredContextStrings(
+    [input.service, input.pipeline, targetEnvironment]
+      .filter((value): value is string => value !== undefined)
+      .map(normalizeCiCdRequiredContextScopeValue)
+      .filter((value) => value.length > 0),
+  );
+
+  return inferredResourceScope.length > 0
+    ? inferredResourceScope
+    : [CiCdRequiredContextUnresolvedResourceScope];
+};
+
+const toCiCdRequiredContextSlug = (value: string): string =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 72) || "unknown";
+
+const normalizeCiCdRequiredContextMatchValue = (value: string): string =>
+  value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+const isCiCdRequiredContextWildcardScope = (scope: string): boolean =>
+  scope === "*" ||
+  scope.endsWith(":*") ||
+  scope.endsWith("/*") ||
+  scope.includes("all_cicd") ||
+  scope.includes("all-cicd") ||
+  scope.includes("all_pipelines") ||
+  scope.includes("all-pipelines");
+
+const doesCiCdRequiredContextAnchorMatchResource = (
+  anchor: ContextAnchor,
+  resourceScope: string,
+): boolean => {
+  const anchorScope = normalizeCiCdRequiredContextMatchValue(anchor.resourceScope);
+  const resource = normalizeCiCdRequiredContextMatchValue(resourceScope);
+
+  if (resource.length === 0) {
+    return false;
+  }
+
+  if (anchorScope === resource || isCiCdRequiredContextWildcardScope(anchorScope)) {
+    return true;
+  }
+
+  const resourceTokens = resource.split(/\s+/).filter(Boolean);
+  const anchorTokens = anchorScope.split(/\s+/).filter(Boolean);
+
+  return resourceTokens.some((token) => anchorTokens.includes(token));
+};
+
+const doesCiCdRequiredContextAnchorMatchAnyResource = (
+  anchor: ContextAnchor,
+  resourceScope: readonly string[],
+): boolean =>
+  resourceScope.some((resource) =>
+    doesCiCdRequiredContextAnchorMatchResource(anchor, resource),
+  );
+
+const isCiCdRequiredContextGlobalAnchor = (anchor: ContextAnchor): boolean => {
+  const scope = normalizeCiCdRequiredContextMatchValue(anchor.resourceScope);
+
+  return (
+    isCiCdRequiredContextWildcardScope(scope) ||
+    scope.includes("tool call") ||
+    scope.includes("request") ||
+    scope.includes("cicd") ||
+    scope.includes("ci cd") ||
+    scope.includes("deployment") ||
+    scope.includes("release")
+  );
+};
+
+const getCiCdRequiredContextAnchorSearchText = (
+  anchor: ContextAnchor,
+): string =>
+  [
+    anchor.anchorId,
+    anchor.anchorType,
+    anchor.sourceIdentity,
+    anchor.authorityLevel,
+    anchor.resourceScope,
+  ]
+    .join(" ")
+    .toLowerCase();
+
+const chooseLatestCiCdRequiredContextAnchor = (
+  availableAnchors: readonly ContextAnchor[],
+  predicate: (anchor: ContextAnchor) => boolean,
+): ContextAnchor | undefined => {
+  const matchingAnchors = availableAnchors.filter(predicate).sort((left, right) => {
+    const rightTime = Date.parse(right.createdAt);
+    const leftTime = Date.parse(left.createdAt);
+    const timeDelta =
+      (Number.isNaN(rightTime) ? 0 : rightTime) -
+      (Number.isNaN(leftTime) ? 0 : leftTime);
+
+    if (timeDelta !== 0) {
+      return timeDelta;
+    }
+
+    return left.anchorId.localeCompare(right.anchorId);
+  });
+
+  return matchingAnchors[0];
+};
+
+const createCiCdRequiredContextFallbackAnchorId = (
+  input: CiCdRequiredContextObligationCompilerInput,
+  role: CiCdRequiredContextAnchorRole,
+  resourceScope: string,
+): ContextAnchorId => {
+  const requestKey = input.requestId ?? input.toolCallDigest;
+
+  return `ctx-required-cicd-${toCiCdRequiredContextSlug(
+    requestKey,
+  )}-${role}-${toCiCdRequiredContextSlug(resourceScope)}`;
+};
+
+type CiCdRequiredContextAnchorRequirementOptions = {
+  input: CiCdRequiredContextObligationCompilerInput;
+  role: CiCdRequiredContextAnchorRole;
+  anchorType: ContextAnchorType;
+  resourceScope: string;
+  minimumRetentionMode: RequiredContextMinimumRetentionMode;
+  predicate: (anchor: ContextAnchor) => boolean;
+};
+
+const createCiCdRequiredContextAnchorRequirement = ({
+  input,
+  role,
+  anchorType,
+  resourceScope,
+  minimumRetentionMode,
+  predicate,
+}: CiCdRequiredContextAnchorRequirementOptions): CiCdRequiredContextAnchorRequirement => {
+  const anchor = chooseLatestCiCdRequiredContextAnchor(
+    input.availableAnchors,
+    predicate,
+  );
+
+  return {
+    role,
+    anchorId:
+      anchor?.anchorId ??
+      createCiCdRequiredContextFallbackAnchorId(input, role, resourceScope),
+    anchorType,
+    resourceScope,
+    minimumRetentionMode,
+  };
+};
+
+const isCiCdRequiredContextUserInstructionAnchor = (
+  anchor: ContextAnchor,
+  resourceScope: readonly string[],
+): boolean =>
+  anchor.anchorType === ContextAnchorType.UserInstruction &&
+  (doesCiCdRequiredContextAnchorMatchAnyResource(anchor, resourceScope) ||
+    isCiCdRequiredContextGlobalAnchor(anchor));
+
+const isCiCdRequiredContextApprovalAnchor = (
+  anchor: ContextAnchor,
+  resourceScope: readonly string[],
+): boolean =>
+  anchor.anchorType === ContextAnchorType.ApprovalNote &&
+  (doesCiCdRequiredContextAnchorMatchAnyResource(anchor, resourceScope) ||
+    isCiCdRequiredContextGlobalAnchor(anchor));
+
+const isCiCdRequiredContextTestResultAnchor = (
+  anchor: ContextAnchor,
+  resourceScope: readonly string[],
+): boolean => {
+  const searchText = getCiCdRequiredContextAnchorSearchText(anchor);
+
+  return (
+    anchor.anchorType === ContextAnchorType.ToolResult &&
+    (searchText.includes("test") || searchText.includes("ci")) &&
+    (doesCiCdRequiredContextAnchorMatchAnyResource(anchor, resourceScope) ||
+      isCiCdRequiredContextGlobalAnchor(anchor))
+  );
+};
+
+const isCiCdRequiredContextReleasePolicyAnchor = (
+  anchor: ContextAnchor,
+  resourceScope: readonly string[],
+): boolean => {
+  const searchText = getCiCdRequiredContextAnchorSearchText(anchor);
+
+  return (
+    anchor.anchorType === ContextAnchorType.SystemPolicy &&
+    (searchText.includes("release") ||
+      searchText.includes("deploy") ||
+      searchText.includes("pipeline") ||
+      searchText.includes("cicd") ||
+      searchText.includes("ci/cd")) &&
+    (doesCiCdRequiredContextAnchorMatchAnyResource(anchor, resourceScope) ||
+      isCiCdRequiredContextGlobalAnchor(anchor))
+  );
+};
+
+const isCiCdRequiredContextPipelineStateAnchor = (
+  anchor: ContextAnchor,
+  resourceScope: readonly string[],
+): boolean => {
+  const searchText = getCiCdRequiredContextAnchorSearchText(anchor);
+
+  return (
+    anchor.anchorType === ContextAnchorType.ResourceState &&
+    (searchText.includes("pipeline") ||
+      searchText.includes("release") ||
+      searchText.includes("deploy")) &&
+    (doesCiCdRequiredContextAnchorMatchAnyResource(anchor, resourceScope) ||
+      isCiCdRequiredContextGlobalAnchor(anchor))
+  );
+};
+
+const isCiCdRequiredContextNegativeTestEvidenceAnchor = (
+  anchor: ContextAnchor,
+  resourceScope: readonly string[],
+): boolean => {
+  const searchText = getCiCdRequiredContextAnchorSearchText(anchor);
+
+  return (
+    anchor.anchorType === ContextAnchorType.NegativeEvidence &&
+    (searchText.includes("test") ||
+      searchText.includes("failed") ||
+      searchText.includes("missing") ||
+      searchText.includes("unverified")) &&
+    (doesCiCdRequiredContextAnchorMatchAnyResource(anchor, resourceScope) ||
+      isCiCdRequiredContextGlobalAnchor(anchor))
+  );
+};
+
+const isCiCdRequiredContextDryRunOnlyApprovalAnchor = (
+  anchor: ContextAnchor,
+  resourceScope: readonly string[],
+): boolean => {
+  if (!isCiCdRequiredContextApprovalAnchor(anchor, resourceScope)) {
+    return false;
+  }
+
+  const searchText = getCiCdRequiredContextAnchorSearchText(anchor);
+  const mentionsDryRun =
+    searchText.includes("dry-run") ||
+    searchText.includes("dry_run") ||
+    searchText.includes("dry run") ||
+    searchText.includes("dryrun");
+  const constrainsProduction =
+    searchText.includes("only") ||
+    searchText.includes("no production") ||
+    searchText.includes("not production") ||
+    searchText.includes("without production") ||
+    searchText.includes("deny production") ||
+    searchText.includes("禁止 production");
+
+  return mentionsDryRun && constrainsProduction;
+};
+
+const shouldCiCdRequiredContextRequireNegativeEvidence = (
+  testStatus: CiCdRequiredContextTestStatus,
+): boolean =>
+  testStatus === CiCdRequiredContextTestStatus.Failed ||
+  testStatus === CiCdRequiredContextTestStatus.Missing;
+
+const getCiCdRequiredContextObligationKind = (
+  operation: CiCdRequiredContextOperation,
+  targetEnvironment: string,
+  dryRun: boolean,
+): CiCdRequiredContextObligationKind => {
+  const isProductionRelease =
+    targetEnvironment === "production" &&
+    cicdRequiredContextProductionOperations.has(operation);
+
+  if (!isProductionRelease) {
+    return CiCdRequiredContextObligationKind.UncertainDeployContext;
+  }
+
+  return dryRun
+    ? CiCdRequiredContextObligationKind.DryRunDeployContext
+    : CiCdRequiredContextObligationKind.ProductionDeployContext;
+};
+
+const buildCiCdRequiredContextAnchorRequirements = (
+  input: CiCdRequiredContextObligationCompilerInput,
+  resourceScope: readonly string[],
+  testStatus: CiCdRequiredContextTestStatus,
+): CiCdRequiredContextAnchorRequirement[] => {
+  const requirements: CiCdRequiredContextAnchorRequirement[] = [
+    createCiCdRequiredContextAnchorRequirement({
+      input,
+      role: CiCdRequiredContextAnchorRole.LatestUserInstruction,
+      anchorType: ContextAnchorType.UserInstruction,
+      resourceScope: "tool_call",
+      minimumRetentionMode: ContextRetentionMode.Verbatim,
+      predicate: (anchor) =>
+        isCiCdRequiredContextUserInstructionAnchor(anchor, resourceScope),
+    }),
+    createCiCdRequiredContextAnchorRequirement({
+      input,
+      role: CiCdRequiredContextAnchorRole.ApprovalNote,
+      anchorType: ContextAnchorType.ApprovalNote,
+      resourceScope: "approval_note",
+      minimumRetentionMode: ContextRetentionMode.Verbatim,
+      predicate: (anchor) =>
+        isCiCdRequiredContextApprovalAnchor(anchor, resourceScope),
+    }),
+    createCiCdRequiredContextAnchorRequirement({
+      input,
+      role: CiCdRequiredContextAnchorRole.TestResult,
+      anchorType: ContextAnchorType.ToolResult,
+      resourceScope: "test_result",
+      minimumRetentionMode: ContextRetentionMode.CertifiedSummary,
+      predicate: (anchor) =>
+        isCiCdRequiredContextTestResultAnchor(anchor, resourceScope),
+    }),
+    createCiCdRequiredContextAnchorRequirement({
+      input,
+      role: CiCdRequiredContextAnchorRole.ReleasePolicy,
+      anchorType: ContextAnchorType.SystemPolicy,
+      resourceScope: "release_policy",
+      minimumRetentionMode: ContextRetentionMode.CertifiedSummary,
+      predicate: (anchor) =>
+        isCiCdRequiredContextReleasePolicyAnchor(anchor, resourceScope),
+    }),
+    createCiCdRequiredContextAnchorRequirement({
+      input,
+      role: CiCdRequiredContextAnchorRole.PipelineState,
+      anchorType: ContextAnchorType.ResourceState,
+      resourceScope: "pipeline_state",
+      minimumRetentionMode: ContextRetentionMode.CertifiedSummary,
+      predicate: (anchor) =>
+        isCiCdRequiredContextPipelineStateAnchor(anchor, resourceScope),
+    }),
+  ];
+
+  if (shouldCiCdRequiredContextRequireNegativeEvidence(testStatus)) {
+    requirements.push(
+      createCiCdRequiredContextAnchorRequirement({
+        input,
+        role: CiCdRequiredContextAnchorRole.NegativeTestEvidence,
+        anchorType: ContextAnchorType.NegativeEvidence,
+        resourceScope: "test_result",
+        minimumRetentionMode: ContextRetentionMode.CertifiedSummary,
+        predicate: (anchor) =>
+          isCiCdRequiredContextNegativeTestEvidenceAnchor(anchor, resourceScope),
+      }),
+    );
+  }
+
+  return requirements;
+};
+
+const uniqueCiCdRequiredContextAnchorIds = (
+  requirements: readonly CiCdRequiredContextAnchorRequirement[],
+): ContextAnchorId[] =>
+  uniqueCiCdRequiredContextStrings(requirements.map((r) => r.anchorId));
+
+const getCiCdRequiredContextActionImpactClass = (
+  input: CiCdRequiredContextObligationCompilerInput,
+  obligationKind: CiCdRequiredContextObligationKind,
+): ActionImpactClassId => {
+  if (input.actionImpactClass !== undefined) {
+    return input.actionImpactClass;
+  }
+
+  if (
+    obligationKind === CiCdRequiredContextObligationKind.ProductionDeployContext
+  ) {
+    return "production_deploy";
+  }
+
+  if (obligationKind === CiCdRequiredContextObligationKind.DryRunDeployContext) {
+    return "production_deploy_dry_run";
+  }
+
+  return "cicd_uncertain";
+};
+
+const getCiCdRequiredContextFreshnessWindow = (
+  obligationKind: CiCdRequiredContextObligationKind,
+): RequiredContextFreshnessWindow =>
+  obligationKind === CiCdRequiredContextObligationKind.UncertainDeployContext
+    ? "PT15M"
+    : "PT30M";
+
+const getCiCdRequiredContextMissingAnchorAction = (
+  obligationKind: CiCdRequiredContextObligationKind,
+): RequiredContextMissingAnchorAction =>
+  obligationKind === CiCdRequiredContextObligationKind.UncertainDeployContext
+    ? RequiredContextMissingAnchorAction.Deny
+    : RequiredContextMissingAnchorAction.RegroundOrDeny;
+
+export const compileCiCdRequiredContextObligations = (
+  input: CiCdRequiredContextObligationCompilerInput,
+): CiCdRequiredContextObligationCompilation => {
+  const operation = getCiCdRequiredContextOperation(input);
+  const targetEnvironment = getCiCdRequiredContextTargetEnvironment(input);
+  const dryRun = isCiCdRequiredContextDryRun(input);
+  const testStatus = getCiCdRequiredContextTestStatus(input.testStatus);
+  const resourceScope = getCiCdRequiredContextResourceScope(
+    input,
+    targetEnvironment,
+  );
+  const obligationKind = getCiCdRequiredContextObligationKind(
+    operation,
+    targetEnvironment,
+    dryRun,
+  );
+  const requiredAnchorRoles = buildCiCdRequiredContextAnchorRequirements(
+    input,
+    resourceScope,
+    testStatus,
+  );
+  const requiredAnchors = uniqueCiCdRequiredContextAnchorIds(requiredAnchorRoles);
+  const requestKey = input.requestId ?? input.toolCallDigest;
+  const actionImpactClass = getCiCdRequiredContextActionImpactClass(
+    input,
+    obligationKind,
+  );
+  const dryRunOnlyApproval = input.availableAnchors.some((anchor) =>
+    isCiCdRequiredContextDryRunOnlyApprovalAnchor(anchor, resourceScope),
+  );
+  const obligation = RequiredContextObligationSchema.parse({
+    obligationId: `rco-cicd-${toCiCdRequiredContextSlug(
+      requestKey,
+    )}-${obligationKind}-${toCiCdRequiredContextSlug(resourceScope.join("-"))}`,
+    toolCallDigest: input.toolCallDigest,
+    actionImpactClass,
+    requiredAnchors,
+    freshnessWindow: getCiCdRequiredContextFreshnessWindow(obligationKind),
+    minimumRetentionMode: ContextRetentionMode.Verbatim,
+    conflictPolicy: RequiredContextConflictPolicy.DenyOnOmittedConflict,
+    taintPolicy: RequiredContextTaintPolicy.DenyOnUntrustedInstruction,
+    missingAnchorAction: getCiCdRequiredContextMissingAnchorAction(
+      obligationKind,
+    ),
+  });
+
+  return {
+    operation,
+    resourceScope,
+    targetEnvironment,
+    dryRun,
+    testStatus,
+    obligationKind,
+    requiresNegativeEvidenceAnchors:
+      shouldCiCdRequiredContextRequireNegativeEvidence(testStatus),
+    dryRunOnlyApproval,
+    requiredAnchorRoles,
+    toolCallDigest: input.toolCallDigest,
+    actionImpactClass,
+    obligations: [obligation],
+  };
+};
+
+export const CiCdRequiredContextObligationCompiler: ToolSpecificRequiredContextObligationCompiler<CiCdRequiredContextToolCallCandidate> =
+  {
+    toolType: "ci_cd",
+    compileRequiredContextObligations(input) {
+      const compilerInput: CiCdRequiredContextObligationCompilerInput = {
+        toolCallDigest: input.toolCallDigest,
+        availableAnchors: input.availableAnchors,
+      };
+      const requestId = input.candidateId ?? input.toolCallCandidate.requestId;
+
+      if (requestId !== undefined) {
+        compilerInput.requestId = requestId;
+      }
+
+      if (input.actionImpactClass !== undefined) {
+        compilerInput.actionImpactClass = input.actionImpactClass;
+      }
+
+      if (input.toolCallCandidate.operation !== undefined) {
+        compilerInput.operation = input.toolCallCandidate.operation;
+      }
+
+      if (input.toolCallCandidate.service !== undefined) {
+        compilerInput.service = input.toolCallCandidate.service;
+      }
+
+      if (input.toolCallCandidate.pipeline !== undefined) {
+        compilerInput.pipeline = input.toolCallCandidate.pipeline;
+      }
+
+      if (input.toolCallCandidate.version !== undefined) {
+        compilerInput.version = input.toolCallCandidate.version;
+      }
+
+      if (input.toolCallCandidate.environment !== undefined) {
+        compilerInput.environment = input.toolCallCandidate.environment;
+      }
+
+      if (input.toolCallCandidate.targetEnvironment !== undefined) {
+        compilerInput.targetEnvironment = input.toolCallCandidate.targetEnvironment;
+      }
+
+      if (input.toolCallCandidate.requiredExecutionMode !== undefined) {
+        compilerInput.requiredExecutionMode =
+          input.toolCallCandidate.requiredExecutionMode;
+      }
+
+      if (input.toolCallCandidate.dryRun !== undefined) {
+        compilerInput.dryRun = input.toolCallCandidate.dryRun;
+      }
+
+      if (input.toolCallCandidate.testStatus !== undefined) {
+        compilerInput.testStatus = input.toolCallCandidate.testStatus;
+      }
+
+      if (input.toolCallCandidate.resourceScope !== undefined) {
+        compilerInput.resourceScope = input.toolCallCandidate.resourceScope;
+      }
+
+      return compileCiCdRequiredContextObligations(compilerInput);
     },
   };
 
