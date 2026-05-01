@@ -183,6 +183,22 @@ export const EvidenceCoverageStatusValues = Object.values(
   EvidenceCoverageStatus,
 ) as EvidenceCoverageStatus[];
 
+export const ExecutorDriftFingerprintField = {
+  Credential: "credential",
+  NetworkPolicy: "networkPolicy",
+  RunnerImage: "runnerImage",
+  Endpoint: "endpoint",
+  Namespace: "namespace",
+  ConfigHash: "configHash",
+} as const;
+
+export type ExecutorDriftFingerprintField =
+  (typeof ExecutorDriftFingerprintField)[keyof typeof ExecutorDriftFingerprintField];
+
+export const ExecutorDriftFingerprintFieldValues = Object.values(
+  ExecutorDriftFingerprintField,
+) as ExecutorDriftFingerprintField[];
+
 export const ExecutorSafetyEvidenceStateName = {
   EvidenceMissing: "EvidenceMissing",
   EvidencePartial: "EvidencePartial",
@@ -286,6 +302,24 @@ export type SideEffectDeltaEvidence = {
   executorFingerprint?: ExecutorDriftFingerprintHash;
 };
 
+export type ExecutorDriftFingerprint = {
+  fingerprintHash: ExecutorDriftFingerprintHash;
+  credential: PatentProofHash;
+  networkPolicy: PatentProofHash;
+  runnerImage: PatentProofHash;
+  endpoint: PatentProofHash;
+  namespace: PatentProofHash;
+  configHash: PatentProofHash;
+  capturedAt?: ForbiddenSideEffectTimestamp;
+};
+
+export type DriftEvent = {
+  previous: ExecutorDriftFingerprint;
+  current: ExecutorDriftFingerprint;
+  eventId?: StateMachineEntityId;
+  detectedAt?: ForbiddenSideEffectTimestamp;
+};
+
 export type EvidenceCoverageRecord = {
   obligationId: ForbiddenEffectObligationId;
   requiredEvidenceType?: ForbiddenEffectEvidenceType;
@@ -358,6 +392,17 @@ export type ExecutorSafetyEvidenceStateEvaluationOptions = {
   evaluatedAt?: ForbiddenSideEffectTimestamp;
   evidenceTtlMs?: number;
   invalidatedBy?: string;
+};
+
+export type ExecutorDriftFingerprintComparison = {
+  hasDrift: boolean;
+  changedFields: readonly ExecutorDriftFingerprintField[];
+  previousFingerprintHash: ExecutorDriftFingerprintHash;
+  currentFingerprintHash: ExecutorDriftFingerprintHash;
+  affectedEvidenceHashes: readonly PatentProofHash[];
+  affectedEvidenceTypes: readonly ForbiddenEffectEvidenceType[];
+  affectedObligationIds: readonly ForbiddenEffectObligationId[];
+  affectedEvidenceRecords: readonly EvidenceCoverageRecord[];
 };
 
 export type ForbiddenEffectObligation = {
@@ -2069,6 +2114,113 @@ const getEvidenceCoverageRecordType = (
   record: EvidenceCoverageRecord,
 ): ForbiddenEffectEvidenceType | undefined =>
   record.requiredEvidenceType ?? record.evidenceType;
+
+type ExecutorDriftFingerprintFieldDescriptor = {
+  field: ExecutorDriftFingerprintField;
+  key: keyof Pick<
+    ExecutorDriftFingerprint,
+    | "credential"
+    | "networkPolicy"
+    | "runnerImage"
+    | "endpoint"
+    | "namespace"
+    | "configHash"
+  >;
+};
+
+const executorDriftFingerprintFieldDescriptors: readonly ExecutorDriftFingerprintFieldDescriptor[] =
+  [
+    {
+      field: ExecutorDriftFingerprintField.Credential,
+      key: "credential",
+    },
+    {
+      field: ExecutorDriftFingerprintField.NetworkPolicy,
+      key: "networkPolicy",
+    },
+    {
+      field: ExecutorDriftFingerprintField.RunnerImage,
+      key: "runnerImage",
+    },
+    {
+      field: ExecutorDriftFingerprintField.Endpoint,
+      key: "endpoint",
+    },
+    {
+      field: ExecutorDriftFingerprintField.Namespace,
+      key: "namespace",
+    },
+    {
+      field: ExecutorDriftFingerprintField.ConfigHash,
+      key: "configHash",
+    },
+  ];
+
+const compareEvidenceCoverageRecords = (
+  left: EvidenceCoverageRecord,
+  right: EvidenceCoverageRecord,
+): number => {
+  const leftKey = `${left.obligationId}:${getEvidenceCoverageRecordType(left) ?? ""}:${left.evidenceHash}`;
+  const rightKey = `${right.obligationId}:${getEvidenceCoverageRecordType(right) ?? ""}:${right.evidenceHash}`;
+
+  return leftKey.localeCompare(rightKey);
+};
+
+const getEvidenceRecordExecutorFingerprint = (
+  record: EvidenceCoverageRecord,
+): ExecutorDriftFingerprintHash | undefined => record.evidence?.executorFingerprint;
+
+const getChangedExecutorDriftFingerprintFields = (
+  previous: ExecutorDriftFingerprint,
+  current: ExecutorDriftFingerprint,
+): readonly ExecutorDriftFingerprintField[] =>
+  executorDriftFingerprintFieldDescriptors
+    .filter(({ key }) => previous[key] !== current[key])
+    .map(({ field }) => field);
+
+export const compareExecutorDriftFingerprints = (
+  driftEvent: Pick<DriftEvent, "previous" | "current">,
+  evidenceRecordsInput: readonly EvidenceCoverageRecord[] = [],
+): ExecutorDriftFingerprintComparison => {
+  const changedFields = getChangedExecutorDriftFingerprintFields(
+    driftEvent.previous,
+    driftEvent.current,
+  );
+  const hasDrift = changedFields.length > 0;
+  const affectedEvidenceRecords = hasDrift
+    ? evidenceRecordsInput
+        .filter(
+          (record) =>
+            getEvidenceRecordExecutorFingerprint(record) ===
+            driftEvent.previous.fingerprintHash,
+        )
+        .sort(compareEvidenceCoverageRecords)
+    : [];
+  const affectedEvidenceTypes = Array.from(
+    new Set(
+      affectedEvidenceRecords.flatMap((record) => {
+        const evidenceType = getEvidenceCoverageRecordType(record);
+
+        return evidenceType === undefined ? [] : [evidenceType];
+      }),
+    ),
+  ).sort();
+
+  return {
+    hasDrift,
+    changedFields,
+    previousFingerprintHash: driftEvent.previous.fingerprintHash,
+    currentFingerprintHash: driftEvent.current.fingerprintHash,
+    affectedEvidenceHashes: Array.from(
+      new Set(affectedEvidenceRecords.map((record) => record.evidenceHash)),
+    ).sort(),
+    affectedEvidenceTypes,
+    affectedObligationIds: Array.from(
+      new Set(affectedEvidenceRecords.map((record) => record.obligationId)),
+    ).sort(),
+    affectedEvidenceRecords,
+  };
+};
 
 const getEvidenceCoverageRecordCompletedAt = (
   record: EvidenceCoverageRecord,
