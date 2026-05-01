@@ -19,6 +19,7 @@ import {
   type PermitBinding,
   type PermitDeniedEvidence,
 } from "@agent-safety-gateway/shared/forbidden-side-effect";
+import type { ContextSufficiencyState } from "@agent-safety-gateway/shared/context-retention";
 import type { PatentProofHash } from "@agent-safety-gateway/shared/patent-state-machine";
 
 import {
@@ -45,6 +46,13 @@ import type {
   ToolCallAnalysisService,
 } from "./tool-call-analysis-service.js";
 import type { AuditRepository } from "./audit-repository.js";
+import {
+  ContextGatewayActionType,
+  createContextExecutionDecisionEngine,
+  type ContextExecutionDecision,
+  type ContextExecutionDecisionEngine,
+  type ContextGatewayAction,
+} from "./context-execution-decision-engine.js";
 
 export type ToolExecutor<ExecutorResult> = (
   request: ToolCallRequest,
@@ -63,6 +71,8 @@ export type GuardedExecutionResult<ExecutorResult> = {
   executorInvoked: boolean;
   riskLevel: ToolCallAnalysisResult["riskLevel"];
   decision: ToolCallAnalysisResult["executionDecision"];
+  contextSufficiencyState: ContextSufficiencyState | null;
+  contextAction: ContextGatewayAction | null;
   auditId: string;
   analysisResult: ToolCallAnalysisResult;
   executorResult: ExecutorResult | null;
@@ -114,6 +124,17 @@ export type ToolExecutionPermitEvidenceProvider = {
   ) => Promise<void> | void;
 };
 
+export type ToolExecutionContextEvidenceInput = ToolExecutionPermitEvidenceInput;
+
+export type ToolExecutionContextEvidenceProvider = {
+  getContextSufficiencyState: (
+    input: ToolExecutionContextEvidenceInput,
+  ) =>
+    | ContextSufficiencyState
+    | null
+    | Promise<ContextSufficiencyState | null>;
+};
+
 export type ToolExecutionGuardDependencies<ExecutorResult> = {
   analysisService: ToolCallAnalysisService;
   executor?: ToolExecutor<ExecutorResult>;
@@ -129,6 +150,8 @@ export type ToolExecutionGuardDependencies<ExecutorResult> = {
   auditSinkStrict?: boolean;
   auditRedaction?: AuditRedactionOptions;
   auditRepository?: Pick<AuditRepository, "updateAuditExecutorSafetyEvidence">;
+  contextEvidenceProvider?: ToolExecutionContextEvidenceProvider;
+  contextDecisionEngine?: ContextExecutionDecisionEngine;
   permitEvidenceProvider?: ToolExecutionPermitEvidenceProvider;
   permitNonceFactory?: () => string;
   permitTtlMs?: number;
@@ -508,6 +531,8 @@ const createResult = <ExecutorResult>({
   request,
   analysisResult,
   executorInvoked,
+  contextSufficiencyState,
+  contextAction,
   executorResult,
   approvalRequest,
   permitBinding,
@@ -518,6 +543,8 @@ const createResult = <ExecutorResult>({
   request: ToolCallRequest;
   analysisResult: ToolCallAnalysisResult;
   executorInvoked: boolean;
+  contextSufficiencyState?: ContextSufficiencyState | null;
+  contextAction?: ContextGatewayAction | null;
   executorResult: ExecutorResult | null;
   approvalRequest: ApprovalRequest | null;
   permitBinding: PermitBinding | null;
@@ -529,6 +556,8 @@ const createResult = <ExecutorResult>({
   executorInvoked,
   riskLevel: analysisResult.riskLevel,
   decision: analysisResult.executionDecision,
+  contextSufficiencyState: contextSufficiencyState ?? null,
+  contextAction: contextAction ?? null,
   auditId: analysisResult.auditRecordId,
   analysisResult,
   executorResult,
@@ -547,6 +576,8 @@ export const createToolExecutionGuard = <ExecutorResult>({
   auditSinkStrict = false,
   auditRedaction,
   auditRepository,
+  contextEvidenceProvider,
+  contextDecisionEngine = createContextExecutionDecisionEngine(),
   permitEvidenceProvider,
   permitNonceFactory = randomUUID,
   permitTtlMs = DEFAULT_PERMIT_TTL_MS,
@@ -621,6 +652,8 @@ export const createToolExecutionGuard = <ExecutorResult>({
     request,
     analysisResult,
     executorInvoked,
+    contextSufficiencyState,
+    contextAction,
     executorResult,
     approvalRequest,
     permitBinding,
@@ -630,6 +663,8 @@ export const createToolExecutionGuard = <ExecutorResult>({
     request: ToolCallRequest;
     analysisResult: ToolCallAnalysisResult;
     executorInvoked: boolean;
+    contextSufficiencyState: ContextSufficiencyState | null;
+    contextAction: ContextGatewayAction | null;
     executorResult: ExecutorResult | null;
     approvalRequest: ApprovalRequest | null;
     permitBinding?: PermitBinding | null;
@@ -640,6 +675,8 @@ export const createToolExecutionGuard = <ExecutorResult>({
       request,
       analysisResult,
       executorInvoked,
+      contextSufficiencyState,
+      contextAction,
       executorResult,
       approvalRequest,
       permitBinding: permitBinding ?? null,
@@ -774,14 +811,103 @@ export const createToolExecutionGuard = <ExecutorResult>({
     };
   };
 
+  const applyContextExecutionDecision = ({
+    analysisResult,
+    contextDecision,
+  }: {
+    analysisResult: ToolCallAnalysisResult;
+    contextDecision: ContextExecutionDecision;
+  }) => {
+    analysisResult.executionDecision = contextDecision.executionDecision;
+    analysisResult.auditRecord.decision = contextDecision.executionDecision;
+  };
+
+  const checkContextGate = async ({
+    request,
+    analysisResult,
+  }: ToolExecutionContextEvidenceInput) => {
+    if (!contextEvidenceProvider) {
+      return null;
+    }
+
+    const contextSufficiencyState =
+      await contextEvidenceProvider.getContextSufficiencyState({
+        request,
+        analysisResult,
+      });
+
+    if (!contextSufficiencyState) {
+      return null;
+    }
+
+    const contextDecision = contextDecisionEngine.decideContextExecution({
+      request,
+      currentDecision: analysisResult.executionDecision,
+      contextSufficiencyState,
+    });
+
+    applyContextExecutionDecision({ analysisResult, contextDecision });
+
+    return contextDecision;
+  };
+
+  const createContextApprovalRequest = async ({
+    request,
+    analysisResult,
+  }: ToolExecutionContextEvidenceInput) => {
+    const existingApprovalRequest =
+      (await approvalAdapter?.getApprovalRequest(request.id)) ?? null;
+
+    return (
+      existingApprovalRequest ??
+      (await approvalAdapter?.createApprovalRequest({
+        request,
+        analysisResult,
+        approverGroup: defaultApproverGroup,
+      })) ??
+      null
+    );
+  };
+
+  const createContextPreflightResult = async ({
+    request,
+    analysisResult,
+    contextSufficiencyState,
+    contextAction,
+  }: ToolExecutionContextEvidenceInput & {
+    contextSufficiencyState: ContextSufficiencyState;
+    contextAction: ContextGatewayAction;
+  }) => {
+    const approvalRequest =
+      contextAction.type === ContextGatewayActionType.Reapproval
+        ? await createContextApprovalRequest({ request, analysisResult })
+        : null;
+
+    return createFinalResult({
+      status:
+        contextAction.type === ContextGatewayActionType.Deny ? "blocked" : "held",
+      request,
+      analysisResult,
+      executorInvoked: false,
+      contextSufficiencyState,
+      contextAction,
+      executorResult: null,
+      approvalRequest,
+    });
+  };
+
   const executeWithPermitGate = async ({
     request,
     analysisResult,
     approvalRequest,
+    contextSufficiencyState,
+    contextAction,
   }: {
     request: ToolCallRequest;
     analysisResult: ToolCallAnalysisResult;
     approvalRequest: ApprovalRequest | null;
+    contextSufficiencyState: ContextSufficiencyState | null;
+    contextAction: ContextGatewayAction | null;
   }) => {
     if (!executor) {
       return createFinalResult({
@@ -789,6 +915,8 @@ export const createToolExecutionGuard = <ExecutorResult>({
         request,
         analysisResult,
         executorInvoked: false,
+        contextSufficiencyState,
+        contextAction,
         executorResult: null,
         approvalRequest,
       });
@@ -802,6 +930,8 @@ export const createToolExecutionGuard = <ExecutorResult>({
         request,
         analysisResult,
         executorInvoked: false,
+        contextSufficiencyState,
+        contextAction,
         executorResult: null,
         approvalRequest,
         permitBinding: null,
@@ -826,6 +956,8 @@ export const createToolExecutionGuard = <ExecutorResult>({
         request,
         analysisResult,
         executorInvoked: false,
+        contextSufficiencyState,
+        contextAction,
         executorResult: null,
         approvalRequest,
         permitDeniedEvidence: permitDecision.permitDeniedEvidence,
@@ -863,6 +995,8 @@ export const createToolExecutionGuard = <ExecutorResult>({
         request,
         analysisResult,
         executorInvoked: false,
+        contextSufficiencyState,
+        contextAction,
         executorResult: null,
         approvalRequest,
         permitBinding: null,
@@ -883,6 +1017,8 @@ export const createToolExecutionGuard = <ExecutorResult>({
       request,
       analysisResult,
       executorInvoked: true,
+      contextSufficiencyState,
+      contextAction,
       executorResult: brokerResult.executorResult,
       approvalRequest,
       permitBinding: brokerResult.permitBinding,
@@ -892,6 +1028,20 @@ export const createToolExecutionGuard = <ExecutorResult>({
   return {
     async execute(request) {
       const analysisResult = await analysisService.analyzeToolCall(request);
+      const contextDecision = await checkContextGate({ request, analysisResult });
+
+      if (contextDecision?.contextAction && !contextDecision.shouldContinueToPermit) {
+        return createContextPreflightResult({
+          request,
+          analysisResult,
+          contextSufficiencyState: contextDecision.contextSufficiencyState,
+          contextAction: contextDecision.contextAction,
+        });
+      }
+
+      const contextSufficiencyState =
+        contextDecision?.contextSufficiencyState ?? null;
+      const contextAction = contextDecision?.contextAction ?? null;
 
       if (requiresApproval(analysisResult)) {
         const existingApprovalRequest =
@@ -911,6 +1061,8 @@ export const createToolExecutionGuard = <ExecutorResult>({
             request,
             analysisResult,
             executorInvoked: false,
+            contextSufficiencyState,
+            contextAction,
             executorResult: null,
             approvalRequest,
           });
@@ -920,6 +1072,8 @@ export const createToolExecutionGuard = <ExecutorResult>({
           request,
           analysisResult,
           approvalRequest,
+          contextSufficiencyState,
+          contextAction,
         });
       }
 
@@ -929,6 +1083,8 @@ export const createToolExecutionGuard = <ExecutorResult>({
           request,
           analysisResult,
           executorInvoked: false,
+          contextSufficiencyState,
+          contextAction,
           executorResult: null,
           approvalRequest: null,
         });
@@ -938,6 +1094,8 @@ export const createToolExecutionGuard = <ExecutorResult>({
         request,
         analysisResult,
         approvalRequest: null,
+        contextSufficiencyState,
+        contextAction,
       });
     },
   };

@@ -29,6 +29,10 @@ import {
   type PermitBinding,
   type PermitDeniedEvidence,
 } from "@agent-safety-gateway/shared/forbidden-side-effect";
+import {
+  ContextSufficiencyStateName,
+  type ContextSufficiencyState,
+} from "@agent-safety-gateway/shared/context-retention";
 
 import { runToolGuardDemo } from "../../../scripts/tool-guard-demo.js";
 import { createFileApprovalAdapter } from "../src/approval-adapter.js";
@@ -48,8 +52,10 @@ import type {
 import {
   createToolExecutionGuard,
   type ToolExecutionPermitEvidenceSnapshot,
+  type ToolExecutionContextEvidenceProvider,
   type ToolExecutionPermitEvidenceProvider,
 } from "../src/tool-execution-guard.js";
+import { ContextGatewayActionType } from "../src/context-execution-decision-engine.js";
 import { initializeLocalStorage } from "../src/storage.js";
 
 const tempDirs: string[] = [];
@@ -164,6 +170,56 @@ const createPermitEvidenceProvider = (
 
   return { provider, permits, denials };
 };
+
+const createCountingPermitEvidenceProvider = () => {
+  let snapshotCallCount = 0;
+  const provider: ToolExecutionPermitEvidenceProvider = {
+    getEvidenceSnapshot() {
+      snapshotCallCount += 1;
+      return createCompletePermitSnapshot();
+    },
+  };
+
+  return {
+    provider,
+    get snapshotCallCount() {
+      return snapshotCallCount;
+    },
+  };
+};
+
+const createContextSufficiencyState = (
+  overrides: Partial<ContextSufficiencyState> = {},
+): ContextSufficiencyState => ({
+  stateId: "context-state-tool-guard",
+  obligationId: "required-context-tool-guard",
+  toolCallDigest: "sha256:tool-guard-context-tool-call",
+  promptAssemblyManifestId: "manifest-tool-guard-context",
+  inferenceId: "inference-tool-guard-context",
+  state: ContextSufficiencyStateName.Sufficient,
+  sufficient: true,
+  evaluatedAt: "2026-04-29T08:09:59.000Z",
+  requiredAnchorIds: ["ctx-latest-user-instruction"],
+  coveredAnchorIds: ["ctx-latest-user-instruction"],
+  blockedAnchorIds: [],
+  missingAnchorIds: [],
+  staleAnchorIds: [],
+  conflictingAnchorIds: [],
+  contaminatedAnchorIds: [],
+  verbatimAnchorIds: ["ctx-latest-user-instruction"],
+  certifiedSummaryAnchorIds: [],
+  retrievableReferenceAnchorIds: [],
+  transitionReason: "all required context anchors are retained verbatim",
+  ...overrides,
+});
+
+const createContextEvidenceProvider = (
+  state: ContextSufficiencyState,
+): ToolExecutionContextEvidenceProvider => ({
+  getContextSufficiencyState() {
+    return state;
+  },
+});
 
 const policyVersion = "local-risk-policy-v1";
 
@@ -471,6 +527,164 @@ describe("tool execution guard approval control", () => {
       requestId: "req-approval-production-deploy",
     });
   });
+});
+
+describe("tool execution guard context preflight", () => {
+  it("returns a structured reground action before permit checks", async () => {
+    let executorCallCount = 0;
+    const permitEvidence = createCountingPermitEvidenceProvider();
+    const contextState = createContextSufficiencyState({
+      state: ContextSufficiencyStateName.RegroundRequired,
+      sufficient: false,
+      coveredAnchorIds: [],
+      blockedAnchorIds: ["ctx-latest-user-instruction"],
+      missingAnchorIds: ["ctx-latest-user-instruction"],
+      verbatimAnchorIds: [],
+      transitionReason:
+        "one or more required context anchors are missing and policy allows regrounding",
+    });
+    const guard = createToolExecutionGuard({
+      analysisService: createAllowedAnalysisService(),
+      contextEvidenceProvider: createContextEvidenceProvider(contextState),
+      permitEvidenceProvider: permitEvidence.provider,
+      async executor() {
+        executorCallCount += 1;
+        return { ok: true };
+      },
+    });
+
+    const result = await guard.execute(allowedRequest);
+
+    assert.equal(result.status, "held");
+    assert.equal(result.executorInvoked, false);
+    assert.equal(executorCallCount, 0);
+    assert.equal(permitEvidence.snapshotCallCount, 0);
+    assert.equal(result.decision.type, DecisionType.Rewrite);
+    assert.equal(result.decision.code, "context.reground_required");
+    assert.equal(result.contextAction?.type, ContextGatewayActionType.Reground);
+    assert.equal(
+      result.contextAction?.nextStep,
+      "regenerate_tool_call_after_regrounding",
+    );
+    assert.deepEqual(result.contextAction?.missingAnchorIds, [
+      "ctx-latest-user-instruction",
+    ]);
+    assert.deepEqual(result.contextSufficiencyState, contextState);
+    assert.equal(result.permitBinding, null);
+    assert.equal(result.permitDeniedEvidence, null);
+  });
+
+  it("creates an approval flow for ReapprovalRequired and skips executor checks", async () => {
+    const filePath = join(await createTempDataDir(), "context-approvals.jsonl");
+    const approvalAdapter = createFileApprovalAdapter({
+      filePath,
+      now: () => new Date("2026-04-29T08:10:05.000Z"),
+    });
+    let executorCallCount = 0;
+    const permitEvidence = createCountingPermitEvidenceProvider();
+    const contextState = createContextSufficiencyState({
+      state: ContextSufficiencyStateName.ReapprovalRequired,
+      sufficient: false,
+      coveredAnchorIds: [],
+      blockedAnchorIds: ["ctx-approval-note"],
+      missingAnchorIds: ["ctx-approval-note"],
+      verbatimAnchorIds: [],
+      transitionReason:
+        "required approval note is missing verbatim retention and policy requires reapproval",
+    });
+    const guard = createToolExecutionGuard({
+      analysisService: createAllowedAnalysisService(),
+      approvalAdapter,
+      defaultApproverGroup: "context-risk-owners",
+      contextEvidenceProvider: createContextEvidenceProvider(contextState),
+      permitEvidenceProvider: permitEvidence.provider,
+      async executor() {
+        executorCallCount += 1;
+        return { ok: true };
+      },
+    });
+
+    const result = await guard.execute(allowedRequest);
+
+    assert.equal(result.status, "held");
+    assert.equal(result.executorInvoked, false);
+    assert.equal(executorCallCount, 0);
+    assert.equal(permitEvidence.snapshotCallCount, 0);
+    assert.equal(result.decision.type, DecisionType.RequireApproval);
+    assert.equal(result.decision.code, "context.reapproval_required");
+    assert.equal(result.contextAction?.type, ContextGatewayActionType.Reapproval);
+    assert.equal(result.approvalRequest?.requestId, allowedRequest.id);
+    assert.equal(result.approvalRequest?.approverGroup, "context-risk-owners");
+    assert.equal(result.approvalRequest?.status, ApprovalRequestStatus.Held);
+    assert.match(
+      result.approvalRequest?.decisionReason ?? "",
+      /ReapprovalRequired/,
+    );
+    assert.equal(
+      result.analysisResult.auditRecord.decision.code,
+      "context.reapproval_required",
+    );
+  });
+
+  for (const deniedCase of [
+    {
+      state: ContextSufficiencyStateName.Conflicting,
+      code: "context.conflicting.deny",
+      overrides: {
+        conflictingAnchorIds: ["ctx-conflicting-policy"],
+      },
+    },
+    {
+      state: ContextSufficiencyStateName.Contaminated,
+      code: "context.contaminated.deny",
+      overrides: {
+        contaminatedAnchorIds: ["ctx-untrusted-instruction"],
+      },
+    },
+    {
+      state: ContextSufficiencyStateName.Insufficient,
+      code: "context.insufficient.deny",
+      overrides: {
+        missingAnchorIds: ["ctx-required-policy"],
+      },
+    },
+  ] as const) {
+    it("blocks before permit checks for " + deniedCase.state, async () => {
+      let executorCallCount = 0;
+      const permitEvidence = createCountingPermitEvidenceProvider();
+      const contextState = createContextSufficiencyState({
+        state: deniedCase.state,
+        sufficient: false,
+        coveredAnchorIds: [],
+        blockedAnchorIds: ["ctx-blocked-context"],
+        verbatimAnchorIds: [],
+        transitionReason: deniedCase.state + " prevents safe execution",
+        ...deniedCase.overrides,
+      });
+      const guard = createToolExecutionGuard({
+        analysisService: createAllowedAnalysisService(),
+        contextEvidenceProvider: createContextEvidenceProvider(contextState),
+        permitEvidenceProvider: permitEvidence.provider,
+        async executor() {
+          executorCallCount += 1;
+          return { ok: true };
+        },
+      });
+
+      const result = await guard.execute(allowedRequest);
+
+      assert.equal(result.status, "blocked");
+      assert.equal(result.executorInvoked, false);
+      assert.equal(executorCallCount, 0);
+      assert.equal(permitEvidence.snapshotCallCount, 0);
+      assert.equal(result.decision.type, DecisionType.Block);
+      assert.equal(result.decision.code, deniedCase.code);
+      assert.equal(result.contextAction?.type, ContextGatewayActionType.Deny);
+      assert.equal(result.approvalRequest, null);
+      assert.equal(result.permitBinding, null);
+      assert.equal(result.permitDeniedEvidence, null);
+    });
+  }
 });
 
 describe("tool execution guard permit gate", () => {

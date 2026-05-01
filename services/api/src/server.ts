@@ -259,6 +259,8 @@ const createGuardedExecutionResponse = <ExecutorResult>(
   auditId: result.auditId,
   riskLevel: result.riskLevel,
   decision: result.decision,
+  contextSufficiencyState: result.contextSufficiencyState,
+  contextAction: result.contextAction,
   executorInvoked: result.executorInvoked,
   executorResult: result.executorResult,
   approvalRequest: result.approvalRequest,
