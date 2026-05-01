@@ -154,6 +154,7 @@ export const DeniedCapabilityProbeOutcomeValues = Object.values(
 
 export const SideEffectEvidenceType = {
   Database: "database",
+  DeployLog: "deploy_log",
   Webhook: "webhook",
   Artifact: "artifact",
   Trigger: "trigger",

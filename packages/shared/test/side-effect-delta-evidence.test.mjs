@@ -98,6 +98,7 @@ test("validates SideEffectDeltaEvidence with no observed deltas", () => {
 test("supports all side-effect evidence source types", () => {
   assert.deepEqual(SideEffectEvidenceTypeValues, [
     SideEffectEvidenceType.Database,
+    SideEffectEvidenceType.DeployLog,
     SideEffectEvidenceType.Webhook,
     SideEffectEvidenceType.Artifact,
     SideEffectEvidenceType.Trigger,
