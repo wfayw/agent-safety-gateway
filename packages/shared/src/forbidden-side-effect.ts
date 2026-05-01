@@ -78,6 +78,7 @@ export const ForbiddenEffectEvidenceType = {
   DdlDenial: "ddl_denial",
   NoRowMutation: "no_row_mutation",
   NoTriggerSideEffect: "no_trigger_side_effect",
+  NoExternalSideEffect: "no_external_side_effect",
   ProductionDeployDenial: "production_deploy_denial",
   ExternalWebhookDenial: "external_webhook_denial",
   ArtifactPromotionDenial: "artifact_promotion_denial",
@@ -440,6 +441,52 @@ export type ForbiddenEffectObligation = {
   forbiddenCapabilities?: readonly string[];
   forbiddenEffects?: readonly string[];
   createdAt?: ForbiddenSideEffectTimestamp;
+};
+
+export const SqlForbiddenEffectOperation = {
+  Select: "select",
+  Insert: "insert",
+  Update: "update",
+  Delete: "delete",
+  Drop: "drop",
+  Truncate: "truncate",
+  Alter: "alter",
+  Unknown: "unknown",
+} as const;
+
+export type SqlForbiddenEffectOperation =
+  (typeof SqlForbiddenEffectOperation)[keyof typeof SqlForbiddenEffectOperation];
+
+export const SqlForbiddenEffectObligationKind = {
+  ReadonlyMutation: "readonly_mutation",
+  ReadonlyDdl: "readonly_ddl",
+  ReadonlyTrigger: "readonly_trigger",
+  ReadonlyExternalEffect: "readonly_external_effect",
+  DestructiveMutation: "destructive_mutation",
+  DestructiveDdl: "destructive_ddl",
+  UnresolvedResource: "unresolved_resource",
+} as const;
+
+export type SqlForbiddenEffectObligationKind =
+  (typeof SqlForbiddenEffectObligationKind)[keyof typeof SqlForbiddenEffectObligationKind];
+
+export type SqlForbiddenEffectObligationCompilerInput = {
+  sql: string;
+  requestId?: string;
+  requestHash?: PatentProofHash;
+  environment?: ForbiddenEffectEnvironment;
+  requiredExecutionMode?: string;
+  resourceScope?: readonly string[];
+  createdAt?: ForbiddenSideEffectTimestamp;
+};
+
+export type SqlForbiddenEffectObligationCompilation = {
+  normalizedSql: string;
+  operation: SqlForbiddenEffectOperation;
+  resourceScope: readonly string[];
+  unresolvedTables: readonly string[];
+  failClosed: boolean;
+  obligations: readonly ForbiddenEffectObligation[];
 };
 
 export type ForbiddenEffectObligationValidationIssue = {
@@ -2425,6 +2472,448 @@ export const isForbiddenEffectObligation = (
   input: unknown,
 ): input is ForbiddenEffectObligation =>
   validateForbiddenEffectObligation(input).success;
+
+const SqlUnresolvedResourceScope = "unresolved_sql_resource";
+
+const sqlOperationByKeyword: Record<string, SqlForbiddenEffectOperation> = {
+  select: SqlForbiddenEffectOperation.Select,
+  insert: SqlForbiddenEffectOperation.Insert,
+  update: SqlForbiddenEffectOperation.Update,
+  delete: SqlForbiddenEffectOperation.Delete,
+  drop: SqlForbiddenEffectOperation.Drop,
+  truncate: SqlForbiddenEffectOperation.Truncate,
+  alter: SqlForbiddenEffectOperation.Alter,
+};
+
+const sqlDestructiveMutationOperations = new Set<SqlForbiddenEffectOperation>([
+  SqlForbiddenEffectOperation.Insert,
+  SqlForbiddenEffectOperation.Update,
+  SqlForbiddenEffectOperation.Delete,
+]);
+
+const sqlDestructiveDdlOperations = new Set<SqlForbiddenEffectOperation>([
+  SqlForbiddenEffectOperation.Drop,
+  SqlForbiddenEffectOperation.Truncate,
+  SqlForbiddenEffectOperation.Alter,
+]);
+
+const normalizeSqlCompilerSql = (sql: string): string =>
+  sql
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/--.*$/gm, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const getSqlCompilerOperation = (
+  normalizedSql: string,
+): SqlForbiddenEffectOperation => {
+  const keyword = normalizedSql.match(/^([a-zA-Z]+)/)?.[1]?.toLowerCase();
+
+  if (keyword === undefined) {
+    return SqlForbiddenEffectOperation.Unknown;
+  }
+
+  return sqlOperationByKeyword[keyword] ?? SqlForbiddenEffectOperation.Unknown;
+};
+
+const normalizeSqlCompilerIdentifier = (identifier: string): string => {
+  const cleanedIdentifier = identifier
+    .trim()
+    .replace(/\s+as\s+.+$/i, "")
+    .replace(/\s+.+$/, "")
+    .replace(/^[`"\[]/, "")
+    .replace(/[`"\]]$/, "");
+  const segments = cleanedIdentifier.split(".").filter(Boolean);
+
+  return segments.at(-1) ?? cleanedIdentifier;
+};
+
+const uniqueSqlCompilerStrings = (values: readonly string[]): string[] => {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  values.forEach((value) => {
+    if (!seen.has(value)) {
+      seen.add(value);
+      result.push(value);
+    }
+  });
+
+  return result;
+};
+
+const collectSqlCompilerMatches = (sql: string, pattern: RegExp): string[] =>
+  uniqueSqlCompilerStrings(
+    [...sql.matchAll(pattern)]
+      .map((match) => match[1])
+      .filter((value): value is string => value !== undefined)
+      .map(normalizeSqlCompilerIdentifier)
+      .filter((value) => value.length > 0),
+  );
+
+const matchSqlCompilerResourceScope = (
+  normalizedSql: string,
+  operation: SqlForbiddenEffectOperation,
+): string[] => {
+  if (operation === SqlForbiddenEffectOperation.Select) {
+    return collectSqlCompilerMatches(
+      normalizedSql,
+      /\b(?:from|join)\s+([`"\[]?[a-zA-Z_][\w$.-]*[`"\]]?)/gi,
+    );
+  }
+
+  if (operation === SqlForbiddenEffectOperation.Insert) {
+    return collectSqlCompilerMatches(
+      normalizedSql,
+      /\binsert\s+into\s+([`"\[]?[a-zA-Z_][\w$.-]*[`"\]]?)/gi,
+    );
+  }
+
+  if (operation === SqlForbiddenEffectOperation.Update) {
+    return collectSqlCompilerMatches(
+      normalizedSql,
+      /\bupdate\s+([`"\[]?[a-zA-Z_][\w$.-]*[`"\]]?)/gi,
+    );
+  }
+
+  if (operation === SqlForbiddenEffectOperation.Delete) {
+    return collectSqlCompilerMatches(
+      normalizedSql,
+      /\bdelete\s+from\s+([`"\[]?[a-zA-Z_][\w$.-]*[`"\]]?)/gi,
+    );
+  }
+
+  if (operation === SqlForbiddenEffectOperation.Drop) {
+    return collectSqlCompilerMatches(
+      normalizedSql,
+      /\bdrop\s+table(?:\s+if\s+exists)?\s+([`"\[]?[a-zA-Z_][\w$.-]*[`"\]]?)/gi,
+    );
+  }
+
+  if (operation === SqlForbiddenEffectOperation.Truncate) {
+    return collectSqlCompilerMatches(
+      normalizedSql,
+      /\btruncate(?:\s+table)?\s+([`"\[]?[a-zA-Z_][\w$.-]*[`"\]]?)/gi,
+    );
+  }
+
+  if (operation === SqlForbiddenEffectOperation.Alter) {
+    return collectSqlCompilerMatches(
+      normalizedSql,
+      /\balter\s+table(?:\s+if\s+exists)?\s+([`"\[]?[a-zA-Z_][\w$.-]*[`"\]]?)/gi,
+    );
+  }
+
+  return [];
+};
+
+const getSqlCompilerResourceScope = (
+  input: SqlForbiddenEffectObligationCompilerInput,
+  normalizedSql: string,
+  operation: SqlForbiddenEffectOperation,
+): string[] => {
+  const explicitResourceScope = uniqueSqlCompilerStrings(
+    (input.resourceScope ?? [])
+      .map(normalizeSqlCompilerIdentifier)
+      .filter((value) => value.length > 0),
+  );
+
+  if (explicitResourceScope.length > 0) {
+    return explicitResourceScope;
+  }
+
+  return matchSqlCompilerResourceScope(normalizedSql, operation);
+};
+
+const toSqlCompilerSlug = (value: string): string =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 72) || "unknown";
+
+type SqlObligationBuildOptions = {
+  input: SqlForbiddenEffectObligationCompilerInput;
+  normalizedSql: string;
+  kind: SqlForbiddenEffectObligationKind;
+  resourceScope: readonly string[];
+  severity: ForbiddenEffectSeverity;
+  requiredEvidenceTypes: readonly ForbiddenEffectEvidenceType[];
+  requiredExecutionMode: string;
+  forbiddenCapabilities: readonly string[];
+  forbiddenEffects: readonly string[];
+};
+
+const createSqlForbiddenEffectObligation = ({
+  input,
+  normalizedSql,
+  kind,
+  resourceScope,
+  severity,
+  requiredEvidenceTypes,
+  requiredExecutionMode,
+  forbiddenCapabilities,
+  forbiddenEffects,
+}: SqlObligationBuildOptions): ForbiddenEffectObligation => {
+  const requestKey = input.requestId ?? input.requestHash ?? normalizedSql;
+  const obligation: ForbiddenEffectObligation = {
+    obligationId: `feo-sql-${toSqlCompilerSlug(requestKey)}-${kind}-${toSqlCompilerSlug(
+      resourceScope.join("-"),
+    )}`,
+    effectType: ForbiddenEffectType.Sql,
+    resourceScope,
+    environment: input.environment ?? ForbiddenEffectEnvironment.Production,
+    severity,
+    requiredEvidenceTypes,
+    failClosedAction: ForbiddenEffectFailClosedAction.DenyPermit,
+    requiredExecutionMode,
+    executorType: ForbiddenEffectType.Sql,
+    forbiddenCapabilities,
+    forbiddenEffects,
+  };
+
+  if (input.requestHash !== undefined) {
+    obligation.requestHash = input.requestHash;
+  }
+
+  if (input.createdAt !== undefined) {
+    obligation.createdAt = input.createdAt;
+  }
+
+  return obligation;
+};
+
+const buildReadonlySqlForbiddenEffectObligations = (
+  input: SqlForbiddenEffectObligationCompilerInput,
+  normalizedSql: string,
+  resourceScope: readonly string[],
+): ForbiddenEffectObligation[] => [
+  createSqlForbiddenEffectObligation({
+    input,
+    normalizedSql,
+    kind: SqlForbiddenEffectObligationKind.ReadonlyMutation,
+    resourceScope,
+    severity: ForbiddenEffectSeverity.Critical,
+    requiredEvidenceTypes: [
+      ForbiddenEffectEvidenceType.WriteDenial,
+      ForbiddenEffectEvidenceType.DeleteDenial,
+      ForbiddenEffectEvidenceType.NoRowMutation,
+    ],
+    requiredExecutionMode: input.requiredExecutionMode ?? "readonly",
+    forbiddenCapabilities: ["insert", "update", "delete", "write", "mutation"],
+    forbiddenEffects: ["row_mutation"],
+  }),
+  createSqlForbiddenEffectObligation({
+    input,
+    normalizedSql,
+    kind: SqlForbiddenEffectObligationKind.ReadonlyDdl,
+    resourceScope,
+    severity: ForbiddenEffectSeverity.Critical,
+    requiredEvidenceTypes: [ForbiddenEffectEvidenceType.DdlDenial],
+    requiredExecutionMode: input.requiredExecutionMode ?? "readonly",
+    forbiddenCapabilities: ["drop", "truncate", "alter", "ddl"],
+    forbiddenEffects: ["schema_mutation"],
+  }),
+  createSqlForbiddenEffectObligation({
+    input,
+    normalizedSql,
+    kind: SqlForbiddenEffectObligationKind.ReadonlyTrigger,
+    resourceScope,
+    severity: ForbiddenEffectSeverity.High,
+    requiredEvidenceTypes: [ForbiddenEffectEvidenceType.NoTriggerSideEffect],
+    requiredExecutionMode: input.requiredExecutionMode ?? "readonly",
+    forbiddenCapabilities: ["trigger"],
+    forbiddenEffects: ["trigger_side_effect"],
+  }),
+  createSqlForbiddenEffectObligation({
+    input,
+    normalizedSql,
+    kind: SqlForbiddenEffectObligationKind.ReadonlyExternalEffect,
+    resourceScope,
+    severity: ForbiddenEffectSeverity.High,
+    requiredEvidenceTypes: [ForbiddenEffectEvidenceType.NoExternalSideEffect],
+    requiredExecutionMode: input.requiredExecutionMode ?? "readonly",
+    forbiddenCapabilities: ["external_effect"],
+    forbiddenEffects: ["external_side_effect", "async_job", "webhook"],
+  }),
+];
+
+const getDestructiveSqlEvidenceTypes = (
+  operation: SqlForbiddenEffectOperation,
+): readonly ForbiddenEffectEvidenceType[] => {
+  if (operation === SqlForbiddenEffectOperation.Delete) {
+    return [
+      ForbiddenEffectEvidenceType.DeleteDenial,
+      ForbiddenEffectEvidenceType.NoRowMutation,
+      ForbiddenEffectEvidenceType.NoTriggerSideEffect,
+      ForbiddenEffectEvidenceType.NoExternalSideEffect,
+    ];
+  }
+
+  if (
+    operation === SqlForbiddenEffectOperation.Insert ||
+    operation === SqlForbiddenEffectOperation.Update
+  ) {
+    return [
+      ForbiddenEffectEvidenceType.WriteDenial,
+      ForbiddenEffectEvidenceType.NoRowMutation,
+      ForbiddenEffectEvidenceType.NoTriggerSideEffect,
+      ForbiddenEffectEvidenceType.NoExternalSideEffect,
+    ];
+  }
+
+  return [
+    ForbiddenEffectEvidenceType.DdlDenial,
+    ForbiddenEffectEvidenceType.NoTriggerSideEffect,
+    ForbiddenEffectEvidenceType.NoExternalSideEffect,
+  ];
+};
+
+const buildDestructiveSqlForbiddenEffectObligation = (
+  input: SqlForbiddenEffectObligationCompilerInput,
+  normalizedSql: string,
+  resourceScope: readonly string[],
+  operation: SqlForbiddenEffectOperation,
+): ForbiddenEffectObligation =>
+  createSqlForbiddenEffectObligation({
+    input,
+    normalizedSql,
+    kind: sqlDestructiveDdlOperations.has(operation)
+      ? SqlForbiddenEffectObligationKind.DestructiveDdl
+      : SqlForbiddenEffectObligationKind.DestructiveMutation,
+    resourceScope,
+    severity: ForbiddenEffectSeverity.Critical,
+    requiredEvidenceTypes: getDestructiveSqlEvidenceTypes(operation),
+    requiredExecutionMode: input.requiredExecutionMode ?? "deny_destructive_sql",
+    forbiddenCapabilities: [operation, "destructive_sql"],
+    forbiddenEffects: sqlDestructiveDdlOperations.has(operation)
+      ? ["schema_mutation", "trigger_side_effect", "external_side_effect"]
+      : ["row_mutation", "trigger_side_effect", "external_side_effect"],
+  });
+
+const buildUnresolvedSqlForbiddenEffectObligation = (
+  input: SqlForbiddenEffectObligationCompilerInput,
+  normalizedSql: string,
+  resourceScope: readonly string[],
+): ForbiddenEffectObligation =>
+  createSqlForbiddenEffectObligation({
+    input,
+    normalizedSql,
+    kind: SqlForbiddenEffectObligationKind.UnresolvedResource,
+    resourceScope,
+    severity: ForbiddenEffectSeverity.Critical,
+    requiredEvidenceTypes: [
+      ForbiddenEffectEvidenceType.WriteDenial,
+      ForbiddenEffectEvidenceType.DeleteDenial,
+      ForbiddenEffectEvidenceType.DdlDenial,
+      ForbiddenEffectEvidenceType.NoRowMutation,
+      ForbiddenEffectEvidenceType.NoTriggerSideEffect,
+      ForbiddenEffectEvidenceType.NoExternalSideEffect,
+    ],
+    requiredExecutionMode: input.requiredExecutionMode ?? "fail_closed",
+    forbiddenCapabilities: [
+      "unknown_sql_operation",
+      "unresolved_table",
+      "write",
+      "delete",
+      "ddl",
+    ],
+    forbiddenEffects: [
+      "unknown_sql_side_effect",
+      "row_mutation",
+      "trigger_side_effect",
+      "external_side_effect",
+    ],
+  });
+
+export const compileSqlForbiddenEffectObligations = (
+  input: SqlForbiddenEffectObligationCompilerInput,
+): SqlForbiddenEffectObligationCompilation => {
+  const normalizedSql = normalizeSqlCompilerSql(input.sql);
+  const operation = getSqlCompilerOperation(normalizedSql);
+  const parsedResourceScope = getSqlCompilerResourceScope(
+    input,
+    normalizedSql,
+    operation,
+  );
+  const unresolvedTables =
+    parsedResourceScope.length === 0 ? [SqlUnresolvedResourceScope] : [];
+  const resourceScope =
+    parsedResourceScope.length > 0
+      ? parsedResourceScope
+      : [SqlUnresolvedResourceScope];
+  const failClosed =
+    operation === SqlForbiddenEffectOperation.Unknown ||
+    unresolvedTables.length > 0;
+
+  if (failClosed) {
+    return {
+      normalizedSql,
+      operation,
+      resourceScope,
+      unresolvedTables,
+      failClosed: true,
+      obligations: [
+        buildUnresolvedSqlForbiddenEffectObligation(
+          input,
+          normalizedSql,
+          resourceScope,
+        ),
+      ],
+    };
+  }
+
+  if (operation === SqlForbiddenEffectOperation.Select) {
+    return {
+      normalizedSql,
+      operation,
+      resourceScope,
+      unresolvedTables,
+      failClosed: false,
+      obligations: buildReadonlySqlForbiddenEffectObligations(
+        input,
+        normalizedSql,
+        resourceScope,
+      ),
+    };
+  }
+
+  if (
+    sqlDestructiveMutationOperations.has(operation) ||
+    sqlDestructiveDdlOperations.has(operation)
+  ) {
+    return {
+      normalizedSql,
+      operation,
+      resourceScope,
+      unresolvedTables,
+      failClosed: false,
+      obligations: [
+        buildDestructiveSqlForbiddenEffectObligation(
+          input,
+          normalizedSql,
+          resourceScope,
+          operation,
+        ),
+      ],
+    };
+  }
+
+  return {
+    normalizedSql,
+    operation,
+    resourceScope,
+    unresolvedTables,
+    failClosed: true,
+    obligations: [
+      buildUnresolvedSqlForbiddenEffectObligation(
+        input,
+        normalizedSql,
+        resourceScope,
+      ),
+    ],
+  };
+};
 
 export const validateDeniedCapabilityEvidence = (
   input: unknown,
