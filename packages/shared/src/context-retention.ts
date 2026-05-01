@@ -341,6 +341,97 @@ export type CiCdRequiredContextObligationCompilation =
     requiredAnchorRoles: readonly CiCdRequiredContextAnchorRequirement[];
   };
 
+export const ConfigRequiredContextOperation = {
+  Read: "read",
+  Create: "create",
+  Update: "update",
+  Delete: "delete",
+  Rollback: "rollback",
+  Unknown: "unknown",
+} as const;
+
+export type ConfigRequiredContextOperation =
+  (typeof ConfigRequiredContextOperation)[keyof typeof ConfigRequiredContextOperation];
+
+export const ConfigRequiredContextNamespaceClassification = {
+  Production: "production",
+  Sandbox: "sandbox",
+  Canary: "canary",
+  NonProduction: "non_production",
+  Unknown: "unknown",
+} as const;
+
+export type ConfigRequiredContextNamespaceClassification =
+  (typeof ConfigRequiredContextNamespaceClassification)[keyof typeof ConfigRequiredContextNamespaceClassification];
+
+export const ConfigRequiredContextObligationKind = {
+  ProductionConfigChangeContext: "production_config_change_context",
+  SandboxNamespaceConstrainedContext: "sandbox_namespace_constrained_context",
+  CanaryNamespaceConstrainedContext: "canary_namespace_constrained_context",
+  UncertainConfigChangeContext: "uncertain_config_change_context",
+} as const;
+
+export type ConfigRequiredContextObligationKind =
+  (typeof ConfigRequiredContextObligationKind)[keyof typeof ConfigRequiredContextObligationKind];
+
+export const ConfigRequiredContextAnchorRole = {
+  LatestUserInstruction: "latest_user_instruction",
+  ApprovalNote: "approval_note",
+  CurrentConfigState: "current_config_state",
+  ConfigPolicy: "config_policy",
+  RollbackPlan: "rollback_plan",
+  NamespaceConstraint: "namespace_constraint",
+  NegativeEvidence: "negative_evidence",
+} as const;
+
+export type ConfigRequiredContextAnchorRole =
+  (typeof ConfigRequiredContextAnchorRole)[keyof typeof ConfigRequiredContextAnchorRole];
+
+export type ConfigRequiredContextToolCallCandidate = {
+  operation?: string;
+  service?: string;
+  key?: string;
+  namespace?: string;
+  targetNamespace?: string;
+  sourceSystem?: string;
+  requestId?: string;
+  environment?: string;
+  requiredExecutionMode?: string;
+  resourceScope?: readonly string[];
+  value?: string;
+  newValue?: string;
+  proposedValue?: string;
+  dangerousValue?: boolean;
+};
+
+export type ConfigRequiredContextObligationCompilerInput =
+  ConfigRequiredContextToolCallCandidate & {
+    toolCallDigest: PatentProofHash;
+    availableAnchors: readonly ContextAnchor[];
+    actionImpactClass?: ActionImpactClassId;
+  };
+
+export type ConfigRequiredContextAnchorRequirement = {
+  role: ConfigRequiredContextAnchorRole;
+  anchorId: ContextAnchorId;
+  anchorType: ContextAnchorType;
+  resourceScope: string;
+  minimumRetentionMode: RequiredContextMinimumRetentionMode;
+};
+
+export type ConfigRequiredContextObligationCompilation =
+  RequiredContextObligationCompilation & {
+    operation: ConfigRequiredContextOperation;
+    namespace: string;
+    namespaceClassification: ConfigRequiredContextNamespaceClassification;
+    resourceScope: readonly string[];
+    dangerousValue: boolean;
+    obligationKind: ConfigRequiredContextObligationKind;
+    requiresNamespaceConstraintAnchors: boolean;
+    requiresNegativeEvidenceAnchors: boolean;
+    requiredAnchorRoles: readonly ConfigRequiredContextAnchorRequirement[];
+  };
+
 export type PromptContextUnitDigest = {
   contextUnitId: ContextAnchorId;
   digest: PatentProofHash;
@@ -2192,6 +2283,814 @@ export const CiCdRequiredContextObligationCompiler: ToolSpecificRequiredContextO
       }
 
       return compileCiCdRequiredContextObligations(compilerInput);
+    },
+  };
+
+const ConfigRequiredContextUnresolvedNamespace = "unresolved_config_namespace";
+
+const configRequiredContextOperationByKeyword: Record<
+  string,
+  ConfigRequiredContextOperation
+> = {
+  read: ConfigRequiredContextOperation.Read,
+  get: ConfigRequiredContextOperation.Read,
+  fetch: ConfigRequiredContextOperation.Read,
+  create: ConfigRequiredContextOperation.Create,
+  add: ConfigRequiredContextOperation.Create,
+  set: ConfigRequiredContextOperation.Update,
+  update: ConfigRequiredContextOperation.Update,
+  write: ConfigRequiredContextOperation.Update,
+  patch: ConfigRequiredContextOperation.Update,
+  config_update: ConfigRequiredContextOperation.Update,
+  delete: ConfigRequiredContextOperation.Delete,
+  remove: ConfigRequiredContextOperation.Delete,
+  rollback: ConfigRequiredContextOperation.Rollback,
+  revert: ConfigRequiredContextOperation.Rollback,
+};
+
+const configRequiredContextMutationOperations =
+  new Set<ConfigRequiredContextOperation>([
+    ConfigRequiredContextOperation.Create,
+    ConfigRequiredContextOperation.Update,
+    ConfigRequiredContextOperation.Delete,
+    ConfigRequiredContextOperation.Rollback,
+  ]);
+
+const normalizeConfigRequiredContextKeyword = (
+  value: string | undefined,
+): string =>
+  (value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+const getConfigRequiredContextOperation = (
+  input: ConfigRequiredContextToolCallCandidate,
+): ConfigRequiredContextOperation => {
+  const normalizedOperation = normalizeConfigRequiredContextKeyword(
+    input.operation,
+  );
+
+  if (normalizedOperation.length > 0) {
+    return (
+      configRequiredContextOperationByKeyword[normalizedOperation] ??
+      ConfigRequiredContextOperation.Unknown
+    );
+  }
+
+  const normalizedExecutionMode = normalizeConfigRequiredContextKeyword(
+    input.requiredExecutionMode,
+  );
+
+  if (normalizedExecutionMode.includes("rollback")) {
+    return ConfigRequiredContextOperation.Rollback;
+  }
+
+  if (
+    normalizedExecutionMode.includes("write") ||
+    normalizedExecutionMode.includes("update") ||
+    normalizedExecutionMode.includes("sandbox") ||
+    normalizedExecutionMode.includes("canary")
+  ) {
+    return ConfigRequiredContextOperation.Update;
+  }
+
+  if (normalizedExecutionMode.includes("read")) {
+    return ConfigRequiredContextOperation.Read;
+  }
+
+  return ConfigRequiredContextOperation.Unknown;
+};
+
+const normalizeConfigRequiredContextScopeValue = (value: string): string =>
+  value.trim().replace(/\s+/g, " ");
+
+const uniqueConfigRequiredContextStrings = (
+  values: readonly string[],
+): string[] => {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  values.forEach((value) => {
+    if (!seen.has(value)) {
+      seen.add(value);
+      result.push(value);
+    }
+  });
+
+  return result;
+};
+
+const getConfigRequiredContextNamespace = (
+  input: ConfigRequiredContextToolCallCandidate,
+): string => {
+  const namespace = input.targetNamespace ?? input.namespace;
+
+  if (namespace === undefined || namespace.trim().length === 0) {
+    return ConfigRequiredContextUnresolvedNamespace;
+  }
+
+  return normalizeConfigRequiredContextScopeValue(namespace);
+};
+
+const classifyConfigRequiredContextNamespace = (
+  namespace: string,
+  environment: string | undefined,
+): ConfigRequiredContextNamespaceClassification => {
+  if (namespace === ConfigRequiredContextUnresolvedNamespace) {
+    return ConfigRequiredContextNamespaceClassification.Unknown;
+  }
+
+  const normalizedNamespace = normalizeConfigRequiredContextKeyword(namespace);
+  const normalizedEnvironment = normalizeConfigRequiredContextKeyword(environment);
+
+  if (["production", "prod", "live", "primary"].includes(normalizedNamespace)) {
+    return ConfigRequiredContextNamespaceClassification.Production;
+  }
+
+  if (normalizedNamespace.includes("sandbox")) {
+    return ConfigRequiredContextNamespaceClassification.Sandbox;
+  }
+
+  if (normalizedNamespace.includes("canary")) {
+    return ConfigRequiredContextNamespaceClassification.Canary;
+  }
+
+  if (
+    [
+      "development",
+      "dev",
+      "test",
+      "staging",
+      "stage",
+      "nonprod",
+      "non_production",
+    ].includes(normalizedNamespace) ||
+    (normalizedEnvironment.length > 0 &&
+      normalizedEnvironment !== "production" &&
+      normalizedEnvironment !== "prod")
+  ) {
+    return ConfigRequiredContextNamespaceClassification.NonProduction;
+  }
+
+  return ConfigRequiredContextNamespaceClassification.Unknown;
+};
+
+const getConfigRequiredContextResourceScope = (
+  input: ConfigRequiredContextToolCallCandidate,
+  namespace: string,
+): string[] => {
+  const explicitResourceScope = uniqueConfigRequiredContextStrings(
+    (input.resourceScope ?? [])
+      .map(normalizeConfigRequiredContextScopeValue)
+      .filter((value) => value.length > 0),
+  );
+
+  if (explicitResourceScope.length > 0) {
+    return explicitResourceScope;
+  }
+
+  const configKey = [input.service, input.key]
+    .filter((value): value is string => value !== undefined)
+    .map(normalizeConfigRequiredContextScopeValue)
+    .filter((value) => value.length > 0)
+    .join(".");
+  const inferredResourceScope = uniqueConfigRequiredContextStrings(
+    [input.sourceSystem, configKey, namespace]
+      .filter((value): value is string => value !== undefined)
+      .filter((value) => value.length > 0),
+  );
+
+  return inferredResourceScope.length > 0
+    ? inferredResourceScope
+    : [ConfigRequiredContextUnresolvedNamespace];
+};
+
+const toConfigRequiredContextSlug = (value: string): string =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 72) || "unknown";
+
+const normalizeConfigRequiredContextMatchValue = (value: string): string =>
+  value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+const isConfigRequiredContextWildcardScope = (scope: string): boolean =>
+  scope === "*" ||
+  scope.endsWith(":*") ||
+  scope.endsWith("/*") ||
+  scope.includes("all_config") ||
+  scope.includes("all-config") ||
+  scope.includes("all_namespaces") ||
+  scope.includes("all-namespaces");
+
+const doesConfigRequiredContextAnchorMatchResource = (
+  anchor: ContextAnchor,
+  resourceScope: string,
+): boolean => {
+  const anchorScope = normalizeConfigRequiredContextMatchValue(
+    anchor.resourceScope,
+  );
+  const resource = normalizeConfigRequiredContextMatchValue(resourceScope);
+
+  if (resource.length === 0) {
+    return false;
+  }
+
+  if (
+    anchorScope === resource ||
+    isConfigRequiredContextWildcardScope(anchorScope)
+  ) {
+    return true;
+  }
+
+  const resourceTokens = resource.split(/\s+/).filter(Boolean);
+  const anchorTokens = anchorScope.split(/\s+/).filter(Boolean);
+
+  return resourceTokens.some((token) => anchorTokens.includes(token));
+};
+
+const doesConfigRequiredContextAnchorMatchAnyResource = (
+  anchor: ContextAnchor,
+  resourceScope: readonly string[],
+): boolean =>
+  resourceScope.some((resource) =>
+    doesConfigRequiredContextAnchorMatchResource(anchor, resource),
+  );
+
+const isConfigRequiredContextGlobalAnchor = (anchor: ContextAnchor): boolean => {
+  const scope = normalizeConfigRequiredContextMatchValue(anchor.resourceScope);
+
+  return (
+    isConfigRequiredContextWildcardScope(scope) ||
+    scope.includes("tool call") ||
+    scope.includes("request") ||
+    scope.includes("config")
+  );
+};
+
+const getConfigRequiredContextAnchorSearchText = (
+  anchor: ContextAnchor,
+): string =>
+  [
+    anchor.anchorId,
+    anchor.anchorType,
+    anchor.sourceIdentity,
+    anchor.authorityLevel,
+    anchor.resourceScope,
+  ]
+    .join(" ")
+    .toLowerCase();
+
+const chooseLatestConfigRequiredContextAnchor = (
+  availableAnchors: readonly ContextAnchor[],
+  predicate: (anchor: ContextAnchor) => boolean,
+): ContextAnchor | undefined => {
+  const matchingAnchors = availableAnchors.filter(predicate).sort((left, right) => {
+    const rightTime = Date.parse(right.createdAt);
+    const leftTime = Date.parse(left.createdAt);
+    const timeDelta =
+      (Number.isNaN(rightTime) ? 0 : rightTime) -
+      (Number.isNaN(leftTime) ? 0 : leftTime);
+
+    if (timeDelta !== 0) {
+      return timeDelta;
+    }
+
+    return left.anchorId.localeCompare(right.anchorId);
+  });
+
+  return matchingAnchors[0];
+};
+
+const createConfigRequiredContextFallbackAnchorId = (
+  input: ConfigRequiredContextObligationCompilerInput,
+  role: ConfigRequiredContextAnchorRole,
+  resourceScope: string,
+): ContextAnchorId => {
+  const requestKey = input.requestId ?? input.toolCallDigest;
+
+  return `ctx-required-config-${toConfigRequiredContextSlug(
+    requestKey,
+  )}-${role}-${toConfigRequiredContextSlug(resourceScope)}`;
+};
+
+type ConfigRequiredContextAnchorRequirementOptions = {
+  input: ConfigRequiredContextObligationCompilerInput;
+  role: ConfigRequiredContextAnchorRole;
+  anchorType: ContextAnchorType;
+  resourceScope: string;
+  minimumRetentionMode: RequiredContextMinimumRetentionMode;
+  predicate: (anchor: ContextAnchor) => boolean;
+};
+
+const createConfigRequiredContextAnchorRequirement = ({
+  input,
+  role,
+  anchorType,
+  resourceScope,
+  minimumRetentionMode,
+  predicate,
+}: ConfigRequiredContextAnchorRequirementOptions): ConfigRequiredContextAnchorRequirement => {
+  const anchor = chooseLatestConfigRequiredContextAnchor(
+    input.availableAnchors,
+    predicate,
+  );
+
+  return {
+    role,
+    anchorId:
+      anchor?.anchorId ??
+      createConfigRequiredContextFallbackAnchorId(input, role, resourceScope),
+    anchorType,
+    resourceScope,
+    minimumRetentionMode,
+  };
+};
+
+const isConfigRequiredContextUserInstructionAnchor = (
+  anchor: ContextAnchor,
+  resourceScope: readonly string[],
+): boolean =>
+  anchor.anchorType === ContextAnchorType.UserInstruction &&
+  (doesConfigRequiredContextAnchorMatchAnyResource(anchor, resourceScope) ||
+    isConfigRequiredContextGlobalAnchor(anchor));
+
+const isConfigRequiredContextApprovalAnchor = (
+  anchor: ContextAnchor,
+  resourceScope: readonly string[],
+): boolean =>
+  anchor.anchorType === ContextAnchorType.ApprovalNote &&
+  (doesConfigRequiredContextAnchorMatchAnyResource(anchor, resourceScope) ||
+    isConfigRequiredContextGlobalAnchor(anchor));
+
+const isConfigRequiredContextCurrentConfigAnchor = (
+  anchor: ContextAnchor,
+  resourceScope: readonly string[],
+): boolean => {
+  const searchText = getConfigRequiredContextAnchorSearchText(anchor);
+
+  return (
+    anchor.anchorType === ContextAnchorType.ResourceState &&
+    (searchText.includes("config") ||
+      searchText.includes("current") ||
+      searchText.includes("state") ||
+      searchText.includes("version")) &&
+    (doesConfigRequiredContextAnchorMatchAnyResource(anchor, resourceScope) ||
+      isConfigRequiredContextGlobalAnchor(anchor))
+  );
+};
+
+const isConfigRequiredContextPolicyAnchor = (
+  anchor: ContextAnchor,
+  resourceScope: readonly string[],
+): boolean => {
+  const searchText = getConfigRequiredContextAnchorSearchText(anchor);
+
+  return (
+    anchor.anchorType === ContextAnchorType.SystemPolicy &&
+    (searchText.includes("config") ||
+      searchText.includes("namespace") ||
+      searchText.includes("policy")) &&
+    (doesConfigRequiredContextAnchorMatchAnyResource(anchor, resourceScope) ||
+      isConfigRequiredContextGlobalAnchor(anchor))
+  );
+};
+
+const isConfigRequiredContextRollbackAnchor = (
+  anchor: ContextAnchor,
+  resourceScope: readonly string[],
+): boolean => {
+  const searchText = getConfigRequiredContextAnchorSearchText(anchor);
+
+  return (
+    (anchor.anchorType === ContextAnchorType.RetrievedDocument ||
+      anchor.anchorType === ContextAnchorType.ToolResult ||
+      anchor.anchorType === ContextAnchorType.ResourceState ||
+      anchor.anchorType === ContextAnchorType.ApprovalNote) &&
+    (searchText.includes("rollback") ||
+      searchText.includes("backout") ||
+      searchText.includes("restore") ||
+      searchText.includes("revert")) &&
+    (doesConfigRequiredContextAnchorMatchAnyResource(anchor, resourceScope) ||
+      isConfigRequiredContextGlobalAnchor(anchor))
+  );
+};
+
+const isConfigRequiredContextNamespaceConstraintAnchor = (
+  anchor: ContextAnchor,
+  resourceScope: readonly string[],
+): boolean => {
+  const searchText = getConfigRequiredContextAnchorSearchText(anchor);
+
+  return (
+    (anchor.anchorType === ContextAnchorType.DelegationConstraint ||
+      anchor.anchorType === ContextAnchorType.SystemPolicy ||
+      anchor.anchorType === ContextAnchorType.ApprovalNote) &&
+    (searchText.includes("namespace") ||
+      searchText.includes("sandbox") ||
+      searchText.includes("canary") ||
+      searchText.includes("constraint") ||
+      searchText.includes("isolation")) &&
+    (doesConfigRequiredContextAnchorMatchAnyResource(anchor, resourceScope) ||
+      isConfigRequiredContextGlobalAnchor(anchor))
+  );
+};
+
+const isConfigRequiredContextNegativeEvidenceAnchor = (
+  anchor: ContextAnchor,
+  resourceScope: readonly string[],
+): boolean => {
+  const searchText = getConfigRequiredContextAnchorSearchText(anchor);
+
+  return (
+    anchor.anchorType === ContextAnchorType.NegativeEvidence &&
+    (searchText.includes("danger") ||
+      searchText.includes("unsafe") ||
+      searchText.includes("risky") ||
+      searchText.includes("prohibited") ||
+      searchText.includes("denied") ||
+      searchText.includes("rejected")) &&
+    (doesConfigRequiredContextAnchorMatchAnyResource(anchor, resourceScope) ||
+      isConfigRequiredContextGlobalAnchor(anchor))
+  );
+};
+
+const isConfigRequiredContextDangerousValue = (
+  input: ConfigRequiredContextToolCallCandidate,
+): boolean => {
+  if (input.dangerousValue === true) {
+    return true;
+  }
+
+  const valueText = [input.value, input.newValue, input.proposedValue]
+    .filter((value): value is string => value !== undefined)
+    .join(" ")
+    .toLowerCase();
+
+  if (valueText.length === 0) {
+    return false;
+  }
+
+  return [
+    "allow_all",
+    "allow all",
+    "disable_auth",
+    "disable auth",
+    "skip_tls",
+    "no_tls",
+    "plaintext",
+    "0.0.0.0/0",
+    "*",
+    "root",
+    "admin",
+    "bypass",
+    "unsafe",
+    "danger",
+  ].some((keyword) => valueText.includes(keyword));
+};
+
+const getConfigRequiredContextObligationKind = (
+  operation: ConfigRequiredContextOperation,
+  namespaceClassification: ConfigRequiredContextNamespaceClassification,
+): ConfigRequiredContextObligationKind => {
+  if (
+    !configRequiredContextMutationOperations.has(operation) ||
+    namespaceClassification === ConfigRequiredContextNamespaceClassification.Unknown ||
+    namespaceClassification === ConfigRequiredContextNamespaceClassification.NonProduction
+  ) {
+    return ConfigRequiredContextObligationKind.UncertainConfigChangeContext;
+  }
+
+  if (
+    namespaceClassification ===
+    ConfigRequiredContextNamespaceClassification.Production
+  ) {
+    return ConfigRequiredContextObligationKind.ProductionConfigChangeContext;
+  }
+
+  if (
+    namespaceClassification === ConfigRequiredContextNamespaceClassification.Sandbox
+  ) {
+    return ConfigRequiredContextObligationKind.SandboxNamespaceConstrainedContext;
+  }
+
+  return ConfigRequiredContextObligationKind.CanaryNamespaceConstrainedContext;
+};
+
+const shouldConfigRequiredContextRequireNamespaceConstraint = (
+  obligationKind: ConfigRequiredContextObligationKind,
+): boolean =>
+  obligationKind ===
+    ConfigRequiredContextObligationKind.SandboxNamespaceConstrainedContext ||
+  obligationKind ===
+    ConfigRequiredContextObligationKind.CanaryNamespaceConstrainedContext;
+
+const buildConfigRequiredContextAnchorRequirements = (
+  input: ConfigRequiredContextObligationCompilerInput,
+  obligationKind: ConfigRequiredContextObligationKind,
+  resourceScope: readonly string[],
+  dangerousValue: boolean,
+): ConfigRequiredContextAnchorRequirement[] => {
+  const requirements: ConfigRequiredContextAnchorRequirement[] = [
+    createConfigRequiredContextAnchorRequirement({
+      input,
+      role: ConfigRequiredContextAnchorRole.LatestUserInstruction,
+      anchorType: ContextAnchorType.UserInstruction,
+      resourceScope: "tool_call",
+      minimumRetentionMode: ContextRetentionMode.Verbatim,
+      predicate: (anchor) =>
+        isConfigRequiredContextUserInstructionAnchor(anchor, resourceScope),
+    }),
+    createConfigRequiredContextAnchorRequirement({
+      input,
+      role: ConfigRequiredContextAnchorRole.ConfigPolicy,
+      anchorType: ContextAnchorType.SystemPolicy,
+      resourceScope: "config_policy",
+      minimumRetentionMode: ContextRetentionMode.CertifiedSummary,
+      predicate: (anchor) =>
+        isConfigRequiredContextPolicyAnchor(anchor, resourceScope),
+    }),
+    createConfigRequiredContextAnchorRequirement({
+      input,
+      role: ConfigRequiredContextAnchorRole.CurrentConfigState,
+      anchorType: ContextAnchorType.ResourceState,
+      resourceScope: "current_config_state",
+      minimumRetentionMode: ContextRetentionMode.CertifiedSummary,
+      predicate: (anchor) =>
+        isConfigRequiredContextCurrentConfigAnchor(anchor, resourceScope),
+    }),
+  ];
+
+  if (
+    obligationKind ===
+    ConfigRequiredContextObligationKind.ProductionConfigChangeContext
+  ) {
+    requirements.push(
+      createConfigRequiredContextAnchorRequirement({
+        input,
+        role: ConfigRequiredContextAnchorRole.ApprovalNote,
+        anchorType: ContextAnchorType.ApprovalNote,
+        resourceScope: "approval_note",
+        minimumRetentionMode: ContextRetentionMode.Verbatim,
+        predicate: (anchor) =>
+          isConfigRequiredContextApprovalAnchor(anchor, resourceScope),
+      }),
+      createConfigRequiredContextAnchorRequirement({
+        input,
+        role: ConfigRequiredContextAnchorRole.RollbackPlan,
+        anchorType: ContextAnchorType.RetrievedDocument,
+        resourceScope: "rollback_plan",
+        minimumRetentionMode: ContextRetentionMode.Verbatim,
+        predicate: (anchor) =>
+          isConfigRequiredContextRollbackAnchor(anchor, resourceScope),
+      }),
+    );
+  }
+
+  if (shouldConfigRequiredContextRequireNamespaceConstraint(obligationKind)) {
+    requirements.push(
+      createConfigRequiredContextAnchorRequirement({
+        input,
+        role: ConfigRequiredContextAnchorRole.NamespaceConstraint,
+        anchorType: ContextAnchorType.DelegationConstraint,
+        resourceScope: "namespace_constraint",
+        minimumRetentionMode: ContextRetentionMode.Verbatim,
+        predicate: (anchor) =>
+          isConfigRequiredContextNamespaceConstraintAnchor(anchor, resourceScope),
+      }),
+    );
+  }
+
+  if (dangerousValue) {
+    requirements.push(
+      createConfigRequiredContextAnchorRequirement({
+        input,
+        role: ConfigRequiredContextAnchorRole.NegativeEvidence,
+        anchorType: ContextAnchorType.NegativeEvidence,
+        resourceScope: "dangerous_value",
+        minimumRetentionMode: ContextRetentionMode.CertifiedSummary,
+        predicate: (anchor) =>
+          isConfigRequiredContextNegativeEvidenceAnchor(anchor, resourceScope),
+      }),
+    );
+  }
+
+  return requirements;
+};
+
+const uniqueConfigRequiredContextAnchorIds = (
+  requirements: readonly ConfigRequiredContextAnchorRequirement[],
+): ContextAnchorId[] =>
+  uniqueConfigRequiredContextStrings(requirements.map((r) => r.anchorId));
+
+const getConfigRequiredContextActionImpactClass = (
+  input: ConfigRequiredContextObligationCompilerInput,
+  obligationKind: ConfigRequiredContextObligationKind,
+): ActionImpactClassId => {
+  if (input.actionImpactClass !== undefined) {
+    return input.actionImpactClass;
+  }
+
+  if (
+    obligationKind ===
+    ConfigRequiredContextObligationKind.ProductionConfigChangeContext
+  ) {
+    return "production_config_change";
+  }
+
+  if (
+    obligationKind ===
+    ConfigRequiredContextObligationKind.SandboxNamespaceConstrainedContext
+  ) {
+    return "sandbox_config_change";
+  }
+
+  if (
+    obligationKind ===
+    ConfigRequiredContextObligationKind.CanaryNamespaceConstrainedContext
+  ) {
+    return "canary_config_change";
+  }
+
+  return "config_uncertain";
+};
+
+const getConfigRequiredContextFreshnessWindow = (
+  obligationKind: ConfigRequiredContextObligationKind,
+): RequiredContextFreshnessWindow => {
+  if (
+    obligationKind ===
+    ConfigRequiredContextObligationKind.UncertainConfigChangeContext
+  ) {
+    return "PT15M";
+  }
+
+  if (
+    shouldConfigRequiredContextRequireNamespaceConstraint(obligationKind)
+  ) {
+    return "PT1H";
+  }
+
+  return "PT30M";
+};
+
+const getConfigRequiredContextMissingAnchorAction = (
+  obligationKind: ConfigRequiredContextObligationKind,
+): RequiredContextMissingAnchorAction => {
+  if (
+    obligationKind ===
+    ConfigRequiredContextObligationKind.ProductionConfigChangeContext
+  ) {
+    return RequiredContextMissingAnchorAction.Reapproval;
+  }
+
+  if (
+    obligationKind ===
+    ConfigRequiredContextObligationKind.UncertainConfigChangeContext
+  ) {
+    return RequiredContextMissingAnchorAction.Deny;
+  }
+
+  return RequiredContextMissingAnchorAction.RegroundOrDeny;
+};
+
+export const compileConfigRequiredContextObligations = (
+  input: ConfigRequiredContextObligationCompilerInput,
+): ConfigRequiredContextObligationCompilation => {
+  const operation = getConfigRequiredContextOperation(input);
+  const namespace = getConfigRequiredContextNamespace(input);
+  const namespaceClassification = classifyConfigRequiredContextNamespace(
+    namespace,
+    input.environment,
+  );
+  const resourceScope = getConfigRequiredContextResourceScope(input, namespace);
+  const dangerousValue = isConfigRequiredContextDangerousValue(input);
+  const obligationKind = getConfigRequiredContextObligationKind(
+    operation,
+    namespaceClassification,
+  );
+  const requiredAnchorRoles = buildConfigRequiredContextAnchorRequirements(
+    input,
+    obligationKind,
+    resourceScope,
+    dangerousValue,
+  );
+  const requiredAnchors = uniqueConfigRequiredContextAnchorIds(
+    requiredAnchorRoles,
+  );
+  const requestKey = input.requestId ?? input.toolCallDigest;
+  const actionImpactClass = getConfigRequiredContextActionImpactClass(
+    input,
+    obligationKind,
+  );
+  const obligation = RequiredContextObligationSchema.parse({
+    obligationId: `rco-config-${toConfigRequiredContextSlug(
+      requestKey,
+    )}-${obligationKind}-${toConfigRequiredContextSlug(resourceScope.join("-"))}`,
+    toolCallDigest: input.toolCallDigest,
+    actionImpactClass,
+    requiredAnchors,
+    freshnessWindow: getConfigRequiredContextFreshnessWindow(obligationKind),
+    minimumRetentionMode: ContextRetentionMode.Verbatim,
+    conflictPolicy: RequiredContextConflictPolicy.DenyOnOmittedConflict,
+    taintPolicy: RequiredContextTaintPolicy.DenyOnUntrustedInstruction,
+    missingAnchorAction: getConfigRequiredContextMissingAnchorAction(
+      obligationKind,
+    ),
+  });
+
+  return {
+    operation,
+    namespace,
+    namespaceClassification,
+    resourceScope,
+    dangerousValue,
+    obligationKind,
+    requiresNamespaceConstraintAnchors:
+      shouldConfigRequiredContextRequireNamespaceConstraint(obligationKind),
+    requiresNegativeEvidenceAnchors: dangerousValue,
+    requiredAnchorRoles,
+    toolCallDigest: input.toolCallDigest,
+    actionImpactClass,
+    obligations: [obligation],
+  };
+};
+
+export const ConfigRequiredContextObligationCompiler: ToolSpecificRequiredContextObligationCompiler<ConfigRequiredContextToolCallCandidate> =
+  {
+    toolType: "config",
+    compileRequiredContextObligations(input) {
+      const compilerInput: ConfigRequiredContextObligationCompilerInput = {
+        toolCallDigest: input.toolCallDigest,
+        availableAnchors: input.availableAnchors,
+      };
+      const requestId = input.candidateId ?? input.toolCallCandidate.requestId;
+
+      if (requestId !== undefined) {
+        compilerInput.requestId = requestId;
+      }
+
+      if (input.actionImpactClass !== undefined) {
+        compilerInput.actionImpactClass = input.actionImpactClass;
+      }
+
+      if (input.toolCallCandidate.operation !== undefined) {
+        compilerInput.operation = input.toolCallCandidate.operation;
+      }
+
+      if (input.toolCallCandidate.service !== undefined) {
+        compilerInput.service = input.toolCallCandidate.service;
+      }
+
+      if (input.toolCallCandidate.key !== undefined) {
+        compilerInput.key = input.toolCallCandidate.key;
+      }
+
+      if (input.toolCallCandidate.namespace !== undefined) {
+        compilerInput.namespace = input.toolCallCandidate.namespace;
+      }
+
+      if (input.toolCallCandidate.targetNamespace !== undefined) {
+        compilerInput.targetNamespace = input.toolCallCandidate.targetNamespace;
+      }
+
+      if (input.toolCallCandidate.sourceSystem !== undefined) {
+        compilerInput.sourceSystem = input.toolCallCandidate.sourceSystem;
+      }
+
+      if (input.toolCallCandidate.environment !== undefined) {
+        compilerInput.environment = input.toolCallCandidate.environment;
+      }
+
+      if (input.toolCallCandidate.requiredExecutionMode !== undefined) {
+        compilerInput.requiredExecutionMode =
+          input.toolCallCandidate.requiredExecutionMode;
+      }
+
+      if (input.toolCallCandidate.resourceScope !== undefined) {
+        compilerInput.resourceScope = input.toolCallCandidate.resourceScope;
+      }
+
+      if (input.toolCallCandidate.value !== undefined) {
+        compilerInput.value = input.toolCallCandidate.value;
+      }
+
+      if (input.toolCallCandidate.newValue !== undefined) {
+        compilerInput.newValue = input.toolCallCandidate.newValue;
+      }
+
+      if (input.toolCallCandidate.proposedValue !== undefined) {
+        compilerInput.proposedValue = input.toolCallCandidate.proposedValue;
+      }
+
+      if (input.toolCallCandidate.dangerousValue !== undefined) {
+        compilerInput.dangerousValue = input.toolCallCandidate.dangerousValue;
+      }
+
+      return compileConfigRequiredContextObligations(compilerInput);
     },
   };
 
