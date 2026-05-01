@@ -549,6 +549,79 @@ export type CiCdForbiddenEffectObligationCompilation = {
   obligations: readonly ForbiddenEffectObligation[];
 };
 
+export const ConfigForbiddenEffectOperation = {
+  Read: "read",
+  Create: "create",
+  Update: "update",
+  Delete: "delete",
+  Rollback: "rollback",
+  Unknown: "unknown",
+} as const;
+
+export type ConfigForbiddenEffectOperation =
+  (typeof ConfigForbiddenEffectOperation)[keyof typeof ConfigForbiddenEffectOperation];
+
+export const ConfigNamespaceClassification = {
+  Production: "production",
+  Sandbox: "sandbox",
+  Canary: "canary",
+  NonProduction: "non_production",
+  Unknown: "unknown",
+} as const;
+
+export type ConfigNamespaceClassification =
+  (typeof ConfigNamespaceClassification)[keyof typeof ConfigNamespaceClassification];
+
+export const ConfigRollbackCapability = {
+  Automatic: "automatic",
+  Manual: "manual",
+  None: "none",
+  Unknown: "unknown",
+  Missing: "missing",
+} as const;
+
+export type ConfigRollbackCapability =
+  (typeof ConfigRollbackCapability)[keyof typeof ConfigRollbackCapability];
+
+export const ConfigForbiddenEffectObligationKind = {
+  ProductionNamespaceWrite: "production_namespace_write",
+  ProductionCredentialUse: "production_credential_use",
+  ProductionWriteEndpointAccess: "production_write_endpoint_access",
+  SandboxIsolation: "sandbox_isolation",
+  CanaryIsolation: "canary_isolation",
+  UnresolvedNamespace: "unresolved_namespace",
+  UnverifiedRollback: "unverified_rollback",
+} as const;
+
+export type ConfigForbiddenEffectObligationKind =
+  (typeof ConfigForbiddenEffectObligationKind)[keyof typeof ConfigForbiddenEffectObligationKind];
+
+export type ConfigForbiddenEffectObligationCompilerInput = {
+  operation?: string;
+  service?: string;
+  key?: string;
+  namespace?: string;
+  targetNamespace?: string;
+  sourceSystem?: string;
+  requestId?: string;
+  requestHash?: PatentProofHash;
+  environment?: ForbiddenEffectEnvironment;
+  requiredExecutionMode?: string;
+  rollbackCapability?: string;
+  resourceScope?: readonly string[];
+  createdAt?: ForbiddenSideEffectTimestamp;
+};
+
+export type ConfigForbiddenEffectObligationCompilation = {
+  operation: ConfigForbiddenEffectOperation;
+  namespace: string;
+  namespaceClassification: ConfigNamespaceClassification;
+  rollbackCapability: ConfigRollbackCapability;
+  resourceScope: readonly string[];
+  failClosed: boolean;
+  obligations: readonly ForbiddenEffectObligation[];
+};
+
 export type ForbiddenEffectObligationValidationIssue = {
   path: string;
   code: string;
@@ -3366,6 +3439,514 @@ export const compileCiCdForbiddenEffectObligations = (
     failClosed:
       operation === CiCdForbiddenEffectOperation.Unknown ||
       (isProductionRelease && testStatus !== CiCdPipelineTestStatus.Passed),
+    obligations,
+  };
+};
+
+
+const ConfigUnresolvedNamespace = "unresolved_config_namespace";
+
+const configOperationByKeyword: Record<string, ConfigForbiddenEffectOperation> = {
+  create: ConfigForbiddenEffectOperation.Create,
+  add: ConfigForbiddenEffectOperation.Create,
+  set: ConfigForbiddenEffectOperation.Update,
+  update: ConfigForbiddenEffectOperation.Update,
+  write: ConfigForbiddenEffectOperation.Update,
+  patch: ConfigForbiddenEffectOperation.Update,
+  config_update: ConfigForbiddenEffectOperation.Update,
+  delete: ConfigForbiddenEffectOperation.Delete,
+  remove: ConfigForbiddenEffectOperation.Delete,
+  read: ConfigForbiddenEffectOperation.Read,
+  get: ConfigForbiddenEffectOperation.Read,
+  fetch: ConfigForbiddenEffectOperation.Read,
+  rollback: ConfigForbiddenEffectOperation.Rollback,
+  revert: ConfigForbiddenEffectOperation.Rollback,
+};
+
+const configMutationOperations = new Set<ConfigForbiddenEffectOperation>([
+  ConfigForbiddenEffectOperation.Create,
+  ConfigForbiddenEffectOperation.Update,
+  ConfigForbiddenEffectOperation.Delete,
+  ConfigForbiddenEffectOperation.Rollback,
+]);
+
+const normalizeConfigCompilerKeyword = (value: string | undefined): string =>
+  (value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+const getConfigCompilerOperation = (
+  input: ConfigForbiddenEffectObligationCompilerInput,
+): ConfigForbiddenEffectOperation => {
+  const normalizedOperation = normalizeConfigCompilerKeyword(input.operation);
+
+  if (normalizedOperation.length > 0) {
+    return (
+      configOperationByKeyword[normalizedOperation] ??
+      ConfigForbiddenEffectOperation.Unknown
+    );
+  }
+
+  const normalizedExecutionMode = normalizeConfigCompilerKeyword(
+    input.requiredExecutionMode,
+  );
+
+  if (normalizedExecutionMode.includes("rollback")) {
+    return ConfigForbiddenEffectOperation.Rollback;
+  }
+
+  if (
+    normalizedExecutionMode.includes("write") ||
+    normalizedExecutionMode.includes("update") ||
+    normalizedExecutionMode.includes("sandbox") ||
+    normalizedExecutionMode.includes("canary")
+  ) {
+    return ConfigForbiddenEffectOperation.Update;
+  }
+
+  if (normalizedExecutionMode.includes("read")) {
+    return ConfigForbiddenEffectOperation.Read;
+  }
+
+  return ConfigForbiddenEffectOperation.Unknown;
+};
+
+const normalizeConfigCompilerScopeValue = (value: string): string =>
+  value.trim().replace(/\s+/g, " ");
+
+const uniqueConfigCompilerStrings = (values: readonly string[]): string[] => {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  values.forEach((value) => {
+    if (!seen.has(value)) {
+      seen.add(value);
+      result.push(value);
+    }
+  });
+
+  return result;
+};
+
+const getConfigCompilerNamespace = (
+  input: ConfigForbiddenEffectObligationCompilerInput,
+): string => {
+  const namespace = input.targetNamespace ?? input.namespace;
+
+  if (namespace === undefined || namespace.trim().length === 0) {
+    return ConfigUnresolvedNamespace;
+  }
+
+  return normalizeConfigCompilerScopeValue(namespace);
+};
+
+const classifyConfigCompilerNamespace = (
+  namespace: string,
+  environment: ForbiddenEffectEnvironment | undefined,
+): ConfigNamespaceClassification => {
+  if (namespace === ConfigUnresolvedNamespace) {
+    return ConfigNamespaceClassification.Unknown;
+  }
+
+  const normalizedNamespace = normalizeConfigCompilerKeyword(namespace);
+
+  if (["production", "prod", "live", "primary"].includes(normalizedNamespace)) {
+    return ConfigNamespaceClassification.Production;
+  }
+
+  if (normalizedNamespace.includes("sandbox")) {
+    return ConfigNamespaceClassification.Sandbox;
+  }
+
+  if (normalizedNamespace.includes("canary")) {
+    return ConfigNamespaceClassification.Canary;
+  }
+
+  if (
+    [
+      "development",
+      "dev",
+      "test",
+      "staging",
+      "stage",
+      "nonprod",
+      "non_production",
+    ].includes(normalizedNamespace) ||
+    (environment !== undefined &&
+      environment !== ForbiddenEffectEnvironment.Production)
+  ) {
+    return ConfigNamespaceClassification.NonProduction;
+  }
+
+  return ConfigNamespaceClassification.Unknown;
+};
+
+const getConfigCompilerRollbackCapability = (
+  rollbackCapability: string | undefined,
+): ConfigRollbackCapability => {
+  const normalizedCapability = normalizeConfigCompilerKeyword(rollbackCapability);
+
+  if (normalizedCapability.length === 0) {
+    return ConfigRollbackCapability.Missing;
+  }
+
+  if (["auto", "automatic", "automated"].includes(normalizedCapability)) {
+    return ConfigRollbackCapability.Automatic;
+  }
+
+  if (["manual", "operator", "approval"].includes(normalizedCapability)) {
+    return ConfigRollbackCapability.Manual;
+  }
+
+  if (["none", "no", "disabled", "unavailable"].includes(normalizedCapability)) {
+    return ConfigRollbackCapability.None;
+  }
+
+  return ConfigRollbackCapability.Unknown;
+};
+
+const getConfigCompilerResourceScope = (
+  input: ConfigForbiddenEffectObligationCompilerInput,
+  namespace: string,
+): string[] => {
+  const explicitResourceScope = uniqueConfigCompilerStrings(
+    (input.resourceScope ?? [])
+      .map(normalizeConfigCompilerScopeValue)
+      .filter((value) => value.length > 0),
+  );
+
+  if (explicitResourceScope.length > 0) {
+    return explicitResourceScope;
+  }
+
+  const configKey = [input.service, input.key]
+    .filter((value): value is string => value !== undefined)
+    .map(normalizeConfigCompilerScopeValue)
+    .filter((value) => value.length > 0)
+    .join(".");
+
+  const inferredResourceScope = uniqueConfigCompilerStrings(
+    [input.sourceSystem, configKey, namespace]
+      .filter((value): value is string => value !== undefined)
+      .filter((value) => value.length > 0),
+  );
+
+  return inferredResourceScope.length > 0
+    ? inferredResourceScope
+    : [ConfigUnresolvedNamespace];
+};
+
+const toConfigCompilerSlug = (value: string): string =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 72) || "unknown";
+
+type ConfigObligationBuildOptions = {
+  input: ConfigForbiddenEffectObligationCompilerInput;
+  kind: ConfigForbiddenEffectObligationKind;
+  resourceScope: readonly string[];
+  environment: ForbiddenEffectEnvironment;
+  severity: ForbiddenEffectSeverity;
+  requiredEvidenceTypes: readonly ForbiddenEffectEvidenceType[];
+  requiredExecutionMode: string;
+  forbiddenCapabilities: readonly string[];
+  forbiddenEffects: readonly string[];
+};
+
+const createConfigForbiddenEffectObligation = ({
+  input,
+  kind,
+  resourceScope,
+  environment,
+  severity,
+  requiredEvidenceTypes,
+  requiredExecutionMode,
+  forbiddenCapabilities,
+  forbiddenEffects,
+}: ConfigObligationBuildOptions): ForbiddenEffectObligation => {
+  const requestScopeKey = [
+    input.operation,
+    input.sourceSystem,
+    input.service,
+    input.key,
+    input.targetNamespace ?? input.namespace,
+  ]
+    .filter((value): value is string => value !== undefined)
+    .join("-");
+  const requestKey = (input.requestId ?? input.requestHash ?? requestScopeKey) || kind;
+  const obligation: ForbiddenEffectObligation = {
+    obligationId: `feo-config-${toConfigCompilerSlug(requestKey)}-${kind}-${toConfigCompilerSlug(
+      resourceScope.join("-"),
+    )}`,
+    effectType: ForbiddenEffectType.Config,
+    resourceScope,
+    environment,
+    severity,
+    requiredEvidenceTypes,
+    failClosedAction: ForbiddenEffectFailClosedAction.DenyPermit,
+    requiredExecutionMode,
+    executorType: ForbiddenEffectType.Config,
+    forbiddenCapabilities,
+    forbiddenEffects,
+  };
+
+  if (input.requestHash !== undefined) {
+    obligation.requestHash = input.requestHash;
+  }
+
+  if (input.createdAt !== undefined) {
+    obligation.createdAt = input.createdAt;
+  }
+
+  return obligation;
+};
+
+const buildProductionConfigForbiddenEffectObligations = (
+  input: ConfigForbiddenEffectObligationCompilerInput,
+  resourceScope: readonly string[],
+  environment: ForbiddenEffectEnvironment,
+): ForbiddenEffectObligation[] => [
+  createConfigForbiddenEffectObligation({
+    input,
+    kind: ConfigForbiddenEffectObligationKind.ProductionNamespaceWrite,
+    resourceScope,
+    environment,
+    severity: ForbiddenEffectSeverity.Critical,
+    requiredEvidenceTypes: [
+      ForbiddenEffectEvidenceType.ProductionNamespaceWriteDenial,
+    ],
+    requiredExecutionMode: input.requiredExecutionMode ?? "production_config_guarded",
+    forbiddenCapabilities: ["production_namespace_write", "config_write"],
+    forbiddenEffects: ["production_config_write", "namespace_mutation"],
+  }),
+  createConfigForbiddenEffectObligation({
+    input,
+    kind: ConfigForbiddenEffectObligationKind.ProductionCredentialUse,
+    resourceScope,
+    environment,
+    severity: ForbiddenEffectSeverity.Critical,
+    requiredEvidenceTypes: [
+      ForbiddenEffectEvidenceType.ProductionCredentialUseDenial,
+    ],
+    requiredExecutionMode: input.requiredExecutionMode ?? "production_config_guarded",
+    forbiddenCapabilities: ["production_credential_use", "config_admin_credential"],
+    forbiddenEffects: ["production_secret_access", "privileged_config_write"],
+  }),
+  createConfigForbiddenEffectObligation({
+    input,
+    kind: ConfigForbiddenEffectObligationKind.ProductionWriteEndpointAccess,
+    resourceScope,
+    environment,
+    severity: ForbiddenEffectSeverity.Critical,
+    requiredEvidenceTypes: [
+      ForbiddenEffectEvidenceType.ProductionWriteEndpointAccessDenial,
+    ],
+    requiredExecutionMode: input.requiredExecutionMode ?? "production_config_guarded",
+    forbiddenCapabilities: [
+      "production_write_endpoint_access",
+      "config_write_endpoint",
+    ],
+    forbiddenEffects: ["production_endpoint_call", "config_state_change"],
+  }),
+];
+
+const buildIsolatedConfigForbiddenEffectObligation = (
+  input: ConfigForbiddenEffectObligationCompilerInput,
+  resourceScope: readonly string[],
+  namespaceClassification: ConfigNamespaceClassification,
+  environment: ForbiddenEffectEnvironment,
+): ForbiddenEffectObligation =>
+  createConfigForbiddenEffectObligation({
+    input,
+    kind:
+      namespaceClassification === ConfigNamespaceClassification.Sandbox
+        ? ConfigForbiddenEffectObligationKind.SandboxIsolation
+        : ConfigForbiddenEffectObligationKind.CanaryIsolation,
+    resourceScope,
+    environment,
+    severity: ForbiddenEffectSeverity.High,
+    requiredEvidenceTypes: [
+      ForbiddenEffectEvidenceType.ProductionNamespaceWriteDenial,
+      ForbiddenEffectEvidenceType.ProductionCredentialUseDenial,
+      ForbiddenEffectEvidenceType.ProductionWriteEndpointAccessDenial,
+      ForbiddenEffectEvidenceType.NoExternalSideEffect,
+    ],
+    requiredExecutionMode:
+      input.requiredExecutionMode ??
+      (namespaceClassification === ConfigNamespaceClassification.Sandbox
+        ? "sandbox_config_write"
+        : "canary_config_write"),
+    forbiddenCapabilities: [
+      "production_namespace_write",
+      "production_credential_use",
+      "production_write_endpoint_access",
+      "cross_namespace_config_write",
+    ],
+    forbiddenEffects: [
+      "production_config_write",
+      "production_secret_access",
+      "production_endpoint_call",
+      "cross_namespace_config_mutation",
+    ],
+  });
+
+const buildUnresolvedNamespaceConfigForbiddenEffectObligation = (
+  input: ConfigForbiddenEffectObligationCompilerInput,
+  resourceScope: readonly string[],
+  environment: ForbiddenEffectEnvironment,
+): ForbiddenEffectObligation =>
+  createConfigForbiddenEffectObligation({
+    input,
+    kind: ConfigForbiddenEffectObligationKind.UnresolvedNamespace,
+    resourceScope,
+    environment,
+    severity: ForbiddenEffectSeverity.Critical,
+    requiredEvidenceTypes: [
+      ForbiddenEffectEvidenceType.ProductionNamespaceWriteDenial,
+      ForbiddenEffectEvidenceType.ProductionCredentialUseDenial,
+      ForbiddenEffectEvidenceType.ProductionWriteEndpointAccessDenial,
+      ForbiddenEffectEvidenceType.NoExternalSideEffect,
+    ],
+    requiredExecutionMode: "fail_closed",
+    forbiddenCapabilities: [
+      "unknown_config_namespace",
+      "production_namespace_write",
+      "production_credential_use",
+      "production_write_endpoint_access",
+    ],
+    forbiddenEffects: [
+      "unknown_config_side_effect",
+      "production_config_write",
+      "production_secret_access",
+      "production_endpoint_call",
+    ],
+  });
+
+const buildUnverifiedRollbackConfigForbiddenEffectObligation = (
+  input: ConfigForbiddenEffectObligationCompilerInput,
+  resourceScope: readonly string[],
+  environment: ForbiddenEffectEnvironment,
+  rollbackCapability: ConfigRollbackCapability,
+): ForbiddenEffectObligation =>
+  createConfigForbiddenEffectObligation({
+    input,
+    kind: ConfigForbiddenEffectObligationKind.UnverifiedRollback,
+    resourceScope,
+    environment,
+    severity: ForbiddenEffectSeverity.Critical,
+    requiredEvidenceTypes: [
+      ForbiddenEffectEvidenceType.ProductionNamespaceWriteDenial,
+      ForbiddenEffectEvidenceType.ProductionCredentialUseDenial,
+      ForbiddenEffectEvidenceType.ProductionWriteEndpointAccessDenial,
+    ],
+    requiredExecutionMode: "fail_closed",
+    forbiddenCapabilities: [
+      rollbackCapability === ConfigRollbackCapability.None
+        ? "config_write_without_rollback"
+        : "config_write_with_unverified_rollback",
+      "production_namespace_write",
+      "production_credential_use",
+      "production_write_endpoint_access",
+    ],
+    forbiddenEffects: [
+      "irreversible_config_mutation",
+      "production_config_write",
+      "production_secret_access",
+      "production_endpoint_call",
+    ],
+  });
+
+const isConfigRollbackCapabilityVerified = (
+  rollbackCapability: ConfigRollbackCapability,
+): boolean =>
+  rollbackCapability === ConfigRollbackCapability.Automatic ||
+  rollbackCapability === ConfigRollbackCapability.Manual;
+
+export const compileConfigForbiddenEffectObligations = (
+  input: ConfigForbiddenEffectObligationCompilerInput,
+): ConfigForbiddenEffectObligationCompilation => {
+  const operation = getConfigCompilerOperation(input);
+  const namespace = getConfigCompilerNamespace(input);
+  const namespaceClassification = classifyConfigCompilerNamespace(
+    namespace,
+    input.environment,
+  );
+  const rollbackCapability = getConfigCompilerRollbackCapability(
+    input.rollbackCapability,
+  );
+  const resourceScope = getConfigCompilerResourceScope(input, namespace);
+  const environment = input.environment ?? ForbiddenEffectEnvironment.Production;
+  const isMutationOperation = configMutationOperations.has(operation);
+  const rollbackIsVerified = isConfigRollbackCapabilityVerified(rollbackCapability);
+  const obligations: ForbiddenEffectObligation[] = [];
+
+  if (
+    isMutationOperation &&
+    namespaceClassification === ConfigNamespaceClassification.Production
+  ) {
+    obligations.push(
+      ...buildProductionConfigForbiddenEffectObligations(
+        input,
+        resourceScope,
+        environment,
+      ),
+    );
+  }
+
+  if (
+    isMutationOperation &&
+    (namespaceClassification === ConfigNamespaceClassification.Sandbox ||
+      namespaceClassification === ConfigNamespaceClassification.Canary)
+  ) {
+    obligations.push(
+      buildIsolatedConfigForbiddenEffectObligation(
+        input,
+        resourceScope,
+        namespaceClassification,
+        environment,
+      ),
+    );
+  }
+
+  if (
+    isMutationOperation &&
+    namespaceClassification === ConfigNamespaceClassification.Unknown
+  ) {
+    obligations.push(
+      buildUnresolvedNamespaceConfigForbiddenEffectObligation(
+        input,
+        resourceScope,
+        environment,
+      ),
+    );
+  }
+
+  if (isMutationOperation && !rollbackIsVerified) {
+    obligations.push(
+      buildUnverifiedRollbackConfigForbiddenEffectObligation(
+        input,
+        resourceScope,
+        environment,
+        rollbackCapability,
+      ),
+    );
+  }
+
+  return {
+    operation,
+    namespace,
+    namespaceClassification,
+    rollbackCapability,
+    resourceScope,
+    failClosed:
+      operation === ConfigForbiddenEffectOperation.Unknown ||
+      (isMutationOperation &&
+        (namespaceClassification === ConfigNamespaceClassification.Unknown ||
+          !rollbackIsVerified)),
     obligations,
   };
 };
