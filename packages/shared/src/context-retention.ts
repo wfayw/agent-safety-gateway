@@ -191,6 +191,72 @@ export type ToolSpecificRequiredContextObligationCompiler<
     | Promise<RequiredContextObligationCompilation>;
 };
 
+export const SqlRequiredContextOperation = {
+  Select: "select",
+  Insert: "insert",
+  Update: "update",
+  Delete: "delete",
+  Drop: "drop",
+  Truncate: "truncate",
+  Alter: "alter",
+  Unknown: "unknown",
+} as const;
+
+export type SqlRequiredContextOperation =
+  (typeof SqlRequiredContextOperation)[keyof typeof SqlRequiredContextOperation];
+
+export const SqlRequiredContextObligationKind = {
+  ReadonlyContext: "readonly_context",
+  WriteContext: "write_context",
+  UncertaintyContext: "uncertainty_context",
+} as const;
+
+export type SqlRequiredContextObligationKind =
+  (typeof SqlRequiredContextObligationKind)[keyof typeof SqlRequiredContextObligationKind];
+
+export const SqlRequiredContextAnchorRole = {
+  LatestUserInstruction: "latest_user_instruction",
+  SqlPolicy: "sql_policy",
+  TargetResourceState: "target_resource_state",
+  RollbackContext: "rollback_context",
+  Uncertainty: "uncertainty",
+} as const;
+
+export type SqlRequiredContextAnchorRole =
+  (typeof SqlRequiredContextAnchorRole)[keyof typeof SqlRequiredContextAnchorRole];
+
+export type SqlRequiredContextToolCallCandidate = {
+  sql: string;
+  requestId?: string;
+  resourceScope?: readonly string[];
+};
+
+export type SqlRequiredContextObligationCompilerInput = {
+  sql: string;
+  toolCallDigest: PatentProofHash;
+  availableAnchors: readonly ContextAnchor[];
+  requestId?: string;
+  actionImpactClass?: ActionImpactClassId;
+  resourceScope?: readonly string[];
+};
+
+export type SqlRequiredContextAnchorRequirement = {
+  role: SqlRequiredContextAnchorRole;
+  anchorId: ContextAnchorId;
+  resourceScope: string;
+};
+
+export type SqlRequiredContextObligationCompilation =
+  RequiredContextObligationCompilation & {
+    normalizedSql: string;
+    operation: SqlRequiredContextOperation;
+    resourceScope: readonly string[];
+    unresolvedTables: readonly string[];
+    obligationKind: SqlRequiredContextObligationKind;
+    requiresUncertaintyAnchors: boolean;
+    requiredAnchorRoles: readonly SqlRequiredContextAnchorRequirement[];
+  };
+
 export type PromptContextUnitDigest = {
   contextUnitId: ContextAnchorId;
   digest: PatentProofHash;
@@ -793,6 +859,585 @@ export const isRequiredContextObligation = (
   input: unknown,
 ): input is RequiredContextObligation =>
   validateRequiredContextObligation(input).success;
+
+const SqlRequiredContextUnresolvedResourceScope = "unresolved_sql_resource";
+
+const sqlRequiredContextOperationByKeyword: Record<
+  string,
+  SqlRequiredContextOperation
+> = {
+  select: SqlRequiredContextOperation.Select,
+  insert: SqlRequiredContextOperation.Insert,
+  update: SqlRequiredContextOperation.Update,
+  delete: SqlRequiredContextOperation.Delete,
+  drop: SqlRequiredContextOperation.Drop,
+  truncate: SqlRequiredContextOperation.Truncate,
+  alter: SqlRequiredContextOperation.Alter,
+};
+
+const sqlRequiredContextWriteOperations = new Set<SqlRequiredContextOperation>([
+  SqlRequiredContextOperation.Insert,
+  SqlRequiredContextOperation.Update,
+  SqlRequiredContextOperation.Delete,
+  SqlRequiredContextOperation.Drop,
+  SqlRequiredContextOperation.Truncate,
+  SqlRequiredContextOperation.Alter,
+]);
+
+const normalizeSqlRequiredContextSql = (sql: string): string =>
+  sql
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/--.*$/gm, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const getSqlRequiredContextOperation = (
+  normalizedSql: string,
+): SqlRequiredContextOperation => {
+  const keyword = normalizedSql.match(/^([a-zA-Z]+)/)?.[1]?.toLowerCase();
+
+  if (keyword === undefined) {
+    return SqlRequiredContextOperation.Unknown;
+  }
+
+  return (
+    sqlRequiredContextOperationByKeyword[keyword] ??
+    SqlRequiredContextOperation.Unknown
+  );
+};
+
+const normalizeSqlRequiredContextIdentifier = (identifier: string): string => {
+  const cleanedIdentifier = identifier
+    .trim()
+    .replace(/\s+as\s+.+$/i, "")
+    .replace(/\s+.+$/, "")
+    .replace(/^[`"\[]/, "")
+    .replace(/[`"\]]$/, "");
+  const segments = cleanedIdentifier.split(".").filter(Boolean);
+
+  return segments.at(-1) ?? cleanedIdentifier;
+};
+
+const uniqueSqlRequiredContextStrings = (
+  values: readonly string[],
+): string[] => {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  values.forEach((value) => {
+    if (!seen.has(value)) {
+      seen.add(value);
+      result.push(value);
+    }
+  });
+
+  return result;
+};
+
+const collectSqlRequiredContextMatches = (
+  sql: string,
+  pattern: RegExp,
+): string[] =>
+  uniqueSqlRequiredContextStrings(
+    [...sql.matchAll(pattern)]
+      .map((match) => match[1])
+      .filter((value): value is string => value !== undefined)
+      .map(normalizeSqlRequiredContextIdentifier)
+      .filter((value) => value.length > 0),
+  );
+
+const matchSqlRequiredContextResourceScope = (
+  normalizedSql: string,
+  operation: SqlRequiredContextOperation,
+): string[] => {
+  if (operation === SqlRequiredContextOperation.Select) {
+    return collectSqlRequiredContextMatches(
+      normalizedSql,
+      /\b(?:from|join)\s+([`"\[]?[a-zA-Z_][\w$.-]*[`"\]]?)/gi,
+    );
+  }
+
+  if (operation === SqlRequiredContextOperation.Insert) {
+    return collectSqlRequiredContextMatches(
+      normalizedSql,
+      /\binsert\s+into\s+([`"\[]?[a-zA-Z_][\w$.-]*[`"\]]?)/gi,
+    );
+  }
+
+  if (operation === SqlRequiredContextOperation.Update) {
+    return collectSqlRequiredContextMatches(
+      normalizedSql,
+      /\bupdate\s+([`"\[]?[a-zA-Z_][\w$.-]*[`"\]]?)/gi,
+    );
+  }
+
+  if (operation === SqlRequiredContextOperation.Delete) {
+    return collectSqlRequiredContextMatches(
+      normalizedSql,
+      /\bdelete\s+from\s+([`"\[]?[a-zA-Z_][\w$.-]*[`"\]]?)/gi,
+    );
+  }
+
+  if (operation === SqlRequiredContextOperation.Drop) {
+    return collectSqlRequiredContextMatches(
+      normalizedSql,
+      /\bdrop\s+table(?:\s+if\s+exists)?\s+([`"\[]?[a-zA-Z_][\w$.-]*[`"\]]?)/gi,
+    );
+  }
+
+  if (operation === SqlRequiredContextOperation.Truncate) {
+    return collectSqlRequiredContextMatches(
+      normalizedSql,
+      /\btruncate(?:\s+table)?\s+([`"\[]?[a-zA-Z_][\w$.-]*[`"\]]?)/gi,
+    );
+  }
+
+  if (operation === SqlRequiredContextOperation.Alter) {
+    return collectSqlRequiredContextMatches(
+      normalizedSql,
+      /\balter\s+table(?:\s+if\s+exists)?\s+([`"\[]?[a-zA-Z_][\w$.-]*[`"\]]?)/gi,
+    );
+  }
+
+  return [];
+};
+
+const getSqlRequiredContextResourceScope = (
+  input: SqlRequiredContextObligationCompilerInput,
+  normalizedSql: string,
+  operation: SqlRequiredContextOperation,
+): string[] => {
+  const explicitResourceScope = uniqueSqlRequiredContextStrings(
+    (input.resourceScope ?? [])
+      .map(normalizeSqlRequiredContextIdentifier)
+      .filter((value) => value.length > 0),
+  );
+
+  if (explicitResourceScope.length > 0) {
+    return explicitResourceScope;
+  }
+
+  return matchSqlRequiredContextResourceScope(normalizedSql, operation);
+};
+
+const toSqlRequiredContextSlug = (value: string): string =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 72) || "unknown";
+
+const normalizeSqlRequiredContextScopeValue = (value: string): string =>
+  value
+    .toLowerCase()
+    .replace(/^[`"\[]/, "")
+    .replace(/[`"\]]$/, "")
+    .trim();
+
+const isSqlRequiredContextWildcardScope = (scope: string): boolean =>
+  scope === "*" ||
+  scope.endsWith(":*") ||
+  scope.endsWith("/*") ||
+  scope.includes("all_tables") ||
+  scope.includes("all-database") ||
+  scope.includes("all_database");
+
+const doesSqlRequiredContextAnchorMatchResource = (
+  anchor: ContextAnchor,
+  resourceScope: string,
+): boolean => {
+  const anchorScope = normalizeSqlRequiredContextScopeValue(
+    anchor.resourceScope,
+  );
+  const resource = normalizeSqlRequiredContextScopeValue(resourceScope);
+
+  if (resource.length === 0) {
+    return false;
+  }
+
+  if (anchorScope === resource || isSqlRequiredContextWildcardScope(anchorScope)) {
+    return true;
+  }
+
+  const scopeParts = anchorScope.split(/[^a-z0-9_$]+/).filter(Boolean);
+
+  return scopeParts.includes(resource) || anchorScope.endsWith(resource);
+};
+
+const doesSqlRequiredContextAnchorMatchAnyResource = (
+  anchor: ContextAnchor,
+  resourceScope: readonly string[],
+): boolean =>
+  resourceScope.some((resource) =>
+    doesSqlRequiredContextAnchorMatchResource(anchor, resource),
+  );
+
+const isSqlRequiredContextGlobalAnchor = (anchor: ContextAnchor): boolean => {
+  const scope = normalizeSqlRequiredContextScopeValue(anchor.resourceScope);
+
+  return (
+    isSqlRequiredContextWildcardScope(scope) ||
+    scope.includes("tool_call") ||
+    scope.includes("request") ||
+    scope.includes("sql")
+  );
+};
+
+const getSqlRequiredContextAnchorSearchText = (anchor: ContextAnchor): string =>
+  [
+    anchor.anchorId,
+    anchor.anchorType,
+    anchor.sourceIdentity,
+    anchor.authorityLevel,
+    anchor.resourceScope,
+  ]
+    .join(" ")
+    .toLowerCase();
+
+const chooseLatestSqlRequiredContextAnchor = (
+  availableAnchors: readonly ContextAnchor[],
+  predicate: (anchor: ContextAnchor) => boolean,
+): ContextAnchor | undefined => {
+  const matchingAnchors = availableAnchors
+    .filter(predicate)
+    .sort((left, right) => {
+      const rightTime = Date.parse(right.createdAt);
+      const leftTime = Date.parse(left.createdAt);
+      const timeDelta =
+        (Number.isNaN(rightTime) ? 0 : rightTime) -
+        (Number.isNaN(leftTime) ? 0 : leftTime);
+
+      if (timeDelta !== 0) {
+        return timeDelta;
+      }
+
+      return left.anchorId.localeCompare(right.anchorId);
+    });
+
+  return matchingAnchors[0];
+};
+
+const createSqlRequiredContextFallbackAnchorId = (
+  input: SqlRequiredContextObligationCompilerInput,
+  role: SqlRequiredContextAnchorRole,
+  resourceScope: string,
+): ContextAnchorId => {
+  const requestKey = input.requestId ?? input.toolCallDigest;
+
+  return `ctx-required-sql-${toSqlRequiredContextSlug(
+    requestKey,
+  )}-${role}-${toSqlRequiredContextSlug(resourceScope)}`;
+};
+
+const createSqlRequiredContextAnchorRequirement = (
+  input: SqlRequiredContextObligationCompilerInput,
+  role: SqlRequiredContextAnchorRole,
+  resourceScope: string,
+  predicate: (anchor: ContextAnchor) => boolean,
+): SqlRequiredContextAnchorRequirement => {
+  const anchor = chooseLatestSqlRequiredContextAnchor(
+    input.availableAnchors,
+    predicate,
+  );
+
+  return {
+    role,
+    anchorId:
+      anchor?.anchorId ??
+      createSqlRequiredContextFallbackAnchorId(input, role, resourceScope),
+    resourceScope,
+  };
+};
+
+const isSqlRequiredContextUserInstructionAnchor = (
+  anchor: ContextAnchor,
+  resourceScope: readonly string[],
+): boolean =>
+  anchor.anchorType === ContextAnchorType.UserInstruction &&
+  (doesSqlRequiredContextAnchorMatchAnyResource(anchor, resourceScope) ||
+    isSqlRequiredContextGlobalAnchor(anchor));
+
+const isSqlRequiredContextPolicyAnchor = (
+  anchor: ContextAnchor,
+  resourceScope: readonly string[],
+): boolean => {
+  const searchText = getSqlRequiredContextAnchorSearchText(anchor);
+
+  return (
+    anchor.anchorType === ContextAnchorType.SystemPolicy &&
+    (searchText.includes("sql") || searchText.includes("database")) &&
+    (doesSqlRequiredContextAnchorMatchAnyResource(anchor, resourceScope) ||
+      isSqlRequiredContextGlobalAnchor(anchor))
+  );
+};
+
+const isSqlRequiredContextResourceStateAnchor = (
+  anchor: ContextAnchor,
+  resourceScope: string,
+): boolean =>
+  anchor.anchorType === ContextAnchorType.ResourceState &&
+  doesSqlRequiredContextAnchorMatchResource(anchor, resourceScope);
+
+const isSqlRequiredContextRollbackAnchor = (
+  anchor: ContextAnchor,
+  resourceScope: string,
+): boolean => {
+  const searchText = getSqlRequiredContextAnchorSearchText(anchor);
+
+  return (
+    searchText.includes("rollback") ||
+    searchText.includes("backout") ||
+    searchText.includes("restore") ||
+    searchText.includes("revert")
+  ) && doesSqlRequiredContextAnchorMatchResource(anchor, resourceScope);
+};
+
+const isSqlRequiredContextUncertaintyAnchor = (
+  anchor: ContextAnchor,
+  resourceScope: string,
+): boolean => {
+  const searchText = getSqlRequiredContextAnchorSearchText(anchor);
+
+  return (
+    searchText.includes("uncertainty") ||
+    searchText.includes("uncertain") ||
+    searchText.includes("unresolved") ||
+    searchText.includes("unknown") ||
+    searchText.includes("ambiguous")
+  ) && doesSqlRequiredContextAnchorMatchResource(anchor, resourceScope);
+};
+
+const buildSqlRequiredContextAnchorRequirements = (
+  input: SqlRequiredContextObligationCompilerInput,
+  obligationKind: SqlRequiredContextObligationKind,
+  resourceScope: readonly string[],
+): SqlRequiredContextAnchorRequirement[] => {
+  const requirements: SqlRequiredContextAnchorRequirement[] = [
+    createSqlRequiredContextAnchorRequirement(
+      input,
+      SqlRequiredContextAnchorRole.LatestUserInstruction,
+      "tool_call",
+      (anchor) => isSqlRequiredContextUserInstructionAnchor(anchor, resourceScope),
+    ),
+    createSqlRequiredContextAnchorRequirement(
+      input,
+      SqlRequiredContextAnchorRole.SqlPolicy,
+      "sql_policy",
+      (anchor) => isSqlRequiredContextPolicyAnchor(anchor, resourceScope),
+    ),
+  ];
+
+  if (obligationKind === SqlRequiredContextObligationKind.UncertaintyContext) {
+    requirements.push(
+      createSqlRequiredContextAnchorRequirement(
+        input,
+        SqlRequiredContextAnchorRole.Uncertainty,
+        SqlRequiredContextUnresolvedResourceScope,
+        (anchor) =>
+          isSqlRequiredContextUncertaintyAnchor(
+            anchor,
+            SqlRequiredContextUnresolvedResourceScope,
+          ),
+      ),
+    );
+
+    return requirements;
+  }
+
+  resourceScope.forEach((resource) => {
+    requirements.push(
+      createSqlRequiredContextAnchorRequirement(
+        input,
+        SqlRequiredContextAnchorRole.TargetResourceState,
+        resource,
+        (anchor) => isSqlRequiredContextResourceStateAnchor(anchor, resource),
+      ),
+    );
+  });
+
+  if (obligationKind === SqlRequiredContextObligationKind.WriteContext) {
+    resourceScope.forEach((resource) => {
+      requirements.push(
+        createSqlRequiredContextAnchorRequirement(
+          input,
+          SqlRequiredContextAnchorRole.RollbackContext,
+          resource,
+          (anchor) => isSqlRequiredContextRollbackAnchor(anchor, resource),
+        ),
+      );
+    });
+  }
+
+  return requirements;
+};
+
+const uniqueSqlRequiredContextAnchorIds = (
+  requirements: readonly SqlRequiredContextAnchorRequirement[],
+): ContextAnchorId[] => uniqueSqlRequiredContextStrings(requirements.map((r) => r.anchorId));
+
+const getSqlRequiredContextActionImpactClass = (
+  input: SqlRequiredContextObligationCompilerInput,
+  obligationKind: SqlRequiredContextObligationKind,
+): ActionImpactClassId => {
+  if (input.actionImpactClass !== undefined) {
+    return input.actionImpactClass;
+  }
+
+  if (obligationKind === SqlRequiredContextObligationKind.ReadonlyContext) {
+    return "database_read";
+  }
+
+  if (obligationKind === SqlRequiredContextObligationKind.UncertaintyContext) {
+    return "database_uncertain";
+  }
+
+  return "database_write";
+};
+
+const getSqlRequiredContextObligationKind = (
+  operation: SqlRequiredContextOperation,
+  unresolvedTables: readonly string[],
+): SqlRequiredContextObligationKind => {
+  if (
+    operation === SqlRequiredContextOperation.Unknown ||
+    unresolvedTables.length > 0
+  ) {
+    return SqlRequiredContextObligationKind.UncertaintyContext;
+  }
+
+  if (operation === SqlRequiredContextOperation.Select) {
+    return SqlRequiredContextObligationKind.ReadonlyContext;
+  }
+
+  if (sqlRequiredContextWriteOperations.has(operation)) {
+    return SqlRequiredContextObligationKind.WriteContext;
+  }
+
+  return SqlRequiredContextObligationKind.UncertaintyContext;
+};
+
+const getSqlRequiredContextFreshnessWindow = (
+  obligationKind: SqlRequiredContextObligationKind,
+): RequiredContextFreshnessWindow => {
+  if (obligationKind === SqlRequiredContextObligationKind.ReadonlyContext) {
+    return "PT2H";
+  }
+
+  if (obligationKind === SqlRequiredContextObligationKind.UncertaintyContext) {
+    return "PT15M";
+  }
+
+  return "PT30M";
+};
+
+const getSqlRequiredContextMinimumRetentionMode = (
+  obligationKind: SqlRequiredContextObligationKind,
+): RequiredContextMinimumRetentionMode =>
+  obligationKind === SqlRequiredContextObligationKind.ReadonlyContext
+    ? ContextRetentionMode.CertifiedSummary
+    : ContextRetentionMode.Verbatim;
+
+const getSqlRequiredContextMissingAnchorAction = (
+  obligationKind: SqlRequiredContextObligationKind,
+): RequiredContextMissingAnchorAction => {
+  if (obligationKind === SqlRequiredContextObligationKind.ReadonlyContext) {
+    return RequiredContextMissingAnchorAction.Reground;
+  }
+
+  if (obligationKind === SqlRequiredContextObligationKind.UncertaintyContext) {
+    return RequiredContextMissingAnchorAction.Deny;
+  }
+
+  return RequiredContextMissingAnchorAction.RegroundOrDeny;
+};
+
+export const compileSqlRequiredContextObligations = (
+  input: SqlRequiredContextObligationCompilerInput,
+): SqlRequiredContextObligationCompilation => {
+  const normalizedSql = normalizeSqlRequiredContextSql(input.sql);
+  const operation = getSqlRequiredContextOperation(normalizedSql);
+  const parsedResourceScope = getSqlRequiredContextResourceScope(
+    input,
+    normalizedSql,
+    operation,
+  );
+  const unresolvedTables =
+    parsedResourceScope.length === 0 ? [SqlRequiredContextUnresolvedResourceScope] : [];
+  const resourceScope =
+    parsedResourceScope.length > 0
+      ? parsedResourceScope
+      : [SqlRequiredContextUnresolvedResourceScope];
+  const obligationKind = getSqlRequiredContextObligationKind(
+    operation,
+    unresolvedTables,
+  );
+  const requiredAnchorRoles = buildSqlRequiredContextAnchorRequirements(
+    input,
+    obligationKind,
+    resourceScope,
+  );
+  const requiredAnchors = uniqueSqlRequiredContextAnchorIds(requiredAnchorRoles);
+  const requestKey = input.requestId ?? input.toolCallDigest;
+  const actionImpactClass = getSqlRequiredContextActionImpactClass(
+    input,
+    obligationKind,
+  );
+  const obligation = RequiredContextObligationSchema.parse({
+    obligationId: `rco-sql-${toSqlRequiredContextSlug(
+      requestKey,
+    )}-${obligationKind}-${toSqlRequiredContextSlug(resourceScope.join("-"))}`,
+    toolCallDigest: input.toolCallDigest,
+    actionImpactClass,
+    requiredAnchors,
+    freshnessWindow: getSqlRequiredContextFreshnessWindow(obligationKind),
+    minimumRetentionMode: getSqlRequiredContextMinimumRetentionMode(
+      obligationKind,
+    ),
+    conflictPolicy: RequiredContextConflictPolicy.DenyOnOmittedConflict,
+    taintPolicy: RequiredContextTaintPolicy.DenyOnUntrustedInstruction,
+    missingAnchorAction: getSqlRequiredContextMissingAnchorAction(
+      obligationKind,
+    ),
+  });
+
+  return {
+    normalizedSql,
+    operation,
+    resourceScope,
+    unresolvedTables,
+    obligationKind,
+    requiresUncertaintyAnchors:
+      obligationKind === SqlRequiredContextObligationKind.UncertaintyContext,
+    requiredAnchorRoles,
+    toolCallDigest: input.toolCallDigest,
+    actionImpactClass,
+    obligations: [obligation],
+  };
+};
+
+export const SqlRequiredContextObligationCompiler: ToolSpecificRequiredContextObligationCompiler<SqlRequiredContextToolCallCandidate> =
+  {
+    toolType: "sql",
+    compileRequiredContextObligations(input) {
+      const compilerInput: SqlRequiredContextObligationCompilerInput = {
+        sql: input.toolCallCandidate.sql,
+        toolCallDigest: input.toolCallDigest,
+        actionImpactClass: input.actionImpactClass,
+        availableAnchors: input.availableAnchors,
+      };
+      const requestId = input.candidateId ?? input.toolCallCandidate.requestId;
+
+      if (requestId !== undefined) {
+        compilerInput.requestId = requestId;
+      }
+
+      if (input.toolCallCandidate.resourceScope !== undefined) {
+        compilerInput.resourceScope = input.toolCallCandidate.resourceScope;
+      }
+
+      return compileSqlRequiredContextObligations(compilerInput);
+    },
+  };
 
 const addPromptAssemblyManifestIssue = (
   collector: PromptAssemblyManifestIssueCollector,
