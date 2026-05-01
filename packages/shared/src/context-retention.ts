@@ -467,6 +467,10 @@ export const ContextRetentionVerifierResult = {
 export type ContextRetentionVerifierResult =
   (typeof ContextRetentionVerifierResult)[keyof typeof ContextRetentionVerifierResult];
 
+export const ContextRetentionVerifierResultValues = Object.values(
+  ContextRetentionVerifierResult,
+) as ContextRetentionVerifierResult[];
+
 export type ContextRetentionEvidence = {
   evidenceId: ContextRetentionEvidenceId;
   obligationId: RequiredContextObligationId;
@@ -533,6 +537,20 @@ export type ContextSufficiencyState = {
   certifiedSummaryAnchorIds: readonly ContextAnchorId[];
   retrievableReferenceAnchorIds: readonly ContextAnchorId[];
   transitionReason: string;
+};
+
+export type ContextAdequacyEvidence = {
+  evidenceId: ContextAdequacyEvidenceId;
+  toolCallDigest: PatentProofHash;
+  requiredContextObligationDigest: PatentProofHash;
+  promptAssemblyManifestDigest: PatentProofHash;
+  contextRetentionEvidenceDigest: PatentProofHash;
+  contextSufficiencyState: ContextSufficiencyStateName;
+  regroundingApplied: boolean;
+  permitIssued: boolean;
+  permitOutcome: string;
+  denialReason: string | null;
+  createdAt: ContextRetentionTimestamp;
 };
 
 export type ContextSufficiencyStateEvaluationInput = {
@@ -750,6 +768,35 @@ export type PromptAssemblyManifestValidationResult =
   | PromptAssemblyManifestValidationSuccess
   | PromptAssemblyManifestValidationFailure;
 
+export type ContextRetentionArtifactValidationIssue = {
+  path: string;
+  code: string;
+  message: string;
+};
+
+export type ContextRetentionArtifactValidationSuccess<TData> = {
+  success: true;
+  data: TData;
+};
+
+export type ContextRetentionArtifactValidationFailure = {
+  success: false;
+  issues: ContextRetentionArtifactValidationIssue[];
+};
+
+export type ContextRetentionArtifactValidationResult<TData> =
+  | ContextRetentionArtifactValidationSuccess<TData>
+  | ContextRetentionArtifactValidationFailure;
+
+export type ContextRetentionEvidenceValidationResult =
+  ContextRetentionArtifactValidationResult<ContextRetentionEvidence>;
+
+export type ContextSufficiencyStateValidationResult =
+  ContextRetentionArtifactValidationResult<ContextSufficiencyState>;
+
+export type ContextAdequacyEvidenceValidationResult =
+  ContextRetentionArtifactValidationResult<ContextAdequacyEvidence>;
+
 type ContextAnchorIssueCollector = {
   issues: ContextAnchorValidationIssue[];
 };
@@ -760,6 +807,10 @@ type RequiredContextObligationIssueCollector = {
 
 type PromptAssemblyManifestIssueCollector = {
   issues: PromptAssemblyManifestValidationIssue[];
+};
+
+type ContextRetentionArtifactIssueCollector = {
+  issues: ContextRetentionArtifactValidationIssue[];
 };
 
 type StringEnumValues<TValue extends string> = readonly TValue[];
@@ -793,6 +844,222 @@ export class PromptAssemblyManifestValidationError extends Error {
     this.issues = issues;
   }
 }
+
+export class ContextRetentionEvidenceValidationError extends Error {
+  readonly issues: ContextRetentionArtifactValidationIssue[];
+
+  constructor(issues: ContextRetentionArtifactValidationIssue[]) {
+    super("ContextRetentionEvidence validation failed");
+    this.name = "ContextRetentionEvidenceValidationError";
+    this.issues = issues;
+  }
+}
+
+export class ContextSufficiencyStateValidationError extends Error {
+  readonly issues: ContextRetentionArtifactValidationIssue[];
+
+  constructor(issues: ContextRetentionArtifactValidationIssue[]) {
+    super("ContextSufficiencyState validation failed");
+    this.name = "ContextSufficiencyStateValidationError";
+    this.issues = issues;
+  }
+}
+
+export class ContextAdequacyEvidenceValidationError extends Error {
+  readonly issues: ContextRetentionArtifactValidationIssue[];
+
+  constructor(issues: ContextRetentionArtifactValidationIssue[]) {
+    super("ContextAdequacyEvidence validation failed");
+    this.name = "ContextAdequacyEvidenceValidationError";
+    this.issues = issues;
+  }
+}
+
+const addContextRetentionArtifactIssue = (
+  collector: ContextRetentionArtifactIssueCollector,
+  path: string,
+  code: string,
+  message: string,
+) => {
+  collector.issues.push({ path, code, message });
+};
+
+const contextRetentionArtifactChildPath = (path: string, key: string) =>
+  `${path}.${key}`;
+
+const isContextRetentionArtifactRecord = (
+  input: unknown,
+): input is Record<string, unknown> =>
+  typeof input === "object" && input !== null && !Array.isArray(input);
+
+const readContextRetentionArtifactString = (
+  input: Record<string, unknown>,
+  key: string,
+  path: string,
+  collector: ContextRetentionArtifactIssueCollector,
+): string => {
+  const value = input[key];
+
+  if (typeof value !== "string" || value.length === 0) {
+    addContextRetentionArtifactIssue(
+      collector,
+      contextRetentionArtifactChildPath(path, key),
+      "invalid_string",
+      "Expected a non-empty string.",
+    );
+    return "";
+  }
+
+  return value;
+};
+
+const readContextRetentionArtifactNullableString = (
+  input: Record<string, unknown>,
+  key: string,
+  path: string,
+  collector: ContextRetentionArtifactIssueCollector,
+): string | null => {
+  const value = input[key];
+
+  if (value === null) {
+    return null;
+  }
+
+  if (typeof value !== "string" || value.length === 0) {
+    addContextRetentionArtifactIssue(
+      collector,
+      contextRetentionArtifactChildPath(path, key),
+      "invalid_nullable_string",
+      "Expected null or a non-empty string.",
+    );
+    return null;
+  }
+
+  return value;
+};
+
+const readContextRetentionArtifactTimestamp = (
+  input: Record<string, unknown>,
+  key: string,
+  path: string,
+  collector: ContextRetentionArtifactIssueCollector,
+): ContextRetentionTimestamp => {
+  const value = readContextRetentionArtifactString(input, key, path, collector);
+
+  if (value.length > 0 && Number.isNaN(Date.parse(value))) {
+    addContextRetentionArtifactIssue(
+      collector,
+      contextRetentionArtifactChildPath(path, key),
+      "invalid_timestamp",
+      "Expected a parseable timestamp string.",
+    );
+  }
+
+  return value;
+};
+
+const readContextRetentionArtifactBoolean = (
+  input: Record<string, unknown>,
+  key: string,
+  path: string,
+  collector: ContextRetentionArtifactIssueCollector,
+): boolean => {
+  const value = input[key];
+
+  if (typeof value !== "boolean") {
+    addContextRetentionArtifactIssue(
+      collector,
+      contextRetentionArtifactChildPath(path, key),
+      "invalid_boolean",
+      "Expected a boolean.",
+    );
+    return false;
+  }
+
+  return value;
+};
+
+const readContextRetentionArtifactScore = (
+  input: Record<string, unknown>,
+  key: string,
+  path: string,
+  collector: ContextRetentionArtifactIssueCollector,
+): number => {
+  const value = input[key];
+
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value < 0 ||
+    value > 1
+  ) {
+    addContextRetentionArtifactIssue(
+      collector,
+      contextRetentionArtifactChildPath(path, key),
+      "invalid_score",
+      "Expected a finite number between 0 and 1.",
+    );
+    return 0;
+  }
+
+  return value;
+};
+
+const readContextRetentionArtifactStringArray = (
+  input: Record<string, unknown>,
+  key: string,
+  path: string,
+  collector: ContextRetentionArtifactIssueCollector,
+): string[] => {
+  const value = input[key];
+  const issuePath = contextRetentionArtifactChildPath(path, key);
+
+  if (!Array.isArray(value)) {
+    addContextRetentionArtifactIssue(
+      collector,
+      issuePath,
+      "invalid_array",
+      "Expected an array of strings.",
+    );
+    return [];
+  }
+
+  return value.flatMap((item, index) => {
+    if (typeof item !== "string" || item.length === 0) {
+      addContextRetentionArtifactIssue(
+        collector,
+        `${issuePath}[${index}]`,
+        "invalid_string",
+        "Expected a non-empty string.",
+      );
+      return [];
+    }
+
+    return [item];
+  });
+};
+
+const readContextRetentionArtifactEnum = <TValue extends string>(
+  input: Record<string, unknown>,
+  key: string,
+  values: StringEnumValues<TValue>,
+  path: string,
+  collector: ContextRetentionArtifactIssueCollector,
+): TValue => {
+  const value = input[key];
+
+  if (typeof value !== "string" || !values.includes(value as TValue)) {
+    addContextRetentionArtifactIssue(
+      collector,
+      contextRetentionArtifactChildPath(path, key),
+      "invalid_enum",
+      `Expected one of: ${values.join(", ")}.`,
+    );
+    return values[0] as TValue;
+  }
+
+  return value as TValue;
+};
 
 const addContextAnchorIssue = (
   collector: ContextAnchorIssueCollector,
@@ -3659,6 +3926,450 @@ export const isPromptAssemblyManifest = (
 ): input is PromptAssemblyManifest =>
   validatePromptAssemblyManifest(input).success;
 
+const validateContextRetentionEvidenceShape = (
+  input: unknown,
+  collector: ContextRetentionArtifactIssueCollector,
+): ContextRetentionEvidence => {
+  if (!isContextRetentionArtifactRecord(input)) {
+    addContextRetentionArtifactIssue(
+      collector,
+      "$",
+      "invalid_object",
+      "Expected an object.",
+    );
+    input = {};
+  }
+
+  const record = input as Record<string, unknown>;
+  const path = "$";
+
+  return {
+    evidenceId: readContextRetentionArtifactString(
+      record,
+      "evidenceId",
+      path,
+      collector,
+    ),
+    obligationId: readContextRetentionArtifactString(
+      record,
+      "obligationId",
+      path,
+      collector,
+    ),
+    toolCallDigest: readContextRetentionArtifactString(
+      record,
+      "toolCallDigest",
+      path,
+      collector,
+    ),
+    promptAssemblyManifestId: readContextRetentionArtifactString(
+      record,
+      "promptAssemblyManifestId",
+      path,
+      collector,
+    ),
+    inferenceId: readContextRetentionArtifactString(
+      record,
+      "inferenceId",
+      path,
+      collector,
+    ),
+    anchorId: readContextRetentionArtifactString(
+      record,
+      "anchorId",
+      path,
+      collector,
+    ),
+    retentionMode: readContextRetentionArtifactEnum(
+      record,
+      "retentionMode",
+      ContextRetentionModeValues,
+      path,
+      collector,
+    ),
+    minimumRetentionMode: readContextRetentionArtifactEnum(
+      record,
+      "minimumRetentionMode",
+      RequiredContextMinimumRetentionModeValues,
+      path,
+      collector,
+    ),
+    coverageScore: readContextRetentionArtifactScore(
+      record,
+      "coverageScore",
+      path,
+      collector,
+    ),
+    freshnessScore: readContextRetentionArtifactScore(
+      record,
+      "freshnessScore",
+      path,
+      collector,
+    ),
+    trustScore: readContextRetentionArtifactScore(
+      record,
+      "trustScore",
+      path,
+      collector,
+    ),
+    conflictEvidence: readContextRetentionArtifactStringArray(
+      record,
+      "conflictEvidence",
+      path,
+      collector,
+    ),
+    summaryVerifierResult: readContextRetentionArtifactEnum(
+      record,
+      "summaryVerifierResult",
+      ContextRetentionVerifierResultValues,
+      path,
+      collector,
+    ),
+    referenceVerifierResult: readContextRetentionArtifactEnum(
+      record,
+      "referenceVerifierResult",
+      ContextRetentionVerifierResultValues,
+      path,
+      collector,
+    ),
+    matchedContextUnitId: readContextRetentionArtifactNullableString(
+      record,
+      "matchedContextUnitId",
+      path,
+      collector,
+    ),
+    matchedDigest: readContextRetentionArtifactNullableString(
+      record,
+      "matchedDigest",
+      path,
+      collector,
+    ),
+  };
+};
+
+export const validateContextRetentionEvidence = (
+  input: unknown,
+): ContextRetentionEvidenceValidationResult => {
+  const collector: ContextRetentionArtifactIssueCollector = { issues: [] };
+  const data = validateContextRetentionEvidenceShape(input, collector);
+
+  if (collector.issues.length > 0) {
+    return { success: false, issues: collector.issues };
+  }
+
+  return { success: true, data };
+};
+
+export const ContextRetentionEvidenceSchema = {
+  parse(input: unknown): ContextRetentionEvidence {
+    const result = validateContextRetentionEvidence(input);
+
+    if (!result.success) {
+      throw new ContextRetentionEvidenceValidationError(result.issues);
+    }
+
+    return result.data;
+  },
+  safeParse(input: unknown): ContextRetentionEvidenceValidationResult {
+    return validateContextRetentionEvidence(input);
+  },
+};
+
+export const isContextRetentionEvidence = (
+  input: unknown,
+): input is ContextRetentionEvidence =>
+  validateContextRetentionEvidence(input).success;
+
+const validateContextSufficiencyStateShape = (
+  input: unknown,
+  collector: ContextRetentionArtifactIssueCollector,
+): ContextSufficiencyState => {
+  if (!isContextRetentionArtifactRecord(input)) {
+    addContextRetentionArtifactIssue(
+      collector,
+      "$",
+      "invalid_object",
+      "Expected an object.",
+    );
+    input = {};
+  }
+
+  const record = input as Record<string, unknown>;
+  const path = "$";
+
+  return {
+    stateId: readContextRetentionArtifactString(
+      record,
+      "stateId",
+      path,
+      collector,
+    ),
+    obligationId: readContextRetentionArtifactString(
+      record,
+      "obligationId",
+      path,
+      collector,
+    ),
+    toolCallDigest: readContextRetentionArtifactString(
+      record,
+      "toolCallDigest",
+      path,
+      collector,
+    ),
+    promptAssemblyManifestId: readContextRetentionArtifactNullableString(
+      record,
+      "promptAssemblyManifestId",
+      path,
+      collector,
+    ),
+    inferenceId: readContextRetentionArtifactNullableString(
+      record,
+      "inferenceId",
+      path,
+      collector,
+    ),
+    state: readContextRetentionArtifactEnum(
+      record,
+      "state",
+      ContextSufficiencyStateNameValues,
+      path,
+      collector,
+    ),
+    sufficient: readContextRetentionArtifactBoolean(
+      record,
+      "sufficient",
+      path,
+      collector,
+    ),
+    evaluatedAt: readContextRetentionArtifactTimestamp(
+      record,
+      "evaluatedAt",
+      path,
+      collector,
+    ),
+    requiredAnchorIds: readContextRetentionArtifactStringArray(
+      record,
+      "requiredAnchorIds",
+      path,
+      collector,
+    ),
+    coveredAnchorIds: readContextRetentionArtifactStringArray(
+      record,
+      "coveredAnchorIds",
+      path,
+      collector,
+    ),
+    blockedAnchorIds: readContextRetentionArtifactStringArray(
+      record,
+      "blockedAnchorIds",
+      path,
+      collector,
+    ),
+    missingAnchorIds: readContextRetentionArtifactStringArray(
+      record,
+      "missingAnchorIds",
+      path,
+      collector,
+    ),
+    staleAnchorIds: readContextRetentionArtifactStringArray(
+      record,
+      "staleAnchorIds",
+      path,
+      collector,
+    ),
+    conflictingAnchorIds: readContextRetentionArtifactStringArray(
+      record,
+      "conflictingAnchorIds",
+      path,
+      collector,
+    ),
+    contaminatedAnchorIds: readContextRetentionArtifactStringArray(
+      record,
+      "contaminatedAnchorIds",
+      path,
+      collector,
+    ),
+    verbatimAnchorIds: readContextRetentionArtifactStringArray(
+      record,
+      "verbatimAnchorIds",
+      path,
+      collector,
+    ),
+    certifiedSummaryAnchorIds: readContextRetentionArtifactStringArray(
+      record,
+      "certifiedSummaryAnchorIds",
+      path,
+      collector,
+    ),
+    retrievableReferenceAnchorIds: readContextRetentionArtifactStringArray(
+      record,
+      "retrievableReferenceAnchorIds",
+      path,
+      collector,
+    ),
+    transitionReason: readContextRetentionArtifactString(
+      record,
+      "transitionReason",
+      path,
+      collector,
+    ),
+  };
+};
+
+export const validateContextSufficiencyState = (
+  input: unknown,
+): ContextSufficiencyStateValidationResult => {
+  const collector: ContextRetentionArtifactIssueCollector = { issues: [] };
+  const data = validateContextSufficiencyStateShape(input, collector);
+
+  if (collector.issues.length > 0) {
+    return { success: false, issues: collector.issues };
+  }
+
+  return { success: true, data };
+};
+
+export const ContextSufficiencyStateSchema = {
+  parse(input: unknown): ContextSufficiencyState {
+    const result = validateContextSufficiencyState(input);
+
+    if (!result.success) {
+      throw new ContextSufficiencyStateValidationError(result.issues);
+    }
+
+    return result.data;
+  },
+  safeParse(input: unknown): ContextSufficiencyStateValidationResult {
+    return validateContextSufficiencyState(input);
+  },
+};
+
+export const isContextSufficiencyState = (
+  input: unknown,
+): input is ContextSufficiencyState =>
+  validateContextSufficiencyState(input).success;
+
+const validateContextAdequacyEvidenceShape = (
+  input: unknown,
+  collector: ContextRetentionArtifactIssueCollector,
+): ContextAdequacyEvidence => {
+  if (!isContextRetentionArtifactRecord(input)) {
+    addContextRetentionArtifactIssue(
+      collector,
+      "$",
+      "invalid_object",
+      "Expected an object.",
+    );
+    input = {};
+  }
+
+  const record = input as Record<string, unknown>;
+  const path = "$";
+
+  return {
+    evidenceId: readContextRetentionArtifactString(
+      record,
+      "evidenceId",
+      path,
+      collector,
+    ),
+    toolCallDigest: readContextRetentionArtifactString(
+      record,
+      "toolCallDigest",
+      path,
+      collector,
+    ),
+    requiredContextObligationDigest: readContextRetentionArtifactString(
+      record,
+      "requiredContextObligationDigest",
+      path,
+      collector,
+    ),
+    promptAssemblyManifestDigest: readContextRetentionArtifactString(
+      record,
+      "promptAssemblyManifestDigest",
+      path,
+      collector,
+    ),
+    contextRetentionEvidenceDigest: readContextRetentionArtifactString(
+      record,
+      "contextRetentionEvidenceDigest",
+      path,
+      collector,
+    ),
+    contextSufficiencyState: readContextRetentionArtifactEnum(
+      record,
+      "contextSufficiencyState",
+      ContextSufficiencyStateNameValues,
+      path,
+      collector,
+    ),
+    regroundingApplied: readContextRetentionArtifactBoolean(
+      record,
+      "regroundingApplied",
+      path,
+      collector,
+    ),
+    permitIssued: readContextRetentionArtifactBoolean(
+      record,
+      "permitIssued",
+      path,
+      collector,
+    ),
+    permitOutcome: readContextRetentionArtifactString(
+      record,
+      "permitOutcome",
+      path,
+      collector,
+    ),
+    denialReason: readContextRetentionArtifactNullableString(
+      record,
+      "denialReason",
+      path,
+      collector,
+    ),
+    createdAt: readContextRetentionArtifactTimestamp(
+      record,
+      "createdAt",
+      path,
+      collector,
+    ),
+  };
+};
+
+export const validateContextAdequacyEvidence = (
+  input: unknown,
+): ContextAdequacyEvidenceValidationResult => {
+  const collector: ContextRetentionArtifactIssueCollector = { issues: [] };
+  const data = validateContextAdequacyEvidenceShape(input, collector);
+
+  if (collector.issues.length > 0) {
+    return { success: false, issues: collector.issues };
+  }
+
+  return { success: true, data };
+};
+
+export const ContextAdequacyEvidenceSchema = {
+  parse(input: unknown): ContextAdequacyEvidence {
+    const result = validateContextAdequacyEvidence(input);
+
+    if (!result.success) {
+      throw new ContextAdequacyEvidenceValidationError(result.issues);
+    }
+
+    return result.data;
+  },
+  safeParse(input: unknown): ContextAdequacyEvidenceValidationResult {
+    return validateContextAdequacyEvidence(input);
+  },
+};
+
+export const isContextAdequacyEvidence = (
+  input: unknown,
+): input is ContextAdequacyEvidence =>
+  validateContextAdequacyEvidence(input).success;
+
 export const buildPromptAssemblyManifestHashPayload = (
   input: unknown,
 ): string => {
@@ -3831,6 +4542,39 @@ export const createPromptAssemblyManifestHash = async (
   input: unknown,
 ): Promise<PromptAssemblyManifestHash> => {
   const hashPayload = buildPromptAssemblyManifestHashPayload(input);
+
+  return `${EvidenceHashAlgorithm.Sha256}:${await createPromptManifestSha256DigestHex(
+    hashPayload,
+  )}`;
+};
+
+export const buildContextAdequacyEvidenceHashPayload = (
+  input: unknown,
+): string => {
+  const evidence = ContextAdequacyEvidenceSchema.parse(input);
+
+  return JSON.stringify({
+    schema:
+      "agent-safety-gateway.context-retention.ContextAdequacyEvidence.v1",
+    evidenceId: evidence.evidenceId,
+    toolCallDigest: evidence.toolCallDigest,
+    requiredContextObligationDigest:
+      evidence.requiredContextObligationDigest,
+    promptAssemblyManifestDigest: evidence.promptAssemblyManifestDigest,
+    contextRetentionEvidenceDigest: evidence.contextRetentionEvidenceDigest,
+    contextSufficiencyState: evidence.contextSufficiencyState,
+    regroundingApplied: evidence.regroundingApplied,
+    permitIssued: evidence.permitIssued,
+    permitOutcome: evidence.permitOutcome,
+    denialReason: evidence.denialReason,
+    createdAt: evidence.createdAt,
+  });
+};
+
+export const createContextAdequacyEvidenceHash = async (
+  input: unknown,
+): Promise<PatentProofHash> => {
+  const hashPayload = buildContextAdequacyEvidenceHashPayload(input);
 
   return `${EvidenceHashAlgorithm.Sha256}:${await createPromptManifestSha256DigestHex(
     hashPayload,
@@ -4679,4 +5423,5 @@ export const ContextRetentionDomain = {
   evidence: "ContextRetentionEvidence",
   sufficiencyState: "ContextSufficiencyState",
   permitExit: "PermitDecision",
+  adequacyEvidence: "ContextAdequacyEvidence",
 } as const;

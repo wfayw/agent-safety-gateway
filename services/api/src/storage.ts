@@ -9,6 +9,7 @@ export const LocalStoreName = {
   ExecutionLogs: "executionLogs",
   HookDecisions: "hookDecisions",
   ExecutorSafetyEvidence: "executorSafetyEvidence",
+  ContextAdequacyEvidence: "contextAdequacyEvidence",
 } as const;
 
 export type LocalStoreName = (typeof LocalStoreName)[keyof typeof LocalStoreName];
@@ -26,6 +27,7 @@ const LOCAL_STORE_FILES = {
   [LocalStoreName.ExecutionLogs]: "execution-log.jsonl",
   [LocalStoreName.HookDecisions]: "hook-decisions.jsonl",
   [LocalStoreName.ExecutorSafetyEvidence]: "executor-safety-evidence.jsonl",
+  [LocalStoreName.ContextAdequacyEvidence]: "context-adequacy-evidence.jsonl",
 } as const satisfies Record<LocalStoreName, string>;
 
 const INITIAL_STORE_CONTENT = {
@@ -36,6 +38,7 @@ const INITIAL_STORE_CONTENT = {
   [LocalStoreName.ExecutionLogs]: "",
   [LocalStoreName.HookDecisions]: "",
   [LocalStoreName.ExecutorSafetyEvidence]: "",
+  [LocalStoreName.ContextAdequacyEvidence]: "",
 } as const satisfies Record<LocalStoreName, string>;
 
 type NodeError = Error & { code?: string };
@@ -73,6 +76,10 @@ export const createLocalStorageLayout = (dataDir: string): LocalStorageLayout =>
       [LocalStoreName.ExecutorSafetyEvidence]: join(
         absoluteDataDir,
         LOCAL_STORE_FILES[LocalStoreName.ExecutorSafetyEvidence],
+      ),
+      [LocalStoreName.ContextAdequacyEvidence]: join(
+        absoluteDataDir,
+        LOCAL_STORE_FILES[LocalStoreName.ContextAdequacyEvidence],
       ),
     },
   };
@@ -128,6 +135,10 @@ export const initializeLocalStorage = async (
     createStoreFileIfMissing(
       layout.stores.executorSafetyEvidence,
       INITIAL_STORE_CONTENT[LocalStoreName.ExecutorSafetyEvidence],
+    ),
+    createStoreFileIfMissing(
+      layout.stores.contextAdequacyEvidence,
+      INITIAL_STORE_CONTENT[LocalStoreName.ContextAdequacyEvidence],
     ),
   ]);
 

@@ -31,6 +31,7 @@ describe("local storage", () => {
 
     assert.deepEqual(Object.keys(layout.stores).sort(), [
       "audits",
+      "contextAdequacyEvidence",
       "dependencies",
       "executionLogs",
       "executorSafetyEvidence",
@@ -45,6 +46,7 @@ describe("local storage", () => {
     assert.equal(await readFile(layout.stores.executionLogs, "utf8"), "");
     assert.equal(await readFile(layout.stores.hookDecisions, "utf8"), "");
     assert.equal(await readFile(layout.stores.executorSafetyEvidence, "utf8"), "");
+    assert.equal(await readFile(layout.stores.contextAdequacyEvidence, "utf8"), "");
   });
 
   it("keeps existing local data when initialization is repeated", async () => {
@@ -59,6 +61,10 @@ describe("local storage", () => {
     await writeFile(
       layout.stores.executorSafetyEvidence,
       '{"id":"evidence-record-1"}\n',
+    );
+    await writeFile(
+      layout.stores.contextAdequacyEvidence,
+      '{"id":"context-evidence-record-1"}\n',
     );
 
     await initializeLocalStorage(dataDir);
@@ -79,6 +85,10 @@ describe("local storage", () => {
     assert.equal(
       await readFile(layout.stores.executorSafetyEvidence, "utf8"),
       '{"id":"evidence-record-1"}\n',
+    );
+    assert.equal(
+      await readFile(layout.stores.contextAdequacyEvidence, "utf8"),
+      '{"id":"context-evidence-record-1"}\n',
     );
   });
 });
