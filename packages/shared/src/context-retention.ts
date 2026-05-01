@@ -88,6 +88,109 @@ export type ContextAnchor = {
   trustTier: ContextAnchorTrustTier;
 };
 
+export const ContextRetentionMode = {
+  Verbatim: "verbatim",
+  CertifiedSummary: "certified_summary",
+  RetrievableReference: "retrievable_reference",
+  Missing: "missing",
+  Stale: "stale",
+  Conflicting: "conflicting",
+  Tainted: "tainted",
+} as const;
+
+export type ContextRetentionMode =
+  (typeof ContextRetentionMode)[keyof typeof ContextRetentionMode];
+
+export const ContextRetentionModeValues = Object.values(
+  ContextRetentionMode,
+) as ContextRetentionMode[];
+
+export const RequiredContextMinimumRetentionModeValues = [
+  ContextRetentionMode.Verbatim,
+  ContextRetentionMode.CertifiedSummary,
+  ContextRetentionMode.RetrievableReference,
+] as const;
+
+export type RequiredContextMinimumRetentionMode =
+  (typeof RequiredContextMinimumRetentionModeValues)[number];
+
+export const RequiredContextConflictPolicy = {
+  DenyOnOmittedConflict: "deny_on_omitted_conflict",
+} as const;
+
+export type RequiredContextConflictPolicy =
+  (typeof RequiredContextConflictPolicy)[keyof typeof RequiredContextConflictPolicy];
+
+export const RequiredContextConflictPolicyValues = Object.values(
+  RequiredContextConflictPolicy,
+) as RequiredContextConflictPolicy[];
+
+export const RequiredContextTaintPolicy = {
+  DenyOnUntrustedInstruction: "deny_on_untrusted_instruction",
+} as const;
+
+export type RequiredContextTaintPolicy =
+  (typeof RequiredContextTaintPolicy)[keyof typeof RequiredContextTaintPolicy];
+
+export const RequiredContextTaintPolicyValues = Object.values(
+  RequiredContextTaintPolicy,
+) as RequiredContextTaintPolicy[];
+
+export const RequiredContextMissingAnchorAction = {
+  Reground: "reground",
+  Reapproval: "reapproval",
+  Deny: "deny",
+  RegroundOrDeny: "reground_or_deny",
+} as const;
+
+export type RequiredContextMissingAnchorAction =
+  (typeof RequiredContextMissingAnchorAction)[keyof typeof RequiredContextMissingAnchorAction];
+
+export const RequiredContextMissingAnchorActionValues = Object.values(
+  RequiredContextMissingAnchorAction,
+) as RequiredContextMissingAnchorAction[];
+
+export type RequiredContextFreshnessWindow = string;
+
+export type RequiredContextObligation = {
+  obligationId: RequiredContextObligationId;
+  toolCallDigest: PatentProofHash;
+  actionImpactClass: ActionImpactClassId;
+  requiredAnchors: readonly ContextAnchorId[];
+  freshnessWindow: RequiredContextFreshnessWindow;
+  minimumRetentionMode: RequiredContextMinimumRetentionMode;
+  conflictPolicy: RequiredContextConflictPolicy;
+  taintPolicy: RequiredContextTaintPolicy;
+  missingAnchorAction: RequiredContextMissingAnchorAction;
+};
+
+export type RequiredContextObligationCompilerInput<
+  TToolCallCandidate = unknown,
+> = {
+  toolCallCandidate: TToolCallCandidate;
+  toolCallDigest: PatentProofHash;
+  actionImpactClass: ActionImpactClassId;
+  availableAnchors: readonly ContextAnchor[];
+  candidateId?: ToolCallCandidateId;
+};
+
+export type RequiredContextObligationCompilation = {
+  toolCallDigest: PatentProofHash;
+  actionImpactClass: ActionImpactClassId;
+  obligations: readonly RequiredContextObligation[];
+};
+
+export type ToolSpecificRequiredContextObligationCompiler<
+  TToolCallCandidate = unknown,
+> = {
+  toolType: string;
+  compileRequiredContextObligations(
+    input: RequiredContextObligationCompilerInput<TToolCallCandidate>,
+  ):
+    | RequiredContextObligationCompilation
+    | Promise<RequiredContextObligationCompilation>;
+};
+
 export type PromptContextUnitDigest = {
   contextUnitId: ContextAnchorId;
   digest: PatentProofHash;
@@ -134,6 +237,26 @@ export type ContextAnchorValidationResult =
   | ContextAnchorValidationSuccess
   | ContextAnchorValidationFailure;
 
+export type RequiredContextObligationValidationIssue = {
+  path: string;
+  code: string;
+  message: string;
+};
+
+export type RequiredContextObligationValidationSuccess = {
+  success: true;
+  data: RequiredContextObligation;
+};
+
+export type RequiredContextObligationValidationFailure = {
+  success: false;
+  issues: RequiredContextObligationValidationIssue[];
+};
+
+export type RequiredContextObligationValidationResult =
+  | RequiredContextObligationValidationSuccess
+  | RequiredContextObligationValidationFailure;
+
 export type PromptAssemblyManifestValidationIssue = {
   path: string;
   code: string;
@@ -158,6 +281,10 @@ type ContextAnchorIssueCollector = {
   issues: ContextAnchorValidationIssue[];
 };
 
+type RequiredContextObligationIssueCollector = {
+  issues: RequiredContextObligationValidationIssue[];
+};
+
 type PromptAssemblyManifestIssueCollector = {
   issues: PromptAssemblyManifestValidationIssue[];
 };
@@ -170,6 +297,16 @@ export class ContextAnchorValidationError extends Error {
   constructor(issues: ContextAnchorValidationIssue[]) {
     super("ContextAnchor validation failed");
     this.name = "ContextAnchorValidationError";
+    this.issues = issues;
+  }
+}
+
+export class RequiredContextObligationValidationError extends Error {
+  readonly issues: RequiredContextObligationValidationIssue[];
+
+  constructor(issues: RequiredContextObligationValidationIssue[]) {
+    super("RequiredContextObligation validation failed");
+    this.name = "RequiredContextObligationValidationError";
     this.issues = issues;
   }
 }
@@ -410,6 +547,252 @@ export const ContextAnchorSchema = {
 
 export const isContextAnchor = (input: unknown): input is ContextAnchor =>
   validateContextAnchor(input).success;
+
+const addRequiredContextObligationIssue = (
+  collector: RequiredContextObligationIssueCollector,
+  path: string,
+  code: string,
+  message: string,
+) => {
+  collector.issues.push({ path, code, message });
+};
+
+const requiredContextObligationChildPath = (path: string, key: string) =>
+  `${path}.${key}`;
+
+const isRequiredContextObligationRecord = (
+  input: unknown,
+): input is Record<string, unknown> =>
+  typeof input === "object" && input !== null && !Array.isArray(input);
+
+const readRequiredContextObligationString = (
+  input: Record<string, unknown>,
+  key: string,
+  path: string,
+  collector: RequiredContextObligationIssueCollector,
+): string => {
+  const value = input[key];
+
+  if (typeof value !== "string" || value.length === 0) {
+    addRequiredContextObligationIssue(
+      collector,
+      requiredContextObligationChildPath(path, key),
+      "invalid_string",
+      "Expected a non-empty string.",
+    );
+    return "";
+  }
+
+  return value;
+};
+
+const readRequiredContextObligationEnum = <TValue extends string>(
+  input: Record<string, unknown>,
+  key: string,
+  values: StringEnumValues<TValue>,
+  path: string,
+  collector: RequiredContextObligationIssueCollector,
+): TValue => {
+  const value = input[key];
+
+  if (typeof value !== "string" || !values.includes(value as TValue)) {
+    addRequiredContextObligationIssue(
+      collector,
+      requiredContextObligationChildPath(path, key),
+      "invalid_enum",
+      `Expected one of: ${values.join(", ")}.`,
+    );
+    return values[0] as TValue;
+  }
+
+  return value as TValue;
+};
+
+const readRequiredContextObligationStringArray = (
+  input: Record<string, unknown>,
+  key: string,
+  path: string,
+  collector: RequiredContextObligationIssueCollector,
+): string[] => {
+  const value = input[key];
+  const issuePath = requiredContextObligationChildPath(path, key);
+
+  if (!Array.isArray(value)) {
+    addRequiredContextObligationIssue(
+      collector,
+      issuePath,
+      "invalid_array",
+      "Expected an array of strings.",
+    );
+    return [];
+  }
+
+  if (value.length === 0) {
+    addRequiredContextObligationIssue(
+      collector,
+      issuePath,
+      "invalid_array",
+      "Expected at least one context anchor id.",
+    );
+  }
+
+  return value.flatMap((item, index) => {
+    if (typeof item !== "string" || item.length === 0) {
+      addRequiredContextObligationIssue(
+        collector,
+        `${issuePath}[${index}]`,
+        "invalid_string",
+        "Expected a non-empty string.",
+      );
+      return [];
+    }
+
+    return [item];
+  });
+};
+
+const requiredContextFreshnessWindowPattern =
+  /^P(?=\d|T\d)(?:\d+Y)?(?:\d+M)?(?:\d+W)?(?:\d+D)?(?:T(?=\d)(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?)?$/;
+
+const readRequiredContextObligationFreshnessWindow = (
+  input: Record<string, unknown>,
+  key: string,
+  path: string,
+  collector: RequiredContextObligationIssueCollector,
+): RequiredContextFreshnessWindow => {
+  const value = readRequiredContextObligationString(
+    input,
+    key,
+    path,
+    collector,
+  );
+
+  if (
+    value.length > 0 &&
+    !requiredContextFreshnessWindowPattern.test(value)
+  ) {
+    addRequiredContextObligationIssue(
+      collector,
+      requiredContextObligationChildPath(path, key),
+      "invalid_duration",
+      "Expected an ISO-8601 duration string.",
+    );
+  }
+
+  return value;
+};
+
+const validateRequiredContextObligationShape = (
+  input: unknown,
+  collector: RequiredContextObligationIssueCollector,
+): RequiredContextObligation => {
+  if (!isRequiredContextObligationRecord(input)) {
+    addRequiredContextObligationIssue(
+      collector,
+      "$",
+      "invalid_object",
+      "Expected an object.",
+    );
+    input = {};
+  }
+
+  const record = input as Record<string, unknown>;
+  const path = "$";
+
+  return {
+    obligationId: readRequiredContextObligationString(
+      record,
+      "obligationId",
+      path,
+      collector,
+    ),
+    toolCallDigest: readRequiredContextObligationString(
+      record,
+      "toolCallDigest",
+      path,
+      collector,
+    ),
+    actionImpactClass: readRequiredContextObligationString(
+      record,
+      "actionImpactClass",
+      path,
+      collector,
+    ),
+    requiredAnchors: readRequiredContextObligationStringArray(
+      record,
+      "requiredAnchors",
+      path,
+      collector,
+    ),
+    freshnessWindow: readRequiredContextObligationFreshnessWindow(
+      record,
+      "freshnessWindow",
+      path,
+      collector,
+    ),
+    minimumRetentionMode: readRequiredContextObligationEnum(
+      record,
+      "minimumRetentionMode",
+      RequiredContextMinimumRetentionModeValues,
+      path,
+      collector,
+    ),
+    conflictPolicy: readRequiredContextObligationEnum(
+      record,
+      "conflictPolicy",
+      RequiredContextConflictPolicyValues,
+      path,
+      collector,
+    ),
+    taintPolicy: readRequiredContextObligationEnum(
+      record,
+      "taintPolicy",
+      RequiredContextTaintPolicyValues,
+      path,
+      collector,
+    ),
+    missingAnchorAction: readRequiredContextObligationEnum(
+      record,
+      "missingAnchorAction",
+      RequiredContextMissingAnchorActionValues,
+      path,
+      collector,
+    ),
+  };
+};
+
+export const validateRequiredContextObligation = (
+  input: unknown,
+): RequiredContextObligationValidationResult => {
+  const collector: RequiredContextObligationIssueCollector = { issues: [] };
+  const data = validateRequiredContextObligationShape(input, collector);
+
+  if (collector.issues.length > 0) {
+    return { success: false, issues: collector.issues };
+  }
+
+  return { success: true, data };
+};
+
+export const RequiredContextObligationSchema = {
+  parse(input: unknown): RequiredContextObligation {
+    const result = validateRequiredContextObligation(input);
+
+    if (!result.success) {
+      throw new RequiredContextObligationValidationError(result.issues);
+    }
+
+    return result.data;
+  },
+  safeParse(input: unknown): RequiredContextObligationValidationResult {
+    return validateRequiredContextObligation(input);
+  },
+};
+
+export const isRequiredContextObligation = (
+  input: unknown,
+): input is RequiredContextObligation =>
+  validateRequiredContextObligation(input).success;
 
 const addPromptAssemblyManifestIssue = (
   collector: PromptAssemblyManifestIssueCollector,
