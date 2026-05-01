@@ -495,6 +495,15 @@ export type ContextRetentionEvidenceMatcherInput = {
   taintedAnchorIds?: readonly ContextAnchorId[];
 };
 
+export type ContextRetentionRuleEvaluation = {
+  staleAnchorIds: readonly ContextAnchorId[];
+  conflictingAnchorIds: readonly ContextAnchorId[];
+  taintedAnchorIds: readonly ContextAnchorId[];
+  conflictEvidenceByAnchorId: Readonly<
+    Record<ContextAnchorId, readonly ContextAnchorId[]>
+  >;
+};
+
 export type CertifiedSummaryDerivationDigestInput = {
   anchorId: ContextAnchorId;
   sourceContentDigest: PatentProofHash;
@@ -3973,6 +3982,12 @@ const createMissingContextRetentionEvidence = (
   obligation: RequiredContextObligation,
   manifest: PromptAssemblyManifest,
   anchorId: ContextAnchorId,
+  overrides: {
+    retentionMode?: ContextRetentionMode;
+    freshnessScore?: number;
+    trustScore?: number;
+    conflictEvidence?: readonly ContextAnchorId[];
+  } = {},
 ): ContextRetentionEvidence => ({
   evidenceId: `cre-${contextRetentionSlug(obligation.obligationId)}-${contextRetentionSlug(
     anchorId,
@@ -3982,17 +3997,260 @@ const createMissingContextRetentionEvidence = (
   promptAssemblyManifestId: manifest.manifestId,
   inferenceId: manifest.inferenceId,
   anchorId,
-  retentionMode: ContextRetentionMode.Missing,
+  retentionMode: overrides.retentionMode ?? ContextRetentionMode.Missing,
   minimumRetentionMode: obligation.minimumRetentionMode,
   coverageScore: 0,
-  freshnessScore: 1,
-  trustScore: 1,
-  conflictEvidence: [],
+  freshnessScore: overrides.freshnessScore ?? 1,
+  trustScore: overrides.trustScore ?? 1,
+  conflictEvidence: overrides.conflictEvidence ?? [],
   summaryVerifierResult: ContextRetentionVerifierResult.NotApplicable,
   referenceVerifierResult: ContextRetentionVerifierResult.NotApplicable,
   matchedContextUnitId: null,
   matchedDigest: null,
 });
+
+const contextRetentionWriteImpactTerms = [
+  "write",
+  "delete",
+  "update",
+  "deploy",
+  "mutation",
+  "config_change",
+  "external_message_send",
+] as const;
+
+const contextRetentionContradictionAnchorTypes: readonly ContextAnchorType[] = [
+  ContextAnchorType.ApprovalNote,
+  ContextAnchorType.NegativeEvidence,
+  ContextAnchorType.ResourceState,
+  ContextAnchorType.SystemPolicy,
+  ContextAnchorType.ToolResult,
+];
+
+const isContextRetentionWriteImpact = (
+  actionImpactClass: ActionImpactClassId,
+): boolean => {
+  const normalizedImpact = actionImpactClass.toLowerCase();
+
+  return contextRetentionWriteImpactTerms.some((term) =>
+    normalizedImpact.includes(term),
+  );
+};
+
+const isContextRetentionLowTrustInstruction = (
+  anchor: ContextAnchor,
+): boolean =>
+  anchor.anchorType === ContextAnchorType.UserInstruction &&
+  (anchor.trustTier === ContextAnchorTrustTier.Low ||
+    anchor.trustTier === ContextAnchorTrustTier.Untrusted);
+
+const normalizeContextRetentionScope = (scope: string): string =>
+  scope.trim().toLowerCase();
+
+const areContextRetentionScopesRelated = (
+  firstScope: string,
+  secondScope: string,
+): boolean => {
+  const first = normalizeContextRetentionScope(firstScope);
+  const second = normalizeContextRetentionScope(secondScope);
+
+  if (first.length === 0 || second.length === 0) {
+    return false;
+  }
+
+  return (
+    first === second ||
+    first === "*" ||
+    second === "*" ||
+    (first.endsWith(":*") && second.startsWith(first.slice(0, -1))) ||
+    (second.endsWith(":*") && first.startsWith(second.slice(0, -1))) ||
+    first.includes(second) ||
+    second.includes(first)
+  );
+};
+
+const isContextRetentionAnchorRetained = (
+  anchor: ContextAnchor,
+  manifest: PromptAssemblyManifest,
+): boolean => findPositiveContextRetentionMatch(anchor, manifest) !== null;
+
+const addContextRetentionConflictEvidence = (
+  conflictEvidenceByAnchorId: Map<ContextAnchorId, Set<ContextAnchorId>>,
+  anchorId: ContextAnchorId,
+  conflictAnchorId: ContextAnchorId,
+): void => {
+  const existingConflictEvidence = conflictEvidenceByAnchorId.get(anchorId);
+
+  if (existingConflictEvidence !== undefined) {
+    existingConflictEvidence.add(conflictAnchorId);
+    return;
+  }
+
+  conflictEvidenceByAnchorId.set(anchorId, new Set([conflictAnchorId]));
+};
+
+const createContextRetentionConflictEvidenceRecord = (
+  conflictEvidenceByAnchorId: Map<ContextAnchorId, Set<ContextAnchorId>>,
+): Readonly<Record<ContextAnchorId, readonly ContextAnchorId[]>> => {
+  const record: Record<ContextAnchorId, readonly ContextAnchorId[]> = {};
+
+  for (const [anchorId, conflictEvidence] of conflictEvidenceByAnchorId) {
+    record[anchorId] = [...conflictEvidence].sort();
+  }
+
+  return record;
+};
+
+const hasContextRetentionContradictoryDigest = (
+  firstAnchor: ContextAnchor,
+  secondAnchor: ContextAnchor,
+): boolean =>
+  firstAnchor.contentDigest !== secondAnchor.contentDigest ||
+  firstAnchor.semanticClaimsDigest !== secondAnchor.semanticClaimsDigest;
+
+const shouldEvaluateContextRetentionContradiction = (
+  anchor: ContextAnchor,
+): boolean => contextRetentionContradictionAnchorTypes.includes(anchor.anchorType);
+
+export const evaluateContextRetentionRules = (
+  input: ContextRetentionEvidenceMatcherInput,
+): ContextRetentionRuleEvaluation => {
+  const obligation = RequiredContextObligationSchema.parse(input.obligation);
+  const manifest = PromptAssemblyManifestSchema.parse(input.manifest);
+  const anchors = input.anchors.map((anchor) => ContextAnchorSchema.parse(anchor));
+  const anchorsById = new Map(
+    anchors.map((anchor) => [anchor.anchorId, anchor] as const),
+  );
+  const requiredAnchorIds = new Set(obligation.requiredAnchors);
+  const staleAnchorIds = new Set<ContextAnchorId>();
+  const conflictingAnchorIds = new Set<ContextAnchorId>(
+    input.conflictingAnchorIds ?? [],
+  );
+  const taintedAnchorIds = new Set<ContextAnchorId>(
+    input.taintedAnchorIds ?? [],
+  );
+  const conflictEvidenceByAnchorId = new Map<
+    ContextAnchorId,
+    Set<ContextAnchorId>
+  >();
+
+  for (const anchorId of conflictingAnchorIds) {
+    addContextRetentionConflictEvidence(
+      conflictEvidenceByAnchorId,
+      anchorId,
+      anchorId,
+    );
+  }
+
+  for (const anchorId of obligation.requiredAnchors) {
+    const anchor = anchorsById.get(anchorId);
+
+    if (anchor === undefined) {
+      continue;
+    }
+
+    if (isContextRetentionAnchorStale(anchor, obligation, input.evaluatedAt)) {
+      staleAnchorIds.add(anchorId);
+    }
+
+    if (
+      obligation.taintPolicy ===
+        RequiredContextTaintPolicy.DenyOnUntrustedInstruction &&
+      isContextRetentionWriteImpact(obligation.actionImpactClass) &&
+      isContextRetentionLowTrustInstruction(anchor)
+    ) {
+      taintedAnchorIds.add(anchorId);
+    }
+  }
+
+  if (
+    obligation.conflictPolicy ===
+    RequiredContextConflictPolicy.DenyOnOmittedConflict
+  ) {
+    const omittedNegativeEvidenceAnchors = anchors.filter(
+      (anchor) =>
+        anchor.anchorType === ContextAnchorType.NegativeEvidence &&
+        !isContextRetentionAnchorRetained(anchor, manifest),
+    );
+
+    for (const negativeEvidenceAnchor of omittedNegativeEvidenceAnchors) {
+      if (requiredAnchorIds.has(negativeEvidenceAnchor.anchorId)) {
+        conflictingAnchorIds.add(negativeEvidenceAnchor.anchorId);
+        addContextRetentionConflictEvidence(
+          conflictEvidenceByAnchorId,
+          negativeEvidenceAnchor.anchorId,
+          negativeEvidenceAnchor.anchorId,
+        );
+      }
+
+      for (const requiredAnchorId of obligation.requiredAnchors) {
+        const requiredAnchor = anchorsById.get(requiredAnchorId);
+
+        if (
+          requiredAnchor === undefined ||
+          requiredAnchor.anchorId === negativeEvidenceAnchor.anchorId ||
+          !areContextRetentionScopesRelated(
+            requiredAnchor.resourceScope,
+            negativeEvidenceAnchor.resourceScope,
+          )
+        ) {
+          continue;
+        }
+
+        conflictingAnchorIds.add(requiredAnchor.anchorId);
+        addContextRetentionConflictEvidence(
+          conflictEvidenceByAnchorId,
+          requiredAnchor.anchorId,
+          negativeEvidenceAnchor.anchorId,
+        );
+      }
+    }
+
+    for (const requiredAnchorId of obligation.requiredAnchors) {
+      const requiredAnchor = anchorsById.get(requiredAnchorId);
+
+      if (
+        requiredAnchor === undefined ||
+        !shouldEvaluateContextRetentionContradiction(requiredAnchor)
+      ) {
+        continue;
+      }
+
+      for (const candidateAnchor of anchors) {
+        if (
+          candidateAnchor.anchorId === requiredAnchor.anchorId ||
+          candidateAnchor.anchorType !== requiredAnchor.anchorType ||
+          !shouldEvaluateContextRetentionContradiction(candidateAnchor) ||
+          !areContextRetentionScopesRelated(
+            requiredAnchor.resourceScope,
+            candidateAnchor.resourceScope,
+          ) ||
+          !hasContextRetentionContradictoryDigest(
+            requiredAnchor,
+            candidateAnchor,
+          )
+        ) {
+          continue;
+        }
+
+        conflictingAnchorIds.add(requiredAnchor.anchorId);
+        addContextRetentionConflictEvidence(
+          conflictEvidenceByAnchorId,
+          requiredAnchor.anchorId,
+          candidateAnchor.anchorId,
+        );
+      }
+    }
+  }
+
+  return {
+    staleAnchorIds: [...staleAnchorIds].sort(),
+    conflictingAnchorIds: [...conflictingAnchorIds].sort(),
+    taintedAnchorIds: [...taintedAnchorIds].sort(),
+    conflictEvidenceByAnchorId:
+      createContextRetentionConflictEvidenceRecord(conflictEvidenceByAnchorId),
+  };
+};
 
 export const matchContextRetentionEvidence = (
   input: ContextRetentionEvidenceMatcherInput,
@@ -4003,8 +4261,11 @@ export const matchContextRetentionEvidence = (
   const anchorsById = new Map(
     anchors.map((anchor) => [anchor.anchorId, anchor] as const),
   );
-  const conflictingAnchorIds = new Set(input.conflictingAnchorIds ?? []);
-  const taintedAnchorIds = new Set(input.taintedAnchorIds ?? []);
+  const ruleEvaluation = evaluateContextRetentionRules(input);
+  const staleAnchorIds = new Set(ruleEvaluation.staleAnchorIds);
+  const conflictingAnchorIds = new Set(ruleEvaluation.conflictingAnchorIds);
+  const taintedAnchorIds = new Set(ruleEvaluation.taintedAnchorIds);
+  const conflictEvidenceByAnchorId = ruleEvaluation.conflictEvidenceByAnchorId;
 
   return obligation.requiredAnchors.map((anchorId) => {
     const anchor = anchorsById.get(anchorId);
@@ -4016,16 +4277,19 @@ export const matchContextRetentionEvidence = (
     const positiveMatch = findPositiveContextRetentionMatch(anchor, manifest);
 
     if (positiveMatch === null) {
+      if (conflictingAnchorIds.has(anchorId)) {
+        return createMissingContextRetentionEvidence(obligation, manifest, anchorId, {
+          retentionMode: ContextRetentionMode.Conflicting,
+          freshnessScore: staleAnchorIds.has(anchorId) ? 0 : 1,
+          trustScore: taintedAnchorIds.has(anchorId) ? 0 : 1,
+          conflictEvidence: conflictEvidenceByAnchorId[anchorId] ?? [anchorId],
+        });
+      }
+
       return createMissingContextRetentionEvidence(obligation, manifest, anchorId);
     }
 
-    const freshnessScore = isContextRetentionAnchorStale(
-      anchor,
-      obligation,
-      input.evaluatedAt,
-    )
-      ? 0
-      : 1;
+    const freshnessScore = staleAnchorIds.has(anchorId) ? 0 : 1;
     const isConflicting = conflictingAnchorIds.has(anchorId);
     const isTainted = taintedAnchorIds.has(anchorId);
     const retentionMode = isConflicting
@@ -4055,7 +4319,9 @@ export const matchContextRetentionEvidence = (
         : 0,
       freshnessScore,
       trustScore: isTainted ? 0 : 1,
-      conflictEvidence: isConflicting ? [anchorId] : [],
+      conflictEvidence: isConflicting
+        ? conflictEvidenceByAnchorId[anchorId] ?? [anchorId]
+        : [],
       summaryVerifierResult: positiveMatch.summaryVerifierResult,
       referenceVerifierResult: positiveMatch.referenceVerifierResult,
       matchedContextUnitId: positiveMatch.matchedContextUnitId,

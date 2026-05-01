@@ -10,6 +10,7 @@ import {
   RequiredContextMissingAnchorAction,
   RequiredContextTaintPolicy,
   createContextAnchorCertifiedSummaryDerivationDigest,
+  evaluateContextRetentionRules,
   matchContextRetentionEvidence,
 } from "@agent-safety-gateway/shared/context-retention";
 
@@ -327,6 +328,39 @@ test("marks visible context as stale when freshness expires", () => {
   assert.equal(evidence.freshnessScore, 0);
 });
 
+test("marks visible context as stale when freshness window expires", () => {
+  const anchor = createAnchor({
+    createdAt: "2026-05-01T09:20:00.000Z",
+    expiresAt: "2026-05-01T12:00:00.000Z",
+  });
+  const evidence = matchSingleEvidence({
+    anchor,
+    obligation: createObligation([anchor.anchorId], {
+      freshnessWindow: "PT15M",
+    }),
+    manifest: createManifest({
+      contextUnitDigests: [
+        {
+          contextUnitId: anchor.anchorId,
+          digest: anchor.contentDigest,
+        },
+      ],
+      contextUnitOrder: [anchor.anchorId],
+      tokenPositionRanges: [
+        {
+          contextUnitId: anchor.anchorId,
+          startToken: 1,
+          endToken: 3,
+        },
+      ],
+    }),
+  });
+
+  assert.equal(evidence.retentionMode, ContextRetentionMode.Stale);
+  assert.equal(evidence.coverageScore, 1);
+  assert.equal(evidence.freshnessScore, 0);
+});
+
 test("marks matching anchors as conflicting from deterministic matcher input", () => {
   const anchor = createAnchor({ anchorId: "ctx-negative-evidence" });
   const evidence = matchSingleEvidence({
@@ -352,6 +386,105 @@ test("marks matching anchors as conflicting from deterministic matcher input", (
 
   assert.equal(evidence.retentionMode, ContextRetentionMode.Conflicting);
   assert.deepEqual(evidence.conflictEvidence, [anchor.anchorId]);
+  assert.equal(evidence.coverageScore, 1);
+});
+
+test("marks omitted required negative evidence as conflicting", () => {
+  const negativeEvidenceAnchor = createAnchor({
+    anchorId: "ctx-negative-renewal-policy",
+    anchorType: ContextAnchorType.NegativeEvidence,
+    resourceScope: "customer:emea-renewal",
+  });
+  const evidence = matchSingleEvidence({
+    anchor: negativeEvidenceAnchor,
+    obligation: createObligation([negativeEvidenceAnchor.anchorId], {
+      minimumRetentionMode: ContextRetentionMode.Verbatim,
+    }),
+    manifest: createManifest(),
+  });
+
+  assert.equal(evidence.retentionMode, ContextRetentionMode.Conflicting);
+  assert.equal(evidence.coverageScore, 0);
+  assert.deepEqual(evidence.conflictEvidence, [negativeEvidenceAnchor.anchorId]);
+});
+
+test("marks required anchors conflicting when related negative evidence is omitted", () => {
+  const approvalAnchor = createAnchor({
+    anchorId: "ctx-renewal-approval",
+    anchorType: ContextAnchorType.ApprovalNote,
+    resourceScope: "customer:emea-renewal",
+  });
+  const negativeEvidenceAnchor = createAnchor({
+    anchorId: "ctx-negative-renewal-policy",
+    anchorType: ContextAnchorType.NegativeEvidence,
+    resourceScope: "customer:emea-renewal",
+  });
+  const [evidence] = matchContextRetentionEvidence({
+    obligation: createObligation([approvalAnchor.anchorId]),
+    manifest: createManifest({
+      contextUnitDigests: [
+        {
+          contextUnitId: approvalAnchor.anchorId,
+          digest: approvalAnchor.contentDigest,
+        },
+      ],
+      contextUnitOrder: [approvalAnchor.anchorId],
+      tokenPositionRanges: [
+        {
+          contextUnitId: approvalAnchor.anchorId,
+          startToken: 6,
+          endToken: 10,
+        },
+      ],
+    }),
+    anchors: [approvalAnchor, negativeEvidenceAnchor],
+    evaluatedAt,
+  });
+
+  assert.equal(evidence.retentionMode, ContextRetentionMode.Conflicting);
+  assert.deepEqual(evidence.conflictEvidence, [negativeEvidenceAnchor.anchorId]);
+  assert.equal(evidence.coverageScore, 1);
+});
+
+test("marks required anchors conflicting when contradictory anchors are present", () => {
+  const retainedStateAnchor = createAnchor({
+    anchorId: "ctx-order-state-pending",
+    anchorType: ContextAnchorType.ResourceState,
+    resourceScope: "database:orders:123",
+    contentDigest: "sha256:order-123-pending-content",
+    semanticClaimsDigest: "sha256:order-123-pending-claims",
+  });
+  const conflictingStateAnchor = createAnchor({
+    anchorId: "ctx-order-state-cancelled",
+    anchorType: ContextAnchorType.ResourceState,
+    resourceScope: "database:orders:123",
+    contentDigest: "sha256:order-123-cancelled-content",
+    semanticClaimsDigest: "sha256:order-123-cancelled-claims",
+  });
+  const [evidence] = matchContextRetentionEvidence({
+    obligation: createObligation([retainedStateAnchor.anchorId]),
+    manifest: createManifest({
+      contextUnitDigests: [
+        {
+          contextUnitId: retainedStateAnchor.anchorId,
+          digest: retainedStateAnchor.contentDigest,
+        },
+      ],
+      contextUnitOrder: [retainedStateAnchor.anchorId],
+      tokenPositionRanges: [
+        {
+          contextUnitId: retainedStateAnchor.anchorId,
+          startToken: 11,
+          endToken: 18,
+        },
+      ],
+    }),
+    anchors: [retainedStateAnchor, conflictingStateAnchor],
+    evaluatedAt,
+  });
+
+  assert.equal(evidence.retentionMode, ContextRetentionMode.Conflicting);
+  assert.deepEqual(evidence.conflictEvidence, [conflictingStateAnchor.anchorId]);
   assert.equal(evidence.coverageScore, 1);
 });
 
@@ -384,6 +517,109 @@ test("marks matching anchors as tainted from deterministic matcher input", () =>
   assert.equal(evidence.retentionMode, ContextRetentionMode.Tainted);
   assert.equal(evidence.trustScore, 0);
   assert.equal(evidence.coverageScore, 1);
+});
+
+test("marks low trust instructions as tainted for write operations", () => {
+  const anchor = createAnchor({
+    anchorId: "ctx-low-trust-delete-instruction",
+    trustTier: ContextAnchorTrustTier.Low,
+  });
+  const evidence = matchSingleEvidence({
+    anchor,
+    obligation: createObligation([anchor.anchorId], {
+      actionImpactClass: "database_write",
+    }),
+    manifest: createManifest({
+      contextUnitDigests: [
+        {
+          contextUnitId: anchor.anchorId,
+          digest: anchor.contentDigest,
+        },
+      ],
+      contextUnitOrder: [anchor.anchorId],
+      tokenPositionRanges: [
+        {
+          contextUnitId: anchor.anchorId,
+          startToken: 9,
+          endToken: 12,
+        },
+      ],
+    }),
+  });
+
+  assert.equal(evidence.retentionMode, ContextRetentionMode.Tainted);
+  assert.equal(evidence.trustScore, 0);
+  assert.equal(evidence.coverageScore, 1);
+});
+
+test("evaluates stale, conflict, and taint rule outputs for state input", () => {
+  const staleAnchor = createAnchor({
+    anchorId: "ctx-stale-approval",
+    anchorType: ContextAnchorType.ApprovalNote,
+    createdAt: "2026-05-01T09:00:00.000Z",
+    expiresAt: "2026-05-01T12:00:00.000Z",
+    resourceScope: "deployment:payments-prod",
+  });
+  const lowTrustInstructionAnchor = createAnchor({
+    anchorId: "ctx-low-trust-deploy-instruction",
+    trustTier: ContextAnchorTrustTier.Untrusted,
+    resourceScope: "deployment:payments-prod",
+  });
+  const negativeEvidenceAnchor = createAnchor({
+    anchorId: "ctx-negative-deploy-policy",
+    anchorType: ContextAnchorType.NegativeEvidence,
+    resourceScope: "deployment:payments-prod",
+  });
+  const manifest = createManifest({
+    contextUnitDigests: [
+      {
+        contextUnitId: staleAnchor.anchorId,
+        digest: staleAnchor.contentDigest,
+      },
+      {
+        contextUnitId: lowTrustInstructionAnchor.anchorId,
+        digest: lowTrustInstructionAnchor.contentDigest,
+      },
+    ],
+    contextUnitOrder: [staleAnchor.anchorId, lowTrustInstructionAnchor.anchorId],
+    tokenPositionRanges: [
+      {
+        contextUnitId: staleAnchor.anchorId,
+        startToken: 1,
+        endToken: 4,
+      },
+      {
+        contextUnitId: lowTrustInstructionAnchor.anchorId,
+        startToken: 5,
+        endToken: 8,
+      },
+    ],
+  });
+  const ruleEvaluation = evaluateContextRetentionRules({
+    obligation: createObligation(
+      [staleAnchor.anchorId, lowTrustInstructionAnchor.anchorId],
+      {
+        actionImpactClass: "production_deploy",
+        freshnessWindow: "PT30M",
+      },
+    ),
+    manifest,
+    anchors: [staleAnchor, lowTrustInstructionAnchor, negativeEvidenceAnchor],
+    evaluatedAt,
+  });
+
+  assert.deepEqual(ruleEvaluation.staleAnchorIds, [staleAnchor.anchorId]);
+  assert.deepEqual(ruleEvaluation.conflictingAnchorIds, [
+    lowTrustInstructionAnchor.anchorId,
+    staleAnchor.anchorId,
+  ]);
+  assert.deepEqual(ruleEvaluation.taintedAnchorIds, [
+    lowTrustInstructionAnchor.anchorId,
+  ]);
+  assert.deepEqual(
+    ruleEvaluation.conflictEvidenceByAnchorId[staleAnchor.anchorId],
+    [negativeEvidenceAnchor.anchorId],
+  );
 });
 
 test("emits one deterministic evidence record for each required anchor", () => {
