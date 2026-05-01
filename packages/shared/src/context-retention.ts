@@ -458,6 +458,43 @@ export type PromptAssemblyManifest = {
   systemPolicyDigest: PatentProofHash;
 };
 
+export const ContextRetentionVerifierResult = {
+  Verified: "verified",
+  NotVerified: "not_verified",
+  NotApplicable: "not_applicable",
+} as const;
+
+export type ContextRetentionVerifierResult =
+  (typeof ContextRetentionVerifierResult)[keyof typeof ContextRetentionVerifierResult];
+
+export type ContextRetentionEvidence = {
+  evidenceId: ContextRetentionEvidenceId;
+  obligationId: RequiredContextObligationId;
+  toolCallDigest: PatentProofHash;
+  promptAssemblyManifestId: PromptAssemblyManifestId;
+  inferenceId: ContextRetentionRunId;
+  anchorId: ContextAnchorId;
+  retentionMode: ContextRetentionMode;
+  minimumRetentionMode: RequiredContextMinimumRetentionMode;
+  coverageScore: number;
+  freshnessScore: number;
+  trustScore: number;
+  conflictEvidence: readonly ContextAnchorId[];
+  summaryVerifierResult: ContextRetentionVerifierResult;
+  referenceVerifierResult: ContextRetentionVerifierResult;
+  matchedContextUnitId: ContextAnchorId | null;
+  matchedDigest: PatentProofHash | null;
+};
+
+export type ContextRetentionEvidenceMatcherInput = {
+  obligation: RequiredContextObligation;
+  manifest: PromptAssemblyManifest;
+  anchors: readonly ContextAnchor[];
+  evaluatedAt: ContextRetentionTimestamp;
+  conflictingAnchorIds?: readonly ContextAnchorId[];
+  taintedAnchorIds?: readonly ContextAnchorId[];
+};
+
 export type ContextAnchorValidationIssue = {
   path: string;
   code: string;
@@ -3603,6 +3640,275 @@ export const createPromptAssemblyManifestHash = async (
   return `${EvidenceHashAlgorithm.Sha256}:${await createPromptManifestSha256DigestHex(
     hashPayload,
   )}`;
+};
+
+const contextRetentionSlug = (value: string): string =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "unknown";
+
+const contextRetentionDurationPattern =
+  /^P(?:(?<years>\d+)Y)?(?:(?<months>\d+)M)?(?:(?<weeks>\d+)W)?(?:(?<days>\d+)D)?(?:T(?:(?<hours>\d+)H)?(?:(?<minutes>\d+)M)?(?:(?<seconds>\d+(?:\.\d+)?)S)?)?$/;
+
+const parseContextRetentionDurationMs = (duration: string): number | null => {
+  const match = contextRetentionDurationPattern.exec(duration);
+
+  if (match?.groups === undefined) {
+    return null;
+  }
+
+  const years = Number(match.groups.years ?? 0);
+  const months = Number(match.groups.months ?? 0);
+  const weeks = Number(match.groups.weeks ?? 0);
+  const days = Number(match.groups.days ?? 0);
+  const hours = Number(match.groups.hours ?? 0);
+  const minutes = Number(match.groups.minutes ?? 0);
+  const seconds = Number(match.groups.seconds ?? 0);
+  const dayMs = 24 * 60 * 60 * 1000;
+  const hourMs = 60 * 60 * 1000;
+  const minuteMs = 60 * 1000;
+
+  return (
+    years * 365 * dayMs +
+    months * 30 * dayMs +
+    weeks * 7 * dayMs +
+    days * dayMs +
+    hours * hourMs +
+    minutes * minuteMs +
+    seconds * 1000
+  );
+};
+
+const isContextRetentionAnchorStale = (
+  anchor: ContextAnchor,
+  obligation: RequiredContextObligation,
+  evaluatedAt: ContextRetentionTimestamp,
+): boolean => {
+  const evaluatedAtMs = Date.parse(evaluatedAt);
+  const expiresAtMs = Date.parse(anchor.expiresAt);
+  const createdAtMs = Date.parse(anchor.createdAt);
+
+  if (!Number.isFinite(evaluatedAtMs)) {
+    return false;
+  }
+
+  if (Number.isFinite(expiresAtMs) && expiresAtMs < evaluatedAtMs) {
+    return true;
+  }
+
+  if (!Number.isFinite(createdAtMs)) {
+    return false;
+  }
+
+  const freshnessWindowMs = parseContextRetentionDurationMs(
+    obligation.freshnessWindow,
+  );
+
+  return (
+    freshnessWindowMs !== null && createdAtMs + freshnessWindowMs < evaluatedAtMs
+  );
+};
+
+const findContextRetentionUnitDigest = (
+  manifest: PromptAssemblyManifest,
+  anchorId: ContextAnchorId,
+  expectedDigest: PatentProofHash,
+): PromptContextUnitDigest | undefined =>
+  manifest.contextUnitDigests.find(
+    (contextUnit) =>
+      contextUnit.contextUnitId === anchorId && contextUnit.digest === expectedDigest,
+  );
+
+const isContextRetentionUnitVisible = (
+  manifest: PromptAssemblyManifest,
+  anchorId: ContextAnchorId,
+): boolean =>
+  manifest.contextUnitOrder.includes(anchorId) &&
+  manifest.tokenPositionRanges.some(
+    (range) =>
+      range.contextUnitId === anchorId && range.endToken >= range.startToken,
+  );
+
+type PositiveContextRetentionMatch = {
+  retentionMode: RequiredContextMinimumRetentionMode;
+  matchedContextUnitId: ContextAnchorId | null;
+  matchedDigest: PatentProofHash | null;
+  summaryVerifierResult: ContextRetentionVerifierResult;
+  referenceVerifierResult: ContextRetentionVerifierResult;
+};
+
+const findPositiveContextRetentionMatch = (
+  anchor: ContextAnchor,
+  manifest: PromptAssemblyManifest,
+): PositiveContextRetentionMatch | null => {
+  const verbatimUnit = findContextRetentionUnitDigest(
+    manifest,
+    anchor.anchorId,
+    anchor.contentDigest,
+  );
+
+  if (
+    verbatimUnit !== undefined &&
+    isContextRetentionUnitVisible(manifest, anchor.anchorId)
+  ) {
+    return {
+      retentionMode: ContextRetentionMode.Verbatim,
+      matchedContextUnitId: verbatimUnit.contextUnitId,
+      matchedDigest: verbatimUnit.digest,
+      summaryVerifierResult: ContextRetentionVerifierResult.NotApplicable,
+      referenceVerifierResult: ContextRetentionVerifierResult.NotApplicable,
+    };
+  }
+
+  const summaryUnit = findContextRetentionUnitDigest(
+    manifest,
+    anchor.anchorId,
+    anchor.semanticClaimsDigest,
+  );
+  const hasCertifiedSummary =
+    anchor.allowCertifiedSummary &&
+    summaryUnit !== undefined &&
+    isContextRetentionUnitVisible(manifest, anchor.anchorId) &&
+    (manifest.summaryDerivationDigests.includes(anchor.semanticClaimsDigest) ||
+      manifest.summaryDerivationDigests.includes(anchor.contentDigest));
+
+  if (hasCertifiedSummary) {
+    return {
+      retentionMode: ContextRetentionMode.CertifiedSummary,
+      matchedContextUnitId: summaryUnit.contextUnitId,
+      matchedDigest: summaryUnit.digest,
+      summaryVerifierResult: ContextRetentionVerifierResult.Verified,
+      referenceVerifierResult: ContextRetentionVerifierResult.NotApplicable,
+    };
+  }
+
+  const hasRetrievableReference =
+    anchor.allowRetrievableReference &&
+    (manifest.retrievedDocumentDigests.includes(anchor.contentDigest) ||
+      manifest.retrievedDocumentDigests.includes(anchor.semanticClaimsDigest));
+
+  if (hasRetrievableReference) {
+    return {
+      retentionMode: ContextRetentionMode.RetrievableReference,
+      matchedContextUnitId: anchor.anchorId,
+      matchedDigest: anchor.contentDigest,
+      summaryVerifierResult: ContextRetentionVerifierResult.NotApplicable,
+      referenceVerifierResult: ContextRetentionVerifierResult.Verified,
+    };
+  }
+
+  return null;
+};
+
+const contextRetentionModeRank: Record<
+  RequiredContextMinimumRetentionMode,
+  number
+> = {
+  [ContextRetentionMode.Verbatim]: 3,
+  [ContextRetentionMode.CertifiedSummary]: 2,
+  [ContextRetentionMode.RetrievableReference]: 1,
+};
+
+const doesContextRetentionMatchMinimum = (
+  actualMode: RequiredContextMinimumRetentionMode,
+  minimumMode: RequiredContextMinimumRetentionMode,
+): boolean =>
+  contextRetentionModeRank[actualMode] >= contextRetentionModeRank[minimumMode];
+
+const createMissingContextRetentionEvidence = (
+  obligation: RequiredContextObligation,
+  manifest: PromptAssemblyManifest,
+  anchorId: ContextAnchorId,
+): ContextRetentionEvidence => ({
+  evidenceId: `cre-${contextRetentionSlug(obligation.obligationId)}-${contextRetentionSlug(
+    anchorId,
+  )}`,
+  obligationId: obligation.obligationId,
+  toolCallDigest: obligation.toolCallDigest,
+  promptAssemblyManifestId: manifest.manifestId,
+  inferenceId: manifest.inferenceId,
+  anchorId,
+  retentionMode: ContextRetentionMode.Missing,
+  minimumRetentionMode: obligation.minimumRetentionMode,
+  coverageScore: 0,
+  freshnessScore: 1,
+  trustScore: 1,
+  conflictEvidence: [],
+  summaryVerifierResult: ContextRetentionVerifierResult.NotApplicable,
+  referenceVerifierResult: ContextRetentionVerifierResult.NotApplicable,
+  matchedContextUnitId: null,
+  matchedDigest: null,
+});
+
+export const matchContextRetentionEvidence = (
+  input: ContextRetentionEvidenceMatcherInput,
+): readonly ContextRetentionEvidence[] => {
+  const obligation = RequiredContextObligationSchema.parse(input.obligation);
+  const manifest = PromptAssemblyManifestSchema.parse(input.manifest);
+  const anchors = input.anchors.map((anchor) => ContextAnchorSchema.parse(anchor));
+  const anchorsById = new Map(
+    anchors.map((anchor) => [anchor.anchorId, anchor] as const),
+  );
+  const conflictingAnchorIds = new Set(input.conflictingAnchorIds ?? []);
+  const taintedAnchorIds = new Set(input.taintedAnchorIds ?? []);
+
+  return obligation.requiredAnchors.map((anchorId) => {
+    const anchor = anchorsById.get(anchorId);
+
+    if (anchor === undefined) {
+      return createMissingContextRetentionEvidence(obligation, manifest, anchorId);
+    }
+
+    const positiveMatch = findPositiveContextRetentionMatch(anchor, manifest);
+
+    if (positiveMatch === null) {
+      return createMissingContextRetentionEvidence(obligation, manifest, anchorId);
+    }
+
+    const freshnessScore = isContextRetentionAnchorStale(
+      anchor,
+      obligation,
+      input.evaluatedAt,
+    )
+      ? 0
+      : 1;
+    const isConflicting = conflictingAnchorIds.has(anchorId);
+    const isTainted = taintedAnchorIds.has(anchorId);
+    const retentionMode = isConflicting
+      ? ContextRetentionMode.Conflicting
+      : isTainted
+        ? ContextRetentionMode.Tainted
+        : freshnessScore === 0
+          ? ContextRetentionMode.Stale
+          : positiveMatch.retentionMode;
+
+    return {
+      evidenceId: `cre-${contextRetentionSlug(
+        obligation.obligationId,
+      )}-${contextRetentionSlug(anchorId)}`,
+      obligationId: obligation.obligationId,
+      toolCallDigest: obligation.toolCallDigest,
+      promptAssemblyManifestId: manifest.manifestId,
+      inferenceId: manifest.inferenceId,
+      anchorId,
+      retentionMode,
+      minimumRetentionMode: obligation.minimumRetentionMode,
+      coverageScore: doesContextRetentionMatchMinimum(
+        positiveMatch.retentionMode,
+        obligation.minimumRetentionMode,
+      )
+        ? 1
+        : 0,
+      freshnessScore,
+      trustScore: isTainted ? 0 : 1,
+      conflictEvidence: isConflicting ? [anchorId] : [],
+      summaryVerifierResult: positiveMatch.summaryVerifierResult,
+      referenceVerifierResult: positiveMatch.referenceVerifierResult,
+      matchedContextUnitId: positiveMatch.matchedContextUnitId,
+      matchedDigest: positiveMatch.matchedDigest,
+    };
+  });
 };
 
 export const ContextRetentionDomain = {
