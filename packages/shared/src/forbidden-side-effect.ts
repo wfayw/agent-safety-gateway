@@ -183,6 +183,22 @@ export const EvidenceCoverageStatusValues = Object.values(
   EvidenceCoverageStatus,
 ) as EvidenceCoverageStatus[];
 
+export const ExecutorSafetyEvidenceStateName = {
+  EvidenceMissing: "EvidenceMissing",
+  EvidencePartial: "EvidencePartial",
+  EvidenceComplete: "EvidenceComplete",
+  EvidenceExpired: "EvidenceExpired",
+  EvidenceInvalidated: "EvidenceInvalidated",
+  EvidenceFailed: "EvidenceFailed",
+} as const;
+
+export type ExecutorSafetyEvidenceStateName =
+  (typeof ExecutorSafetyEvidenceStateName)[keyof typeof ExecutorSafetyEvidenceStateName];
+
+export const ExecutorSafetyEvidenceStateNameValues = Object.values(
+  ExecutorSafetyEvidenceStateName,
+) as ExecutorSafetyEvidenceStateName[];
+
 export type EvidencePlanTimeoutStrategy = {
   timeoutMs: number;
   onTimeout: EvidencePlanTimeoutAction;
@@ -316,6 +332,32 @@ export type EvidenceCoverageEvaluationOptions = {
   coverageMapId?: EvidenceCoverageMapId;
   executorId?: string;
   evaluatedAt?: ForbiddenSideEffectTimestamp;
+};
+
+export type ExecutorSafetyEvidenceState = {
+  stateId: ExecutorSafetyEvidenceStateId;
+  executorId: string;
+  coverageMapId: EvidenceCoverageMapId;
+  state: ExecutorSafetyEvidenceStateName;
+  allObligationsCovered: boolean;
+  evaluatedAt: ForbiddenSideEffectTimestamp;
+  coveredObligationIds: readonly ForbiddenEffectObligationId[];
+  blockedObligationIds: readonly ForbiddenEffectObligationId[];
+  blockingStatuses: readonly EvidenceCoverageStatus[];
+  transitionReason: string;
+  validUntil?: ForbiddenSideEffectTimestamp;
+  invalidatedBy?: string;
+  coverageMapHash?: PatentProofHash;
+  safetyEvidenceVersion?: string;
+};
+
+export type ExecutorSafetyEvidenceStateEvaluationOptions = {
+  stateId?: ExecutorSafetyEvidenceStateId;
+  coverageMapHash?: PatentProofHash;
+  safetyEvidenceVersion?: string;
+  evaluatedAt?: ForbiddenSideEffectTimestamp;
+  evidenceTtlMs?: number;
+  invalidatedBy?: string;
 };
 
 export type ForbiddenEffectObligation = {
@@ -2295,6 +2337,281 @@ export const evaluateEvidenceCoverageMap = (
   };
 };
 
+const isPositiveEvidenceTtl = (
+  evidenceTtlMs: number | undefined,
+): evidenceTtlMs is number =>
+  evidenceTtlMs !== undefined &&
+  Number.isFinite(evidenceTtlMs) &&
+  evidenceTtlMs > 0;
+
+const addMillisecondsToTimestamp = (
+  timestamp: ForbiddenSideEffectTimestamp | undefined,
+  ttlMs: number | undefined,
+): ForbiddenSideEffectTimestamp | undefined => {
+  if (timestamp === undefined || !isPositiveEvidenceTtl(ttlMs)) {
+    return undefined;
+  }
+
+  const timestampMilliseconds = Date.parse(timestamp);
+
+  if (!Number.isFinite(timestampMilliseconds)) {
+    return undefined;
+  }
+
+  return new Date(timestampMilliseconds + ttlMs).toISOString();
+};
+
+const getEarliestDefinedTimestamp = (
+  timestamps: readonly (ForbiddenSideEffectTimestamp | undefined)[],
+): ForbiddenSideEffectTimestamp | undefined => {
+  const definedTimestamps = timestamps.filter(
+    (timestamp): timestamp is ForbiddenSideEffectTimestamp =>
+      timestamp !== undefined,
+  );
+
+  if (definedTimestamps.length === 0) {
+    return undefined;
+  }
+
+  return definedTimestamps.sort()[0];
+};
+
+const getExecutorSafetyEvidenceValidUntil = (
+  coverageMap: EvidenceCoverageMap,
+  evidenceTtlMs: number | undefined,
+): ForbiddenSideEffectTimestamp | undefined =>
+  getEarliestDefinedTimestamp(
+    coverageMap.coverage.flatMap((entry) => [
+      entry.expiresAt,
+      addMillisecondsToTimestamp(entry.completedAt, evidenceTtlMs),
+    ]),
+  );
+
+const isCoveredEntryPastTtl = (
+  entry: EvidenceCoverageEntry,
+  evaluatedAt: ForbiddenSideEffectTimestamp,
+  evidenceTtlMs: number | undefined,
+): boolean => {
+  if (entry.status !== EvidenceCoverageStatus.Covered) {
+    return false;
+  }
+
+  if (!isPositiveEvidenceTtl(evidenceTtlMs)) {
+    return false;
+  }
+
+  const ttlExpiresAt = addMillisecondsToTimestamp(
+    entry.completedAt,
+    evidenceTtlMs,
+  );
+
+  return (
+    ttlExpiresAt === undefined || isTimestampAtOrBefore(ttlExpiresAt, evaluatedAt)
+  );
+};
+
+const getExecutorSafetyEvidenceStateId = (
+  coverageMap: EvidenceCoverageMap,
+  state: ExecutorSafetyEvidenceStateName,
+  evaluatedAt: ForbiddenSideEffectTimestamp,
+): ExecutorSafetyEvidenceStateId =>
+  `eses:${coverageMap.coverageMapId}:${state}:${evaluatedAt}`;
+
+const getExecutorSafetyBlockingStatuses = (
+  coverageMap: EvidenceCoverageMap,
+  hasTtlExpired: boolean,
+  invalidatedBy: string | undefined,
+): readonly EvidenceCoverageStatus[] => {
+  const statuses = new Set<EvidenceCoverageStatus>();
+
+  for (const entry of coverageMap.coverage) {
+    if (entry.status !== EvidenceCoverageStatus.Covered) {
+      statuses.add(entry.status);
+    }
+  }
+
+  for (const obligation of coverageMap.obligations) {
+    if (obligation.status !== EvidenceCoverageStatus.Covered) {
+      statuses.add(obligation.status);
+    }
+  }
+
+  if (hasTtlExpired) {
+    statuses.add(EvidenceCoverageStatus.Stale);
+  }
+
+  if (invalidatedBy !== undefined) {
+    statuses.add(EvidenceCoverageStatus.Invalidated);
+  }
+
+  return EvidenceCoverageStatusValues.filter((status) => statuses.has(status));
+};
+
+const getBlockedExecutorSafetyObligationIds = (
+  coverageMap: EvidenceCoverageMap,
+  state: ExecutorSafetyEvidenceStateName,
+): readonly ForbiddenEffectObligationId[] => {
+  const blockedObligationIds = coverageMap.obligations
+    .filter(
+      (obligation) =>
+        obligation.status !== EvidenceCoverageStatus.Covered ||
+        !obligation.covered,
+    )
+    .map((obligation) => obligation.obligationId)
+    .sort();
+
+  if (
+    blockedObligationIds.length === 0 &&
+    state !== ExecutorSafetyEvidenceStateName.EvidenceComplete
+  ) {
+    return coverageMap.obligations
+      .map((obligation) => obligation.obligationId)
+      .sort();
+  }
+
+  return blockedObligationIds;
+};
+
+const hasCompleteExecutorSafetyCoverage = (
+  coverageMap: EvidenceCoverageMap,
+): boolean =>
+  coverageMap.obligations.length > 0 &&
+  coverageMap.coverage.length > 0 &&
+  coverageMap.allObligationsCovered &&
+  coverageMap.obligations.every(
+    (obligation) =>
+      obligation.covered && obligation.status === EvidenceCoverageStatus.Covered,
+  ) &&
+  coverageMap.coverage.every(
+    (entry) => entry.covered && entry.status === EvidenceCoverageStatus.Covered,
+  );
+
+export const evaluateExecutorSafetyEvidenceState = (
+  coverageMap: EvidenceCoverageMap,
+  options: ExecutorSafetyEvidenceStateEvaluationOptions = {},
+): ExecutorSafetyEvidenceState => {
+  const evaluatedAt = options.evaluatedAt ?? coverageMap.evaluatedAt;
+  const validUntil = getExecutorSafetyEvidenceValidUntil(
+    coverageMap,
+    options.evidenceTtlMs,
+  );
+  const hasFailedEvidence =
+    coverageMap.coverage.some(
+      (entry) => entry.status === EvidenceCoverageStatus.Failed,
+    ) ||
+    coverageMap.obligations.some(
+      (obligation) => obligation.status === EvidenceCoverageStatus.Failed,
+    );
+  const hasInvalidatedEvidence =
+    options.invalidatedBy !== undefined ||
+    coverageMap.coverage.some(
+      (entry) =>
+        entry.status === EvidenceCoverageStatus.Invalidated ||
+        isTimestampAtOrBefore(entry.invalidatedAt, evaluatedAt),
+    ) ||
+    coverageMap.obligations.some(
+      (obligation) => obligation.status === EvidenceCoverageStatus.Invalidated,
+    );
+  const hasStaleEvidence =
+    coverageMap.coverage.some(
+      (entry) =>
+        entry.status === EvidenceCoverageStatus.Stale ||
+        isTimestampAtOrBefore(entry.expiresAt, evaluatedAt),
+    ) ||
+    coverageMap.obligations.some(
+      (obligation) => obligation.status === EvidenceCoverageStatus.Stale,
+    );
+  const hasTtlExpired = coverageMap.coverage.some((entry) =>
+    isCoveredEntryPastTtl(entry, evaluatedAt, options.evidenceTtlMs),
+  );
+  const hasCompleteCoverage = hasCompleteExecutorSafetyCoverage(coverageMap);
+  const hasCoveredEvidence =
+    coverageMap.coverage.some(
+      (entry) => entry.covered && entry.status === EvidenceCoverageStatus.Covered,
+    ) ||
+    coverageMap.obligations.some(
+      (obligation) =>
+        obligation.covered && obligation.status === EvidenceCoverageStatus.Covered,
+    );
+
+  let state: ExecutorSafetyEvidenceStateName;
+  let transitionReason: string;
+
+  if (coverageMap.obligations.length === 0 || coverageMap.coverage.length === 0) {
+    state = ExecutorSafetyEvidenceStateName.EvidenceMissing;
+    transitionReason = "no forbidden-effect obligations or required evidence entries were supplied";
+  } else if (hasFailedEvidence) {
+    state = ExecutorSafetyEvidenceStateName.EvidenceFailed;
+    transitionReason = "one or more required evidence records failed safety proof";
+  } else if (hasInvalidatedEvidence) {
+    state = ExecutorSafetyEvidenceStateName.EvidenceInvalidated;
+    transitionReason =
+      options.invalidatedBy !== undefined
+        ? `executor safety evidence was invalidated by ${options.invalidatedBy}`
+        : "one or more required evidence records were invalidated";
+  } else if (hasStaleEvidence || hasTtlExpired) {
+    state = ExecutorSafetyEvidenceStateName.EvidenceExpired;
+    transitionReason = "one or more required evidence records are stale or past TTL";
+  } else if (hasCompleteCoverage) {
+    state = ExecutorSafetyEvidenceStateName.EvidenceComplete;
+    transitionReason = "all required obligations are covered by valid evidence";
+  } else if (hasCoveredEvidence) {
+    state = ExecutorSafetyEvidenceStateName.EvidencePartial;
+    transitionReason =
+      "some required obligations are covered, but at least one required evidence type is incomplete";
+  } else {
+    state = ExecutorSafetyEvidenceStateName.EvidenceMissing;
+    transitionReason = "no required evidence has been covered";
+  }
+
+  const safetyState: ExecutorSafetyEvidenceState = {
+    stateId:
+      options.stateId ??
+      getExecutorSafetyEvidenceStateId(coverageMap, state, evaluatedAt),
+    executorId: coverageMap.executorId,
+    coverageMapId: coverageMap.coverageMapId,
+    state,
+    allObligationsCovered:
+      state === ExecutorSafetyEvidenceStateName.EvidenceComplete,
+    evaluatedAt,
+    coveredObligationIds: coverageMap.obligations
+      .filter(
+        (obligation) =>
+          obligation.covered && obligation.status === EvidenceCoverageStatus.Covered,
+      )
+      .map((obligation) => obligation.obligationId)
+      .sort(),
+    blockedObligationIds: getBlockedExecutorSafetyObligationIds(
+      coverageMap,
+      state,
+    ),
+    blockingStatuses: getExecutorSafetyBlockingStatuses(
+      coverageMap,
+      hasTtlExpired,
+      options.invalidatedBy,
+    ),
+    transitionReason,
+  };
+
+  if (validUntil !== undefined) {
+    safetyState.validUntil = validUntil;
+  }
+
+  if (options.invalidatedBy !== undefined) {
+    safetyState.invalidatedBy = options.invalidatedBy;
+  }
+
+  if (options.coverageMapHash !== undefined) {
+    safetyState.coverageMapHash = options.coverageMapHash;
+  }
+
+  if (options.safetyEvidenceVersion !== undefined) {
+    safetyState.safetyEvidenceVersion = options.safetyEvidenceVersion;
+  }
+
+  return safetyState;
+};
+
 type SideEffectObservedEventHashPayload = {
   evidenceType: SideEffectEvidenceType;
   target: string;
@@ -2665,6 +2982,7 @@ export const ForbiddenSideEffectDomain = {
   obligation: "ForbiddenEffectObligation",
   evidencePlan: "EvidencePlan",
   coverageMap: "EvidenceCoverageMap",
+  safetyState: "ExecutorSafetyEvidenceState",
   evidence: ["DeniedCapabilityEvidence", "SideEffectDeltaEvidence"],
   permitExit: "PermitBinding",
 } as const;
