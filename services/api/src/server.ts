@@ -51,6 +51,12 @@ import {
   type ExecutorSafetyEvidenceRepository,
 } from "./executor-safety-evidence-repository.js";
 import {
+  createContextAdequacyEvidenceRepository,
+  ContextAdequacyEvidenceRecordKind,
+  type ContextAdequacyEvidenceRecordFilters,
+  type ContextAdequacyEvidenceRepository,
+} from "./context-adequacy-evidence-repository.js";
+import {
   createDefaultToolCallAnalysisService,
   ToolCallAnalysisError,
   type ToolCallAnalysisService,
@@ -78,6 +84,7 @@ export type ApiServerOptions = {
   executionLogRepository?: ExecutionLogRepository;
   hookDecisionRepository?: HookDecisionRepository;
   executorSafetyEvidenceRepository?: ExecutorSafetyEvidenceRepository;
+  contextAdequacyEvidenceRepository?: ContextAdequacyEvidenceRepository;
   scenarioRepository?: ScenarioRepository;
   catalogIngestionService?: CatalogIngestionService;
   toolCallAnalysisService?: ToolCallAnalysisService;
@@ -291,6 +298,9 @@ export const buildServer = (options: ApiServerOptions = {}) => {
   const executorSafetyEvidenceRepository =
     options.executorSafetyEvidenceRepository ??
     createExecutorSafetyEvidenceRepository(localStorageLayout);
+  const contextAdequacyEvidenceRepository =
+    options.contextAdequacyEvidenceRepository ??
+    createContextAdequacyEvidenceRepository(localStorageLayout);
   const catalogIngestionService =
     options.catalogIngestionService ??
     createCatalogIngestionService(localStorageLayout);
@@ -593,6 +603,58 @@ export const buildServer = (options: ApiServerOptions = {}) => {
       return {
         executorSafetyEvidence: await executorSafetyEvidenceRepository.listRecords(
           request.query as ExecutorSafetyEvidenceRecordFilters,
+        ),
+      };
+    },
+  );
+
+  server.get(
+    "/api/context-evidence",
+    {
+      schema: {
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            kind: {
+              type: "string",
+              enum: enumValues(ContextAdequacyEvidenceRecordKind),
+            },
+            requestId: {
+              type: "string",
+              minLength: 1,
+            },
+            auditId: {
+              type: "string",
+              minLength: 1,
+            },
+            inferenceId: {
+              type: "string",
+              minLength: 1,
+            },
+            toolCallDigest: {
+              type: "string",
+              minLength: 1,
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const permissionResult = requireManagementPermission(
+        request,
+        reply,
+        config,
+        ManagementPermission.ViewAuditEvidence,
+      );
+
+      if (permissionResult !== true) {
+        return permissionResult;
+      }
+
+      return {
+        contextEvidence: await contextAdequacyEvidenceRepository.listRecords(
+          request.query as ContextAdequacyEvidenceRecordFilters,
         ),
       };
     },

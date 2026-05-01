@@ -27,6 +27,22 @@ import type {
   PermitBinding,
   PermitDeniedEvidence,
 } from "@agent-safety-gateway/shared/forbidden-side-effect";
+import {
+  ContextAnchorTrustTier,
+  ContextAnchorType,
+  ContextRetentionMode,
+  ContextRetentionVerifierResult,
+  ContextSufficiencyStateName,
+  RequiredContextConflictPolicy,
+  RequiredContextMissingAnchorAction,
+  RequiredContextTaintPolicy,
+  type ContextAdequacyEvidence,
+  type ContextAnchor,
+  type ContextRetentionEvidence,
+  type ContextSufficiencyState,
+  type PromptAssemblyManifest,
+  type RequiredContextObligation,
+} from "@agent-safety-gateway/shared/context-retention";
 import type { FastifyInstance } from "fastify";
 
 import { createApiConfig } from "../src/config.js";
@@ -35,8 +51,12 @@ import {
   createExecutorSafetyEvidenceRepository,
   ExecutorSafetyEvidenceRecordKind,
 } from "../src/executor-safety-evidence-repository.js";
+import {
+  createContextAdequacyEvidenceRepository,
+  ContextAdequacyEvidenceRecordKind,
+} from "../src/context-adequacy-evidence-repository.js";
 import { seedLocalData } from "../src/seed.js";
-import { buildServer } from "../src/server.js";
+import { buildServer, type ApiServerOptions } from "../src/server.js";
 import { initializeLocalStorage, type LocalStorageLayout } from "../src/storage.js";
 import { createDefaultToolCallAnalysisService } from "../src/tool-call-analysis-service.js";
 
@@ -92,7 +112,9 @@ const createSeededLayout = async (): Promise<LocalStorageLayout> => {
   return layout;
 };
 
-const createAnalysisServerContext = async () => {
+const createAnalysisServerContext = async (
+  serverOptions: Pick<ApiServerOptions, "sqlExecutor" | "sqlExecutorId"> = {},
+) => {
   const layout = await createSeededLayout();
   let auditRecordCount = 0;
   const service = createDefaultToolCallAnalysisService(layout, {
@@ -107,6 +129,7 @@ const createAnalysisServerContext = async () => {
     logger: false,
     localStorageLayout: layout,
     toolCallAnalysisService: service,
+    ...serverOptions,
   });
 
   servers.push(server);
@@ -177,6 +200,175 @@ const appendHookDecisionRecord = async (
     layout.stores.hookDecisions,
     `${JSON.stringify(record)}\n`,
     "utf8",
+  );
+};
+
+const contextEvidenceMetadata = (
+  id: string,
+  overrides: Partial<{
+    requestId: string;
+    auditId: string;
+    inferenceId: string;
+    toolCallDigest: string;
+  }> = {},
+) => ({
+  id,
+  requestId: "request-context-sql-001",
+  auditId: "audit-context-sql-001",
+  inferenceId: "inference-context-sql-001",
+  toolCallDigest: "sha256:context-tool-call-001",
+  createdAt: "2026-05-01T07:00:00.000Z",
+  ...overrides,
+});
+
+const contextAnchorFixture: ContextAnchor = {
+  anchorId: "ctx-user-instruction-sql-001",
+  anchorType: ContextAnchorType.UserInstruction,
+  sourceIdentity: "user:alice",
+  authorityLevel: "task_owner",
+  resourceScope: "database.orders",
+  createdAt: "2026-05-01T06:55:00.000Z",
+  expiresAt: "2026-05-01T07:25:00.000Z",
+  contentDigest: "sha256:ctx-user-instruction-content",
+  semanticClaimsDigest: "sha256:ctx-user-instruction-claims",
+  mustBeVerbatim: true,
+  allowCertifiedSummary: false,
+  allowRetrievableReference: false,
+  trustTier: ContextAnchorTrustTier.High,
+};
+
+const promptAssemblyManifestFixture: PromptAssemblyManifest = {
+  manifestId: "manifest-context-sql-001",
+  inferenceId: "inference-context-sql-001",
+  modelId: "deterministic-agent-v1",
+  promptDigest: "sha256:prompt-context-sql-001",
+  contextUnitDigests: [
+    {
+      contextUnitId: "ctx-user-instruction-sql-001",
+      digest: "sha256:ctx-user-instruction-content",
+    },
+  ],
+  contextUnitOrder: ["ctx-user-instruction-sql-001"],
+  tokenPositionRanges: [
+    {
+      contextUnitId: "ctx-user-instruction-sql-001",
+      startToken: 10,
+      endToken: 18,
+    },
+  ],
+  summaryDerivationDigests: [],
+  retrievalQueryDigest: "sha256:no-retrieval-query",
+  retrievedDocumentDigests: [],
+  memorySnapshotDigest: "sha256:memory-snapshot-context-sql-001",
+  systemPolicyDigest: "sha256:system-policy-context-sql-001",
+};
+
+const requiredContextObligationFixture: RequiredContextObligation = {
+  obligationId: "required-context-sql-001",
+  toolCallDigest: "sha256:context-tool-call-001",
+  actionImpactClass: "sql.production.delete",
+  requiredAnchors: ["ctx-user-instruction-sql-001"],
+  freshnessWindow: "PT30M",
+  minimumRetentionMode: ContextRetentionMode.Verbatim,
+  conflictPolicy: RequiredContextConflictPolicy.DenyOnOmittedConflict,
+  taintPolicy: RequiredContextTaintPolicy.DenyOnUntrustedInstruction,
+  missingAnchorAction: RequiredContextMissingAnchorAction.Deny,
+};
+
+const contextRetentionEvidenceFixture: ContextRetentionEvidence = {
+  evidenceId: "retention-evidence-sql-001",
+  obligationId: "required-context-sql-001",
+  toolCallDigest: "sha256:context-tool-call-001",
+  promptAssemblyManifestId: "manifest-context-sql-001",
+  inferenceId: "inference-context-sql-001",
+  anchorId: "ctx-user-instruction-sql-001",
+  retentionMode: ContextRetentionMode.Verbatim,
+  minimumRetentionMode: ContextRetentionMode.Verbatim,
+  coverageScore: 1,
+  freshnessScore: 1,
+  trustScore: 1,
+  conflictEvidence: [],
+  summaryVerifierResult: ContextRetentionVerifierResult.NotApplicable,
+  referenceVerifierResult: ContextRetentionVerifierResult.NotApplicable,
+  matchedContextUnitId: "ctx-user-instruction-sql-001",
+  matchedDigest: "sha256:ctx-user-instruction-content",
+};
+
+const contextSufficiencyStateFixture: ContextSufficiencyState = {
+  stateId: "context-state-sql-001",
+  obligationId: "required-context-sql-001",
+  toolCallDigest: "sha256:context-tool-call-001",
+  promptAssemblyManifestId: "manifest-context-sql-001",
+  inferenceId: "inference-context-sql-001",
+  state: ContextSufficiencyStateName.Sufficient,
+  sufficient: true,
+  evaluatedAt: "2026-05-01T07:00:01.000Z",
+  requiredAnchorIds: ["ctx-user-instruction-sql-001"],
+  coveredAnchorIds: ["ctx-user-instruction-sql-001"],
+  blockedAnchorIds: [],
+  missingAnchorIds: [],
+  staleAnchorIds: [],
+  conflictingAnchorIds: [],
+  contaminatedAnchorIds: [],
+  verbatimAnchorIds: ["ctx-user-instruction-sql-001"],
+  certifiedSummaryAnchorIds: [],
+  retrievableReferenceAnchorIds: [],
+  transitionReason: "all required context anchors are retained verbatim",
+};
+
+const contextAdequacyEvidenceFixture: ContextAdequacyEvidence = {
+  evidenceId: "context-adequacy-evidence-sql-001",
+  toolCallDigest: "sha256:context-tool-call-001",
+  requiredContextObligationDigest: "sha256:required-context-obligation-001",
+  promptAssemblyManifestDigest: "sha256:prompt-manifest-001",
+  contextRetentionEvidenceDigest: "sha256:retention-evidence-001",
+  contextSufficiencyState: ContextSufficiencyStateName.Sufficient,
+  regroundingApplied: false,
+  permitIssued: true,
+  permitOutcome: "permit_issued_after_context_sufficiency",
+  denialReason: null,
+  createdAt: "2026-05-01T07:00:02.000Z",
+};
+
+const appendContextEvidenceSamples = async (layout: LocalStorageLayout) => {
+  const repository = createContextAdequacyEvidenceRepository(layout);
+
+  await repository.appendContextAnchor(
+    contextEvidenceMetadata("context-anchor-001"),
+    contextAnchorFixture,
+  );
+  await repository.appendPromptAssemblyManifest(
+    contextEvidenceMetadata("prompt-manifest-001"),
+    promptAssemblyManifestFixture,
+  );
+  await repository.appendRequiredContextObligation(
+    contextEvidenceMetadata("required-context-obligation-001"),
+    requiredContextObligationFixture,
+  );
+  await repository.appendContextRetentionEvidence(
+    contextEvidenceMetadata("context-retention-evidence-001"),
+    contextRetentionEvidenceFixture,
+  );
+  await repository.appendContextSufficiencyState(
+    contextEvidenceMetadata("context-sufficiency-state-001"),
+    contextSufficiencyStateFixture,
+  );
+  await repository.appendContextAdequacyEvidence(
+    contextEvidenceMetadata("context-adequacy-evidence-001"),
+    contextAdequacyEvidenceFixture,
+  );
+  await repository.appendContextAdequacyEvidence(
+    contextEvidenceMetadata("context-adequacy-evidence-ci-001", {
+      requestId: "request-context-ci-001",
+      auditId: "audit-context-ci-001",
+      inferenceId: "inference-context-ci-001",
+      toolCallDigest: "sha256:context-tool-call-ci-001",
+    }),
+    {
+      ...contextAdequacyEvidenceFixture,
+      evidenceId: "context-adequacy-evidence-ci-001",
+      toolCallDigest: "sha256:context-tool-call-ci-001",
+    },
   );
 };
 
@@ -1067,6 +1259,108 @@ describe("API server", () => {
 
     const auditResponse = await server.inject({ method: "GET", url: "/api/audits" });
     assert.deepEqual(auditResponse.json(), { audits: [] });
+  });
+
+  it("lists context evidence and filters without triggering analysis", async () => {
+    let executorCallCount = 0;
+    const { server, layout } = await createAnalysisServerContext({
+      sqlExecutor: () => {
+        executorCallCount += 1;
+        throw new Error("context evidence API must not invoke executors");
+      },
+      sqlExecutorId: "executor-not-called",
+    });
+
+    const emptyResponse = await server.inject({
+      method: "GET",
+      url: "/api/context-evidence",
+    });
+    assert.equal(emptyResponse.statusCode, 200);
+    assert.deepEqual(emptyResponse.json(), { contextEvidence: [] });
+
+    await appendContextEvidenceSamples(layout);
+
+    const listResponse = await server.inject({
+      method: "GET",
+      url: "/api/context-evidence",
+    });
+    assert.equal(listResponse.statusCode, 200);
+    assert.deepEqual(
+      listResponse.json().contextEvidence.map((record: { id: string }) => record.id),
+      [
+        "context-anchor-001",
+        "prompt-manifest-001",
+        "required-context-obligation-001",
+        "context-retention-evidence-001",
+        "context-sufficiency-state-001",
+        "context-adequacy-evidence-001",
+        "context-adequacy-evidence-ci-001",
+      ],
+    );
+
+    const requestFilterResponse = await server.inject({
+      method: "GET",
+      url: "/api/context-evidence?requestId=request-context-sql-001",
+    });
+    assert.deepEqual(
+      requestFilterResponse
+        .json()
+        .contextEvidence.map((record: { id: string }) => record.id),
+      [
+        "context-anchor-001",
+        "prompt-manifest-001",
+        "required-context-obligation-001",
+        "context-retention-evidence-001",
+        "context-sufficiency-state-001",
+        "context-adequacy-evidence-001",
+      ],
+    );
+
+    const combinedFilterResponse = await server.inject({
+      method: "GET",
+      url:
+        "/api/context-evidence?auditId=audit-context-ci-001&inferenceId=inference-context-ci-001&toolCallDigest=sha256%3Acontext-tool-call-ci-001&kind=contextAdequacyEvidence",
+    });
+    assert.equal(combinedFilterResponse.statusCode, 200);
+    assert.deepEqual(combinedFilterResponse.json().contextEvidence, [
+      {
+        ...contextEvidenceMetadata("context-adequacy-evidence-ci-001", {
+          requestId: "request-context-ci-001",
+          auditId: "audit-context-ci-001",
+          inferenceId: "inference-context-ci-001",
+          toolCallDigest: "sha256:context-tool-call-ci-001",
+        }),
+        kind: ContextAdequacyEvidenceRecordKind.ContextAdequacyEvidence,
+        contextAdequacyEvidence: {
+          ...contextAdequacyEvidenceFixture,
+          evidenceId: "context-adequacy-evidence-ci-001",
+          toolCallDigest: "sha256:context-tool-call-ci-001",
+        },
+        evidenceHash:
+          combinedFilterResponse.json().contextEvidence[0].evidenceHash,
+      },
+    ]);
+    assert.match(
+      combinedFilterResponse.json().contextEvidence[0].evidenceHash,
+      /^sha256:/,
+    );
+
+    const emptyFilterResponse = await server.inject({
+      method: "GET",
+      url: "/api/context-evidence?requestId=req-missing",
+    });
+    assert.deepEqual(emptyFilterResponse.json(), { contextEvidence: [] });
+
+    const invalidFilterResponse = await server.inject({
+      method: "GET",
+      url: "/api/context-evidence?kind=probe",
+    });
+    assert.equal(invalidFilterResponse.statusCode, 400);
+    assert.equal(invalidFilterResponse.json().code, "INVALID_REQUEST");
+
+    const auditResponse = await server.inject({ method: "GET", url: "/api/audits" });
+    assert.deepEqual(auditResponse.json(), { audits: [] });
+    assert.equal(executorCallCount, 0);
   });
 
   it("returns diagnostics metrics without triggering analysis or executors", async () => {
