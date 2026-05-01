@@ -105,6 +105,18 @@ pnpm typecheck:web
 pnpm build:web
 ```
 
+### 专利证据导出
+
+专利评审证据包默认导出到 `docs/evidence/patent-validation/<bundle-id>/`，包含选定 audit、context evidence、side-effect evidence、permits 和 denials：
+
+```bash
+PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm --filter @agent-safety-gateway/api patent:evidence:export -- \
+  --audit-id <audit-id> \
+  --bundle-id <bundle-id>
+```
+
+可用 `--request-id <id[,id]>` 按请求导出，或用 `--all` 导出本地 store 中全部证据。用法说明见 `docs/evidence/patent-validation/README.md`，claim mapping 见 `docs/patent/claim-mapping.md`。
+
 ### 运行 API 和 Web
 
 一个终端启动 API：

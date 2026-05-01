@@ -44,6 +44,14 @@ Fixture JSON：`docs/evidence/patent/fixtures/PAG-047-cicd-end-to-end-patent-sce
 
 Fixture JSON：`docs/evidence/patent/fixtures/PAG-048-config-end-to-end-patent-scenario.json`。
 
+## PAG-049 专利证据导出和 claim mapping
+
+| 场景 | 证明目标 | 文档 |
+| --- | --- | --- |
+| Patent evidence export | 将选定 audit、context evidence、side-effect evidence、permits 和 denials 复制到 `docs/evidence/patent-validation/<bundle-id>/`，并在 claim mapping 中引用两条专利状态机链路。 | `docs/evidence/patent-validation/README.md`；`docs/patent/claim-mapping.md` |
+
+导出实现：`services/api/src/patent-evidence-export.ts`。Smoke test：`services/api/test/patent-evidence-export.test.ts`。
+
 ## 复验命令
 
 ```bash
@@ -51,6 +59,7 @@ PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm --filter @agent-safety-ga
 PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm --filter @agent-safety-gateway/api exec node --import tsx --test test/sql-patent-e2e-scenario.test.ts
 PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm --filter @agent-safety-gateway/api exec node --import tsx --test test/cicd-patent-e2e-scenario.test.ts
 PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm --filter @agent-safety-gateway/api exec node --import tsx --test test/config-patent-e2e-scenario.test.ts
+PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm --filter @agent-safety-gateway/api exec node --import tsx --test test/patent-evidence-export.test.ts
 python3 -m json.tool docs/evidence/patent/fixtures/PAG-044-context-retention-scenarios.json >/tmp/pag044-context-retention-scenarios.json
 python3 -m json.tool docs/evidence/patent/fixtures/PAG-046-sql-end-to-end-patent-scenario.json >/tmp/pag046-sql-end-to-end-patent-scenario.json
 python3 -m json.tool docs/evidence/patent/fixtures/PAG-047-cicd-end-to-end-patent-scenario.json >/tmp/pag047-cicd-end-to-end-patent-scenario.json

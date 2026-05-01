@@ -19,6 +19,36 @@ The candidate inventive emphasis is the combination of:
 - Real-component adapter contracts that fail closed when safe dry-run, sandbox, approval, or audit integrations are absent.
 - Audit evidence that records whether an executor was invoked, not just what policy was recommended.
 
+## Patent State Machine Claim Mapping
+
+This section maps the two patent-oriented state machines implemented after the original gateway claim matrix. Element labels are engineering handles for counsel review, not legal claim numbering. Exportable bundles generated under `docs/evidence/patent-validation/<bundle-id>/` preserve the selected records referenced by these mappings.
+
+### Forbidden Side-Effect Obligation Proof State Machine
+
+| Element | Candidate technical chain | Implementation references | Validation and export evidence |
+| --- | --- | --- | --- |
+| FSE-1 | Model each prohibited executor side effect as a per-operation `ForbiddenEffectObligation` with effect type, resource scope, environment, severity, required evidence, and fail-closed action. | `packages/shared/src/forbidden-side-effect.ts`; `packages/shared/src/index.ts` | `services/api/test/evidence-plan-fixture-runner.test.ts`; `docs/evidence/patent/PAG-027-sql-readonly-side-effect.md`; `docs/evidence/patent/PAG-046-sql-end-to-end-patent.md`; exported `side-effect-evidence.json` |
+| FSE-2 | Compile SQL, CI/CD, and config actions into negative capability probes and side-effect probe plans before executor permission can be issued. | `services/api/src/sql-negative-capability-fixture-runner.ts`; `services/api/src/cicd-negative-capability-fixture-runner.ts`; `services/api/src/config-negative-capability-fixture-runner.ts`; `services/api/src/evidence-plan-fixture-runner.ts` | `docs/evidence/patent/PAG-027-*.md`; `services/api/test/sql-negative-capability-fixture-runner.test.ts`; `services/api/test/cicd-negative-capability-fixture-runner.test.ts`; `services/api/test/config-negative-capability-fixture-runner.test.ts` |
+| FSE-3 | Evaluate denied capability evidence and side-effect delta evidence into an `EvidenceCoverageMap` that explicitly marks covered, missing, stale, failed, or invalidated obligations. | `packages/shared/src/forbidden-side-effect.ts`; `services/api/src/executor-safety-evidence-repository.ts`; `services/api/src/executor-drift-invalidation-service.ts` | `services/api/test/executor-drift-invalidation-service.test.ts`; `docs/evidence/patent/PAG-047-cicd-end-to-end-patent.md`; `docs/evidence/patent/PAG-048-config-end-to-end-patent.md`; exported `side-effect-evidence.json` |
+| FSE-4 | Transition executor evidence into `ExecutorSafetyEvidenceState`; deny permit when required evidence is incomplete, expired, invalidated, or failed. | `packages/shared/src/forbidden-side-effect.ts`; `services/api/src/tool-execution-guard.ts`; `services/api/src/executor-safety-evidence-repository.ts` | `services/api/test/tool-execution-guard.test.ts`; `docs/evidence/patent/fixtures/PAG-046-sql-end-to-end-patent-scenario.json`; exported `denials.json` |
+| FSE-5 | Bind successful evidence to `PermitBinding` and require the broker to validate request hash, executor id, safety evidence version, coverage hash, and freshness before invocation. | `services/api/src/tool-execution-guard.ts`; `services/api/src/tool-executor-broker.ts`; `packages/shared/src/forbidden-side-effect.ts` | `services/api/test/tool-executor-broker.test.ts`; `docs/evidence/patent/PAG-046-sql-end-to-end-patent.md`; exported `permits.json` |
+| FSE-6 | Persist audit-visible side-effect obligations, coverage hash, state, permit outcome, denial evidence, and executor invocation status for review and export. | `services/api/src/audit-repository.ts`; `services/api/src/executor-safety-evidence-repository.ts`; `services/api/src/patent-evidence-export.ts`; `services/api/src/server.ts` | `services/api/test/audit-repository.test.ts`; `services/api/test/server.test.ts`; `services/api/test/patent-evidence-export.test.ts`; exported `audits.json`, `side-effect-evidence.json`, `permits.json`, `denials.json` |
+
+### Same-Reasoning Context Anchor Retention Proof State Machine
+
+| Element | Candidate technical chain | Implementation references | Validation and export evidence |
+| --- | --- | --- | --- |
+| CTR-1 | Represent required same-inference context as signed or hashed `ContextAnchor` records with source, authority, resource scope, freshness, trust tier, and retention requirements. | `packages/shared/src/context-retention.ts`; `services/api/src/context-adequacy-evidence-repository.ts` | `docs/evidence/patent/PAG-044-missing-user-instruction.md`; `docs/evidence/patent/fixtures/PAG-044-context-retention-scenarios.json`; exported `context-evidence.json` |
+| CTR-2 | Capture `PromptAssemblyManifest` for the same reasoning context, including prompt digest, context unit digests, order, token ranges, retrieval digests, memory snapshot, and system policy digest. | `packages/shared/src/context-retention.ts`; `services/api/src/agent-adapter.ts` | `services/api/test/agent-adapter.test.ts`; `docs/evidence/patent/PAG-046-sql-end-to-end-patent.md`; exported `context-evidence.json` |
+| CTR-3 | Compile tool-call-specific `RequiredContextObligation` records for SQL, CI/CD, and config operations before permit evaluation. | `packages/shared/src/context-retention.ts`; `services/api/src/sql-action-parser.ts`; `services/api/src/cicd-action-parser.ts`; `services/api/src/config-action-parser.ts`; `services/api/src/context-execution-decision-engine.ts` | `docs/evidence/patent/PAG-044-*.md`; `docs/evidence/patent/PAG-047-cicd-end-to-end-patent.md`; `docs/evidence/patent/PAG-048-config-end-to-end-patent.md`; exported `context-evidence.json` |
+| CTR-4 | Match obligations against retained prompt anchors and transition to `Sufficient`, `RegroundRequired`, `ReapprovalRequired`, `Stale`, `Conflicting`, `Contaminated`, or `Insufficient`. | `packages/shared/src/context-retention.ts`; `services/api/src/context-execution-decision-engine.ts`; `services/api/src/context-adequacy-evidence-repository.ts` | `services/api/test/context-execution-decision-engine.test.ts`; `services/api/test/context-adequacy-evidence-repository.test.ts`; `docs/evidence/patent/fixtures/PAG-044-context-retention-scenarios.json` |
+| CTR-5 | Stop high-risk execution before the forbidden side-effect permit chain when context evidence is missing, stale, conflicting, contaminated, or requires reapproval/regrounding. | `services/api/src/tool-execution-guard.ts`; `services/api/src/context-execution-decision-engine.ts` | `services/api/test/tool-execution-guard.test.ts`; `docs/evidence/patent/PAG-046-sql-end-to-end-patent.md`; `docs/evidence/patent/PAG-047-cicd-end-to-end-patent.md`; exported `audits.json`, `context-evidence.json` |
+| CTR-6 | Bind context adequacy hashes into permit decisions and preserve selected context evidence for external review without rerunning inference or executors. | `packages/shared/src/forbidden-side-effect.ts`; `services/api/src/tool-execution-guard.ts`; `services/api/src/patent-evidence-export.ts`; `services/api/src/server.ts` | `services/api/test/patent-evidence-export.test.ts`; `docs/evidence/patent-validation/README.md`; exported `manifest.json`, `context-evidence.json`, `permits.json` |
+
+### Exportable Evidence Package
+
+The `patent:evidence:export` command materializes selected local evidence into `docs/evidence/patent-validation/<bundle-id>/` for counsel review. The bundle manifest links both patent directions to concrete files: `audits.json`, `context-evidence.json`, `side-effect-evidence.json`, `permits.json`, and `denials.json`. The exporter implementation is `services/api/src/patent-evidence-export.ts`; smoke validation is `services/api/test/patent-evidence-export.test.ts`; usage is documented in `docs/evidence/patent-validation/README.md`.
+
 ## Candidate Independent Claim Elements
 
 | Element | Proposed technical element | Implementation references | Validation evidence |
@@ -93,12 +123,14 @@ The following items should be completed or clearly caveated before stronger fili
 7. Exercise durable approval integration with a real approval system, including held, approved, denied, expired, and audit replay states.
 8. Add tamper-resistance, artifact signing, or append-only audit storage if counsel wants claims around evidence immutability rather than evidence generation.
 
-## Documentation-Only Validation
+## PAG-049 Validation
 
-This document can be validated without starting API, Web, or browser services:
+The claim mapping and exporter can be validated without starting API, Web, or browser services:
 
 ```bash
-git diff --check -- docs/patent/claim-mapping.md
+PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm --filter @agent-safety-gateway/api typecheck
+PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm --filter @agent-safety-gateway/api exec node --import tsx --test test/patent-evidence-export.test.ts
+git diff --check -- docs/patent/claim-mapping.md docs/evidence/patent/README.md docs/evidence/patent-validation/README.md services/api/src/patent-evidence-export.ts services/api/test/patent-evidence-export.test.ts
 ```
 
-The PRD browser verification context is not required for this story because ASGP-020 changes only documentation and does not modify UI behavior or local service startup.
+The PRD browser verification context is not required for PAG-049 because the story adds a local evidence export path and claim mapping, not UI behavior or local service startup.

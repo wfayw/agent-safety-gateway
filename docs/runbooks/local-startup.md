@@ -101,6 +101,22 @@ grep -n 'pretool-hook.mjs' ~/.codex/hooks.json
 ASG_GATEWAY_URL=http://127.0.0.1:4310 node services/codex/src/install.mjs
 ```
 
+## 专利证据导出
+
+PAG-049 证据导出不需要启动 API、Web 或浏览器服务。默认将本地 store 中选定的 audit、context evidence、side-effect evidence、permits 和 denials 导出到 `docs/evidence/patent-validation/<bundle-id>/`：
+
+```bash
+PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm --filter @agent-safety-gateway/api patent:evidence:export -- \
+  --audit-id <audit-id> \
+  --bundle-id <bundle-id>
+```
+
+Smoke 验证命令：
+
+```bash
+PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm --filter @agent-safety-gateway/api exec node --import tsx --test test/patent-evidence-export.test.ts
+```
+
 ## 停止命令
 
 停止由 `scripts/local-start.sh` 托管的后台 API/Web：

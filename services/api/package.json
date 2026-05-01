@@ -20,7 +20,8 @@
     "catalog:ingest": "tsx src/catalog-ingest.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test test/*.test.ts"
+    "test": "node --import tsx --test test/*.test.ts",
+    "patent:evidence:export": "tsx src/patent-evidence-export.ts"
   },
   "dependencies": {
     "@agent-safety-gateway/shared": "workspace:*",
