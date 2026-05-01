@@ -9,6 +9,7 @@ import {
   RequiredContextConflictPolicy,
   RequiredContextMissingAnchorAction,
   RequiredContextTaintPolicy,
+  createContextAnchorCertifiedSummaryDerivationDigest,
   matchContextRetentionEvidence,
 } from "@agent-safety-gateway/shared/context-retention";
 
@@ -134,7 +135,9 @@ test("matches certified summaries with derivation digests", () => {
           endToken: 31,
         },
       ],
-      summaryDerivationDigests: [anchor.semanticClaimsDigest],
+      summaryDerivationDigests: [
+        createContextAnchorCertifiedSummaryDerivationDigest(anchor),
+      ],
     }),
   });
 
@@ -145,6 +148,100 @@ test("matches certified summaries with derivation digests", () => {
     ContextRetentionVerifierResult.Verified,
   );
   assert.equal(evidence.matchedDigest, anchor.semanticClaimsDigest);
+});
+
+test("rejects uncertified summaries for certified summary obligations", () => {
+  const anchor = createAnchor();
+  const evidence = matchSingleEvidence({
+    anchor,
+    obligation: createObligation([anchor.anchorId], {
+      minimumRetentionMode: ContextRetentionMode.CertifiedSummary,
+    }),
+    manifest: createManifest({
+      contextUnitDigests: [
+        {
+          contextUnitId: anchor.anchorId,
+          digest: anchor.semanticClaimsDigest,
+        },
+      ],
+      contextUnitOrder: [anchor.anchorId],
+      tokenPositionRanges: [
+        {
+          contextUnitId: anchor.anchorId,
+          startToken: 24,
+          endToken: 31,
+        },
+      ],
+      summaryDerivationDigests: [anchor.semanticClaimsDigest],
+    }),
+  });
+
+  assert.equal(evidence.retentionMode, ContextRetentionMode.Missing);
+  assert.equal(evidence.coverageScore, 0);
+  assert.equal(evidence.matchedDigest, null);
+
+  const verbatimEvidence = matchSingleEvidence({
+    anchor,
+    obligation: createObligation([anchor.anchorId], {
+      minimumRetentionMode: ContextRetentionMode.Verbatim,
+    }),
+    manifest: createManifest({
+      contextUnitDigests: [
+        {
+          contextUnitId: anchor.anchorId,
+          digest: anchor.semanticClaimsDigest,
+        },
+      ],
+      contextUnitOrder: [anchor.anchorId],
+      tokenPositionRanges: [
+        {
+          contextUnitId: anchor.anchorId,
+          startToken: 24,
+          endToken: 31,
+        },
+      ],
+      summaryDerivationDigests: [anchor.semanticClaimsDigest],
+    }),
+  });
+
+  assert.equal(verbatimEvidence.retentionMode, ContextRetentionMode.Missing);
+  assert.equal(verbatimEvidence.coverageScore, 0);
+});
+
+test("does not treat certified summaries as verbatim evidence", () => {
+  const anchor = createAnchor({ mustBeVerbatim: true });
+  const evidence = matchSingleEvidence({
+    anchor,
+    obligation: createObligation([anchor.anchorId], {
+      minimumRetentionMode: ContextRetentionMode.Verbatim,
+    }),
+    manifest: createManifest({
+      contextUnitDigests: [
+        {
+          contextUnitId: anchor.anchorId,
+          digest: anchor.semanticClaimsDigest,
+        },
+      ],
+      contextUnitOrder: [anchor.anchorId],
+      tokenPositionRanges: [
+        {
+          contextUnitId: anchor.anchorId,
+          startToken: 24,
+          endToken: 31,
+        },
+      ],
+      summaryDerivationDigests: [
+        createContextAnchorCertifiedSummaryDerivationDigest(anchor),
+      ],
+    }),
+  });
+
+  assert.equal(evidence.retentionMode, ContextRetentionMode.CertifiedSummary);
+  assert.equal(evidence.coverageScore, 0);
+  assert.equal(
+    evidence.summaryVerifierResult,
+    ContextRetentionVerifierResult.Verified,
+  );
 });
 
 test("matches retrievable references from retrieved document digests", () => {
@@ -166,6 +263,23 @@ test("matches retrievable references from retrieved document digests", () => {
     ContextRetentionVerifierResult.Verified,
   );
   assert.equal(evidence.matchedDigest, anchor.contentDigest);
+});
+
+test("rejects retrievable references with mismatched content digests", () => {
+  const anchor = createAnchor();
+  const evidence = matchSingleEvidence({
+    anchor,
+    manifest: createManifest({
+      retrievedDocumentDigests: [
+        `context-ref:${anchor.anchorId}#sha256:other-context`,
+        anchor.semanticClaimsDigest,
+      ],
+    }),
+  });
+
+  assert.equal(evidence.retentionMode, ContextRetentionMode.Missing);
+  assert.equal(evidence.coverageScore, 0);
+  assert.equal(evidence.matchedDigest, null);
 });
 
 test("emits missing evidence for absent required anchors", () => {
@@ -310,7 +424,9 @@ test("emits one deterministic evidence record for each required anchor", () => {
         endToken: 11,
       },
     ],
-    summaryDerivationDigests: [policyAnchor.semanticClaimsDigest],
+    summaryDerivationDigests: [
+      createContextAnchorCertifiedSummaryDerivationDigest(policyAnchor),
+    ],
   });
 
   const evidence = matchContextRetentionEvidence({

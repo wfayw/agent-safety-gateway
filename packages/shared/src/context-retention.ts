@@ -495,6 +495,144 @@ export type ContextRetentionEvidenceMatcherInput = {
   taintedAnchorIds?: readonly ContextAnchorId[];
 };
 
+export type CertifiedSummaryDerivationDigestInput = {
+  anchorId: ContextAnchorId;
+  sourceContentDigest: PatentProofHash;
+  sourceSemanticClaimsDigest: PatentProofHash;
+  summaryDigest: PatentProofHash;
+};
+
+export type CertifiedSummaryDerivationValidationInput = {
+  anchor: ContextAnchor;
+  summaryDigest: PatentProofHash;
+  summaryDerivationDigests: readonly PatentProofHash[];
+};
+
+export type ParsedRetrievableContextReference = {
+  rawReference: string;
+  anchorId: ContextAnchorId | null;
+  contentDigest: PatentProofHash;
+};
+
+export type RetrievableContextReferenceValidationInput = {
+  anchor: ContextAnchor;
+  references: readonly string[];
+};
+
+export const RetrievableContextReferencePrefix = "context-ref:";
+
+export const buildCertifiedSummaryDerivationDigestPayload = (
+  input: CertifiedSummaryDerivationDigestInput,
+): string =>
+  JSON.stringify({
+    schema:
+      "agent-safety-gateway.context-retention.CertifiedSummaryDerivation.v1",
+    anchorId: input.anchorId,
+    sourceContentDigest: input.sourceContentDigest,
+    sourceSemanticClaimsDigest: input.sourceSemanticClaimsDigest,
+    summaryDigest: input.summaryDigest,
+  });
+
+export const createCertifiedSummaryDerivationDigest = (
+  input: CertifiedSummaryDerivationDigestInput,
+): PatentProofHash =>
+  `${EvidenceHashAlgorithm.Sha256}:${createPurePromptManifestSha256DigestHex(
+    buildCertifiedSummaryDerivationDigestPayload(input),
+  )}`;
+
+export const createContextAnchorCertifiedSummaryDerivationDigest = (
+  anchor: ContextAnchor,
+  summaryDigest: PatentProofHash = anchor.semanticClaimsDigest,
+): PatentProofHash =>
+  createCertifiedSummaryDerivationDigest({
+    anchorId: anchor.anchorId,
+    sourceContentDigest: anchor.contentDigest,
+    sourceSemanticClaimsDigest: anchor.semanticClaimsDigest,
+    summaryDigest,
+  });
+
+export const validateCertifiedSummaryDerivation = (
+  input: CertifiedSummaryDerivationValidationInput,
+): ContextRetentionVerifierResult => {
+  if (input.summaryDigest !== input.anchor.semanticClaimsDigest) {
+    return ContextRetentionVerifierResult.NotVerified;
+  }
+
+  const expectedDerivationDigest =
+    createContextAnchorCertifiedSummaryDerivationDigest(
+      input.anchor,
+      input.summaryDigest,
+    );
+
+  return input.summaryDerivationDigests.includes(expectedDerivationDigest)
+    ? ContextRetentionVerifierResult.Verified
+    : ContextRetentionVerifierResult.NotVerified;
+};
+
+export const createRetrievableContextReference = (
+  anchor: ContextAnchor,
+): string =>
+  `${RetrievableContextReferencePrefix}${anchor.anchorId}#${anchor.contentDigest}`;
+
+export const parseRetrievableContextReference = (
+  reference: string,
+): ParsedRetrievableContextReference | null => {
+  if (reference.startsWith(`${EvidenceHashAlgorithm.Sha256}:`)) {
+    return {
+      rawReference: reference,
+      anchorId: null,
+      contentDigest: reference,
+    };
+  }
+
+  if (!reference.startsWith(RetrievableContextReferencePrefix)) {
+    return null;
+  }
+
+  const referenceBody = reference.slice(RetrievableContextReferencePrefix.length);
+  const digestSeparatorIndex = referenceBody.indexOf("#");
+
+  if (digestSeparatorIndex <= 0) {
+    return null;
+  }
+
+  const anchorId = referenceBody.slice(0, digestSeparatorIndex);
+  const contentDigest = referenceBody.slice(digestSeparatorIndex + 1);
+
+  if (
+    anchorId.length === 0 ||
+    !contentDigest.startsWith(`${EvidenceHashAlgorithm.Sha256}:`)
+  ) {
+    return null;
+  }
+
+  return {
+    rawReference: reference,
+    anchorId,
+    contentDigest,
+  };
+};
+
+export const findMatchingRetrievableContextReference = (
+  input: RetrievableContextReferenceValidationInput,
+): ParsedRetrievableContextReference | null =>
+  input.references
+    .map((reference) => parseRetrievableContextReference(reference))
+    .find(
+      (reference) =>
+        reference !== null &&
+        reference.contentDigest === input.anchor.contentDigest &&
+        (reference.anchorId === null ||
+          reference.anchorId === input.anchor.anchorId),
+    ) ?? null;
+
+export const validateRetrievableContextReference = (
+  input: RetrievableContextReferenceValidationInput,
+): ContextRetentionVerifierResult =>
+  findMatchingRetrievableContextReference(input) === null
+    ? ContextRetentionVerifierResult.NotVerified
+    : ContextRetentionVerifierResult.Verified;
+
 export type ContextAnchorValidationIssue = {
   path: string;
   code: string;
@@ -3766,33 +3904,48 @@ const findPositiveContextRetentionMatch = (
     anchor.anchorId,
     anchor.semanticClaimsDigest,
   );
+  const isSummaryUnitVisible = isContextRetentionUnitVisible(
+    manifest,
+    anchor.anchorId,
+  );
+  const summaryVerifierResult =
+    anchor.allowCertifiedSummary &&
+    summaryUnit !== undefined &&
+    isSummaryUnitVisible
+      ? validateCertifiedSummaryDerivation({
+          anchor,
+          summaryDigest: summaryUnit.digest,
+          summaryDerivationDigests: manifest.summaryDerivationDigests,
+        })
+      : ContextRetentionVerifierResult.NotApplicable;
   const hasCertifiedSummary =
     anchor.allowCertifiedSummary &&
     summaryUnit !== undefined &&
-    isContextRetentionUnitVisible(manifest, anchor.anchorId) &&
-    (manifest.summaryDerivationDigests.includes(anchor.semanticClaimsDigest) ||
-      manifest.summaryDerivationDigests.includes(anchor.contentDigest));
+    isSummaryUnitVisible &&
+    summaryVerifierResult === ContextRetentionVerifierResult.Verified;
 
   if (hasCertifiedSummary) {
     return {
       retentionMode: ContextRetentionMode.CertifiedSummary,
       matchedContextUnitId: summaryUnit.contextUnitId,
       matchedDigest: summaryUnit.digest,
-      summaryVerifierResult: ContextRetentionVerifierResult.Verified,
+      summaryVerifierResult,
       referenceVerifierResult: ContextRetentionVerifierResult.NotApplicable,
     };
   }
 
-  const hasRetrievableReference =
-    anchor.allowRetrievableReference &&
-    (manifest.retrievedDocumentDigests.includes(anchor.contentDigest) ||
-      manifest.retrievedDocumentDigests.includes(anchor.semanticClaimsDigest));
+  const retrievableReference = anchor.allowRetrievableReference
+    ? findMatchingRetrievableContextReference({
+        anchor,
+        references: manifest.retrievedDocumentDigests,
+      })
+    : null;
 
-  if (hasRetrievableReference) {
+  if (retrievableReference !== null) {
     return {
       retentionMode: ContextRetentionMode.RetrievableReference,
       matchedContextUnitId: anchor.anchorId,
-      matchedDigest: anchor.contentDigest,
+      matchedDigest: retrievableReference.contentDigest,
       summaryVerifierResult: ContextRetentionVerifierResult.NotApplicable,
       referenceVerifierResult: ContextRetentionVerifierResult.Verified,
     };
