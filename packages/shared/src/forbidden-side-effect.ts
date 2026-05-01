@@ -151,6 +151,22 @@ export const DeniedCapabilityProbeOutcomeValues = Object.values(
   DeniedCapabilityProbeOutcome,
 ) as DeniedCapabilityProbeOutcome[];
 
+export const SideEffectEvidenceType = {
+  Database: "database",
+  Webhook: "webhook",
+  Artifact: "artifact",
+  Trigger: "trigger",
+  AsyncJob: "async_job",
+  ConfigVersion: "config_version",
+} as const;
+
+export type SideEffectEvidenceType =
+  (typeof SideEffectEvidenceType)[keyof typeof SideEffectEvidenceType];
+
+export const SideEffectEvidenceTypeValues = Object.values(
+  SideEffectEvidenceType,
+) as SideEffectEvidenceType[];
+
 export type EvidencePlanTimeoutStrategy = {
   timeoutMs: number;
   onTimeout: EvidencePlanTimeoutAction;
@@ -208,6 +224,34 @@ export type DeniedCapabilityEvidence = {
   rejectionReason: string;
   executorFingerprint: ExecutorDriftFingerprintHash;
   completedAt: ForbiddenSideEffectTimestamp;
+};
+
+export type SideEffectObservedEvent = {
+  evidenceType: SideEffectEvidenceType;
+  target: string;
+  eventHash: PatentProofHash;
+  observedAt?: ForbiddenSideEffectTimestamp;
+};
+
+export type SideEffectDeltaChange = {
+  evidenceType: SideEffectEvidenceType;
+  target: string;
+  beforeHash: PatentProofHash;
+  afterHash: PatentProofHash;
+  changeType: string;
+};
+
+export type SideEffectDeltaEvidence = {
+  probeId: SideEffectProbePlanId;
+  obligationId: ForbiddenEffectObligationId;
+  executorId: string;
+  beforeSnapshotHash: PatentProofHash;
+  afterSnapshotHash: PatentProofHash;
+  observedEvents: readonly SideEffectObservedEvent[];
+  forbiddenEffectsObserved: readonly SideEffectObservedEvent[];
+  effectDelta: readonly SideEffectDeltaChange[];
+  completedAt: ForbiddenSideEffectTimestamp;
+  executorFingerprint?: ExecutorDriftFingerprintHash;
 };
 
 export type ForbiddenEffectObligation = {
@@ -286,6 +330,26 @@ export type DeniedCapabilityEvidenceValidationResult =
   | DeniedCapabilityEvidenceValidationSuccess
   | DeniedCapabilityEvidenceValidationFailure;
 
+export type SideEffectDeltaEvidenceValidationIssue = {
+  path: string;
+  code: string;
+  message: string;
+};
+
+export type SideEffectDeltaEvidenceValidationSuccess = {
+  success: true;
+  data: SideEffectDeltaEvidence;
+};
+
+export type SideEffectDeltaEvidenceValidationFailure = {
+  success: false;
+  issues: SideEffectDeltaEvidenceValidationIssue[];
+};
+
+export type SideEffectDeltaEvidenceValidationResult =
+  | SideEffectDeltaEvidenceValidationSuccess
+  | SideEffectDeltaEvidenceValidationFailure;
+
 export type NegativeProbePlanValidationSuccess = {
   success: true;
   data: NegativeProbePlan;
@@ -340,6 +404,10 @@ type DeniedCapabilityEvidenceIssueCollector = {
   issues: DeniedCapabilityEvidenceValidationIssue[];
 };
 
+type SideEffectDeltaEvidenceIssueCollector = {
+  issues: SideEffectDeltaEvidenceValidationIssue[];
+};
+
 type StringEnumValues<TValue extends string> = readonly TValue[];
 
 export class ForbiddenEffectObligationValidationError extends Error {
@@ -368,6 +436,16 @@ export class DeniedCapabilityEvidenceValidationError extends Error {
   constructor(issues: DeniedCapabilityEvidenceValidationIssue[]) {
     super("DeniedCapabilityEvidence validation failed");
     this.name = "DeniedCapabilityEvidenceValidationError";
+    this.issues = issues;
+  }
+}
+
+export class SideEffectDeltaEvidenceValidationError extends Error {
+  readonly issues: SideEffectDeltaEvidenceValidationIssue[];
+
+  constructor(issues: SideEffectDeltaEvidenceValidationIssue[]) {
+    super("SideEffectDeltaEvidence validation failed");
+    this.name = "SideEffectDeltaEvidenceValidationError";
     this.issues = issues;
   }
 }
@@ -866,6 +944,224 @@ const readDeniedCapabilityEvidenceEnum = <TValue extends string>(
   return value as TValue;
 };
 
+const addSideEffectDeltaEvidenceIssue = (
+  collector: SideEffectDeltaEvidenceIssueCollector,
+  path: string,
+  code: string,
+  message: string,
+) => {
+  collector.issues.push({ path, code, message });
+};
+
+const sideEffectDeltaEvidenceChildPath = (path: string, key: string) =>
+  `${path}.${key}`;
+
+const isSideEffectDeltaEvidenceRecord = (
+  input: unknown,
+): input is Record<string, unknown> =>
+  typeof input === "object" && input !== null && !Array.isArray(input);
+
+const readSideEffectDeltaEvidenceString = (
+  input: Record<string, unknown>,
+  key: string,
+  path: string,
+  collector: SideEffectDeltaEvidenceIssueCollector,
+): string => {
+  const value = input[key];
+
+  if (typeof value !== "string" || value.length === 0) {
+    addSideEffectDeltaEvidenceIssue(
+      collector,
+      sideEffectDeltaEvidenceChildPath(path, key),
+      "invalid_string",
+      "Expected a non-empty string.",
+    );
+    return "";
+  }
+
+  return value;
+};
+
+const readOptionalSideEffectDeltaEvidenceString = (
+  input: Record<string, unknown>,
+  key: string,
+  path: string,
+  collector: SideEffectDeltaEvidenceIssueCollector,
+): string | undefined => {
+  const value = input[key];
+
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== "string" || value.length === 0) {
+    addSideEffectDeltaEvidenceIssue(
+      collector,
+      sideEffectDeltaEvidenceChildPath(path, key),
+      "invalid_string",
+      "Expected a non-empty string when provided.",
+    );
+    return undefined;
+  }
+
+  return value;
+};
+
+const readSideEffectDeltaEvidenceEnum = <TValue extends string>(
+  input: Record<string, unknown>,
+  key: string,
+  values: StringEnumValues<TValue>,
+  path: string,
+  collector: SideEffectDeltaEvidenceIssueCollector,
+): TValue => {
+  const value = input[key];
+
+  if (typeof value !== "string" || !values.includes(value as TValue)) {
+    addSideEffectDeltaEvidenceIssue(
+      collector,
+      sideEffectDeltaEvidenceChildPath(path, key),
+      "invalid_enum",
+      `Expected one of: ${values.join(", ")}.`,
+    );
+    return values[0] ?? ("" as TValue);
+  }
+
+  return value as TValue;
+};
+
+const readSideEffectDeltaEvidenceObjectArray = <TValue>(
+  input: Record<string, unknown>,
+  key: string,
+  path: string,
+  collector: SideEffectDeltaEvidenceIssueCollector,
+  readItem: (
+    item: unknown,
+    itemPath: string,
+    itemCollector: SideEffectDeltaEvidenceIssueCollector,
+  ) => TValue,
+): TValue[] => {
+  const value = input[key];
+  const issuePath = sideEffectDeltaEvidenceChildPath(path, key);
+
+  if (!Array.isArray(value)) {
+    addSideEffectDeltaEvidenceIssue(
+      collector,
+      issuePath,
+      "invalid_array",
+      "Expected an array of objects.",
+    );
+    return [];
+  }
+
+  return value.map((item, index) =>
+    readItem(item, `${issuePath}[${index}]`, collector),
+  );
+};
+
+const validateSideEffectObservedEventShape = (
+  input: unknown,
+  path: string,
+  collector: SideEffectDeltaEvidenceIssueCollector,
+): SideEffectObservedEvent => {
+  if (!isSideEffectDeltaEvidenceRecord(input)) {
+    addSideEffectDeltaEvidenceIssue(
+      collector,
+      path,
+      "invalid_object",
+      "Expected an object.",
+    );
+    input = {};
+  }
+
+  const record = input as Record<string, unknown>;
+  const event: SideEffectObservedEvent = {
+    evidenceType: readSideEffectDeltaEvidenceEnum(
+      record,
+      "evidenceType",
+      SideEffectEvidenceTypeValues,
+      path,
+      collector,
+    ),
+    target: readSideEffectDeltaEvidenceString(
+      record,
+      "target",
+      path,
+      collector,
+    ),
+    eventHash: readSideEffectDeltaEvidenceString(
+      record,
+      "eventHash",
+      path,
+      collector,
+    ),
+  };
+
+  const observedAt = readOptionalSideEffectDeltaEvidenceString(
+    record,
+    "observedAt",
+    path,
+    collector,
+  );
+
+  if (observedAt !== undefined) {
+    event.observedAt = observedAt;
+  }
+
+  return event;
+};
+
+const validateSideEffectDeltaChangeShape = (
+  input: unknown,
+  path: string,
+  collector: SideEffectDeltaEvidenceIssueCollector,
+): SideEffectDeltaChange => {
+  if (!isSideEffectDeltaEvidenceRecord(input)) {
+    addSideEffectDeltaEvidenceIssue(
+      collector,
+      path,
+      "invalid_object",
+      "Expected an object.",
+    );
+    input = {};
+  }
+
+  const record = input as Record<string, unknown>;
+
+  return {
+    evidenceType: readSideEffectDeltaEvidenceEnum(
+      record,
+      "evidenceType",
+      SideEffectEvidenceTypeValues,
+      path,
+      collector,
+    ),
+    target: readSideEffectDeltaEvidenceString(
+      record,
+      "target",
+      path,
+      collector,
+    ),
+    beforeHash: readSideEffectDeltaEvidenceString(
+      record,
+      "beforeHash",
+      path,
+      collector,
+    ),
+    afterHash: readSideEffectDeltaEvidenceString(
+      record,
+      "afterHash",
+      path,
+      collector,
+    ),
+    changeType: readSideEffectDeltaEvidenceString(
+      record,
+      "changeType",
+      path,
+      collector,
+    ),
+  };
+};
+
 const validateEvidencePlanTimeoutStrategyShape = (
   input: unknown,
   path: string,
@@ -1333,6 +1629,96 @@ const validateDeniedCapabilityEvidenceShape = (
   };
 };
 
+const validateSideEffectDeltaEvidenceShape = (
+  input: unknown,
+  collector: SideEffectDeltaEvidenceIssueCollector,
+): SideEffectDeltaEvidence => {
+  if (!isSideEffectDeltaEvidenceRecord(input)) {
+    addSideEffectDeltaEvidenceIssue(
+      collector,
+      "$",
+      "invalid_object",
+      "Expected an object.",
+    );
+    input = {};
+  }
+
+  const record = input as Record<string, unknown>;
+  const path = "$";
+  const evidence: SideEffectDeltaEvidence = {
+    probeId: readSideEffectDeltaEvidenceString(
+      record,
+      "probeId",
+      path,
+      collector,
+    ),
+    obligationId: readSideEffectDeltaEvidenceString(
+      record,
+      "obligationId",
+      path,
+      collector,
+    ),
+    executorId: readSideEffectDeltaEvidenceString(
+      record,
+      "executorId",
+      path,
+      collector,
+    ),
+    beforeSnapshotHash: readSideEffectDeltaEvidenceString(
+      record,
+      "beforeSnapshotHash",
+      path,
+      collector,
+    ),
+    afterSnapshotHash: readSideEffectDeltaEvidenceString(
+      record,
+      "afterSnapshotHash",
+      path,
+      collector,
+    ),
+    observedEvents: readSideEffectDeltaEvidenceObjectArray(
+      record,
+      "observedEvents",
+      path,
+      collector,
+      validateSideEffectObservedEventShape,
+    ),
+    forbiddenEffectsObserved: readSideEffectDeltaEvidenceObjectArray(
+      record,
+      "forbiddenEffectsObserved",
+      path,
+      collector,
+      validateSideEffectObservedEventShape,
+    ),
+    effectDelta: readSideEffectDeltaEvidenceObjectArray(
+      record,
+      "effectDelta",
+      path,
+      collector,
+      validateSideEffectDeltaChangeShape,
+    ),
+    completedAt: readSideEffectDeltaEvidenceString(
+      record,
+      "completedAt",
+      path,
+      collector,
+    ),
+  };
+
+  const executorFingerprint = readOptionalSideEffectDeltaEvidenceString(
+    record,
+    "executorFingerprint",
+    path,
+    collector,
+  );
+
+  if (executorFingerprint !== undefined) {
+    evidence.executorFingerprint = executorFingerprint;
+  }
+
+  return evidence;
+};
+
 const validateForbiddenEffectObligationShape = (
   input: unknown,
   collector: ForbiddenEffectObligationIssueCollector,
@@ -1530,6 +1916,115 @@ export const isDeniedCapabilityEvidence = (
 ): input is DeniedCapabilityEvidence =>
   validateDeniedCapabilityEvidence(input).success;
 
+export const validateSideEffectDeltaEvidence = (
+  input: unknown,
+): SideEffectDeltaEvidenceValidationResult => {
+  const collector: SideEffectDeltaEvidenceIssueCollector = { issues: [] };
+  const data = validateSideEffectDeltaEvidenceShape(input, collector);
+
+  if (collector.issues.length > 0) {
+    return { success: false, issues: collector.issues };
+  }
+
+  return { success: true, data };
+};
+
+export const SideEffectDeltaEvidenceSchema = {
+  parse(input: unknown): SideEffectDeltaEvidence {
+    const result = validateSideEffectDeltaEvidence(input);
+
+    if (!result.success) {
+      throw new SideEffectDeltaEvidenceValidationError(result.issues);
+    }
+
+    return result.data;
+  },
+  safeParse(input: unknown): SideEffectDeltaEvidenceValidationResult {
+    return validateSideEffectDeltaEvidence(input);
+  },
+};
+
+export const isSideEffectDeltaEvidence = (
+  input: unknown,
+): input is SideEffectDeltaEvidence =>
+  validateSideEffectDeltaEvidence(input).success;
+
+type SideEffectObservedEventHashPayload = {
+  evidenceType: SideEffectEvidenceType;
+  target: string;
+  eventHash: PatentProofHash;
+  observedAt?: ForbiddenSideEffectTimestamp;
+};
+
+const buildSideEffectObservedEventHashPayload = (
+  event: SideEffectObservedEvent,
+): SideEffectObservedEventHashPayload => {
+  const payload: SideEffectObservedEventHashPayload = {
+    evidenceType: event.evidenceType,
+    target: event.target,
+    eventHash: event.eventHash,
+  };
+
+  if (event.observedAt !== undefined) {
+    payload.observedAt = event.observedAt;
+  }
+
+  return payload;
+};
+
+const buildSideEffectDeltaChangeHashPayload = (
+  change: SideEffectDeltaChange,
+): SideEffectDeltaChange => ({
+  evidenceType: change.evidenceType,
+  target: change.target,
+  beforeHash: change.beforeHash,
+  afterHash: change.afterHash,
+  changeType: change.changeType,
+});
+
+type SideEffectDeltaEvidenceHashPayload = {
+  schema: string;
+  probeId: SideEffectProbePlanId;
+  obligationId: ForbiddenEffectObligationId;
+  executorId: string;
+  beforeSnapshotHash: PatentProofHash;
+  afterSnapshotHash: PatentProofHash;
+  observedEvents: SideEffectObservedEventHashPayload[];
+  forbiddenEffectsObserved: SideEffectObservedEventHashPayload[];
+  effectDelta: SideEffectDeltaChange[];
+  completedAt: ForbiddenSideEffectTimestamp;
+  executorFingerprint?: ExecutorDriftFingerprintHash;
+};
+
+export const buildSideEffectDeltaEvidenceHashPayload = (
+  input: unknown,
+): string => {
+  const evidence = SideEffectDeltaEvidenceSchema.parse(input);
+  const payload: SideEffectDeltaEvidenceHashPayload = {
+    schema:
+      "agent-safety-gateway.forbidden-side-effect.SideEffectDeltaEvidence.v1",
+    probeId: evidence.probeId,
+    obligationId: evidence.obligationId,
+    executorId: evidence.executorId,
+    beforeSnapshotHash: evidence.beforeSnapshotHash,
+    afterSnapshotHash: evidence.afterSnapshotHash,
+    observedEvents: evidence.observedEvents.map(
+      buildSideEffectObservedEventHashPayload,
+    ),
+    forbiddenEffectsObserved: evidence.forbiddenEffectsObserved.map(
+      buildSideEffectObservedEventHashPayload,
+    ),
+    effectDelta: evidence.effectDelta.map(buildSideEffectDeltaChangeHashPayload),
+    completedAt: evidence.completedAt,
+  };
+
+  if (evidence.executorFingerprint !== undefined) {
+    payload.executorFingerprint = evidence.executorFingerprint;
+  }
+
+  return JSON.stringify(payload);
+};
+
 export const buildDeniedCapabilityEvidenceHashPayload = (
   input: unknown,
 ): string => {
@@ -1673,6 +2168,16 @@ export const createDeniedCapabilityEvidenceHash = async (
   input: unknown,
 ): Promise<PatentProofHash> => {
   const hashPayload = buildDeniedCapabilityEvidenceHashPayload(input);
+
+  return `${EvidenceHashAlgorithm.Sha256}:${await createSha256DigestHex(
+    hashPayload,
+  )}`;
+};
+
+export const createSideEffectDeltaEvidenceHash = async (
+  input: unknown,
+): Promise<PatentProofHash> => {
+  const hashPayload = buildSideEffectDeltaEvidenceHashPayload(input);
 
   return `${EvidenceHashAlgorithm.Sha256}:${await createSha256DigestHex(
     hashPayload,
