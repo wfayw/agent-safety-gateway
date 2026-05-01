@@ -9,6 +9,18 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./forbidden-side-effect": {
+      "types": "./dist/forbidden-side-effect.d.ts",
+      "default": "./dist/forbidden-side-effect.js"
+    },
+    "./context-retention": {
+      "types": "./dist/context-retention.d.ts",
+      "default": "./dist/context-retention.js"
+    },
+    "./patent-state-machine": {
+      "types": "./dist/patent-state-machine.d.ts",
+      "default": "./dist/patent-state-machine.js"
     }
   },
   "files": [
