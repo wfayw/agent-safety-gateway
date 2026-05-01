@@ -1,3 +1,17 @@
+import type { PatentProofHash } from "./patent-state-machine.js";
+import {
+  EvidenceCoverageStatusValues,
+  ExecutorSafetyEvidenceStateName,
+  isForbiddenEffectObligation,
+  isPermitBinding,
+  isPermitDeniedEvidence,
+  type EvidenceCoverageStatus,
+  type ExecutorSafetyEvidenceState,
+  type ForbiddenEffectObligation,
+  type PermitBinding,
+  type PermitDeniedEvidence,
+} from "./forbidden-side-effect.js";
+
 export * from "./patent-state-machine.js";
 export * from "./forbidden-side-effect.js";
 export * from "./context-retention.js";
@@ -320,6 +334,16 @@ export type ExecutionDecision = {
   rewrittenRequest: ToolCallRequest | null;
 };
 
+export type AuditExecutorSafetyEvidence = {
+  forbiddenEffectObligations: ForbiddenEffectObligation[];
+  coverageMapHash: PatentProofHash | null;
+  safetyEvidenceState: ExecutorSafetyEvidenceState | null;
+  permitIssued: boolean;
+  executorInvoked: boolean;
+  permitBinding: PermitBinding | null;
+  permitDeniedEvidence: PermitDeniedEvidence | null;
+};
+
 export type AuditRecord = {
   id: string;
   request: ToolCallRequest;
@@ -333,7 +357,7 @@ export type AuditRecord = {
   policyTrace: PolicyTrace;
   decision: ExecutionDecision;
   createdAt: IsoTimestamp;
-};
+} & Partial<AuditExecutorSafetyEvidence>;
 
 export type Scenario = {
   id: string;
@@ -865,6 +889,27 @@ const readNumber = (
   return value;
 };
 
+const readBoolean = (
+  input: Record<string, unknown>,
+  key: string,
+  path: string,
+  collector: IssueCollector,
+): boolean => {
+  const value = input[key];
+
+  if (typeof value !== "boolean") {
+    addIssue(
+      collector,
+      childPath(path, key),
+      "invalid_boolean",
+      "Expected a boolean.",
+    );
+    return false;
+  }
+
+  return value;
+};
+
 const readStringArray = (
   input: Record<string, unknown>,
   key: string,
@@ -908,6 +953,32 @@ const readEnum = <TEnum extends EnumLike>(
   }
 
   return value as TEnum[keyof TEnum];
+};
+
+const readStringEnumArray = <TValue extends string>(
+  input: Record<string, unknown>,
+  key: string,
+  allowedValues: readonly TValue[],
+  path: string,
+  collector: IssueCollector,
+): TValue[] => {
+  const values = readStringArray(input, key, path, collector);
+  const invalidValues = values.filter(
+    (value): value is string => !allowedValues.includes(value as TValue),
+  );
+
+  if (invalidValues.length > 0) {
+    addIssue(
+      collector,
+      childPath(path, key),
+      "invalid_enum_array",
+      `Expected array values from: ${allowedValues.join(", ")}.`,
+    );
+  }
+
+  return values.filter((value): value is TValue =>
+    allowedValues.includes(value as TValue),
+  );
 };
 
 const readJsonObject = (
@@ -962,6 +1033,99 @@ const readArray = <T>(
   return value.map((item, index) =>
     validateItem(item, `${issuePath}[${index}]`, collector),
   );
+};
+
+const readOptionalArray = <T>(
+  input: Record<string, unknown>,
+  key: string,
+  path: string,
+  collector: IssueCollector,
+  validateItem: (item: unknown, itemPath: string, collector: IssueCollector) => T,
+): T[] | undefined => {
+  if (input[key] === undefined) {
+    return undefined;
+  }
+
+  return readArray(input, key, path, collector, validateItem);
+};
+
+const readOptionalNullableString = (
+  input: Record<string, unknown>,
+  key: string,
+  path: string,
+  collector: IssueCollector,
+): string | null | undefined => {
+  const value = input[key];
+
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null) {
+    return null;
+  }
+
+  if (typeof value !== "string" || value.length === 0) {
+    addIssue(
+      collector,
+      childPath(path, key),
+      "invalid_nullable_string",
+      "Expected a non-empty string or null.",
+    );
+    return null;
+  }
+
+  return value;
+};
+
+const readOptionalBoolean = (
+  input: Record<string, unknown>,
+  key: string,
+  path: string,
+  collector: IssueCollector,
+): boolean | undefined => {
+  const value = input[key];
+
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== "boolean") {
+    addIssue(
+      collector,
+      childPath(path, key),
+      "invalid_boolean",
+      "Expected a boolean.",
+    );
+    return false;
+  }
+
+  return value;
+};
+
+const readOptionalStringProperty = (
+  input: Record<string, unknown>,
+  key: string,
+  path: string,
+  collector: IssueCollector,
+): string | undefined => {
+  const value = input[key];
+
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== "string" || value.length === 0) {
+    addIssue(
+      collector,
+      childPath(path, key),
+      "invalid_string",
+      "Expected a non-empty string.",
+    );
+    return undefined;
+  }
+
+  return value;
 };
 
 const validateToolCallRequest = (
@@ -1243,14 +1407,173 @@ const validateExecutionDecision = (
   };
 };
 
+const validateForbiddenEffectObligationForAudit = (
+  input: unknown,
+  path: string,
+  collector: IssueCollector,
+): ForbiddenEffectObligation => {
+  if (!isForbiddenEffectObligation(input)) {
+    addIssue(
+      collector,
+      path,
+      "invalid_forbidden_effect_obligation",
+      "Expected a forbidden side-effect obligation.",
+    );
+  }
+
+  return input as ForbiddenEffectObligation;
+};
+
+const validateAuditExecutorSafetyState = (
+  input: unknown,
+  path: string,
+  collector: IssueCollector,
+): ExecutorSafetyEvidenceState => {
+  const record = readObject(input, path, collector);
+  const safetyState: ExecutorSafetyEvidenceState = {
+    stateId: readString(record, "stateId", path, collector),
+    executorId: readString(record, "executorId", path, collector),
+    coverageMapId: readString(record, "coverageMapId", path, collector),
+    state: readEnum(
+      record,
+      "state",
+      ExecutorSafetyEvidenceStateName,
+      path,
+      collector,
+    ),
+    allObligationsCovered: readBoolean(
+      record,
+      "allObligationsCovered",
+      path,
+      collector,
+    ),
+    evaluatedAt: readString(record, "evaluatedAt", path, collector),
+    coveredObligationIds: readStringArray(
+      record,
+      "coveredObligationIds",
+      path,
+      collector,
+    ),
+    blockedObligationIds: readStringArray(
+      record,
+      "blockedObligationIds",
+      path,
+      collector,
+    ),
+    blockingStatuses: readStringEnumArray<EvidenceCoverageStatus>(
+      record,
+      "blockingStatuses",
+      EvidenceCoverageStatusValues,
+      path,
+      collector,
+    ),
+    transitionReason: readString(record, "transitionReason", path, collector),
+  };
+  const validUntil = readOptionalStringProperty(
+    record,
+    "validUntil",
+    path,
+    collector,
+  );
+  const invalidatedBy = readOptionalStringProperty(
+    record,
+    "invalidatedBy",
+    path,
+    collector,
+  );
+  const coverageMapHash = readOptionalStringProperty(
+    record,
+    "coverageMapHash",
+    path,
+    collector,
+  );
+  const safetyEvidenceVersion = readOptionalStringProperty(
+    record,
+    "safetyEvidenceVersion",
+    path,
+    collector,
+  );
+
+  if (validUntil !== undefined) {
+    safetyState.validUntil = validUntil;
+  }
+
+  if (invalidatedBy !== undefined) {
+    safetyState.invalidatedBy = invalidatedBy;
+  }
+
+  if (coverageMapHash !== undefined) {
+    safetyState.coverageMapHash = coverageMapHash;
+  }
+
+  if (safetyEvidenceVersion !== undefined) {
+    safetyState.safetyEvidenceVersion = safetyEvidenceVersion;
+  }
+
+  return safetyState;
+};
+
+const validateOptionalNullableAuditObject = <T>(
+  input: Record<string, unknown>,
+  key: string,
+  path: string,
+  collector: IssueCollector,
+  validate: (value: unknown, valuePath: string, collector: IssueCollector) => T,
+): T | null | undefined => {
+  const value = input[key];
+
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null) {
+    return null;
+  }
+
+  return validate(value, childPath(path, key), collector);
+};
+
+const validateAuditPermitBinding = (
+  input: unknown,
+  path: string,
+  collector: IssueCollector,
+): PermitBinding => {
+  if (!isPermitBinding(input)) {
+    addIssue(
+      collector,
+      path,
+      "invalid_permit_binding",
+      "Expected a permit binding.",
+    );
+  }
+
+  return input as PermitBinding;
+};
+
+const validateAuditPermitDeniedEvidence = (
+  input: unknown,
+  path: string,
+  collector: IssueCollector,
+): PermitDeniedEvidence => {
+  if (!isPermitDeniedEvidence(input)) {
+    addIssue(
+      collector,
+      path,
+      "invalid_permit_denied_evidence",
+      "Expected permit denied evidence.",
+    );
+  }
+
+  return input as PermitDeniedEvidence;
+};
+
 const validateAuditRecord = (
   input: unknown,
   path: string,
   collector: IssueCollector,
 ): AuditRecord => {
   const record = readObject(input, path, collector);
-
-  return {
+  const auditRecord: AuditRecord = {
     id: readString(record, "id", path, collector),
     request: validateToolCallRequest(
       record.request,
@@ -1304,6 +1627,82 @@ const validateAuditRecord = (
     ),
     createdAt: readString(record, "createdAt", path, collector),
   };
+  const forbiddenEffectObligations = readOptionalArray(
+    record,
+    "forbiddenEffectObligations",
+    path,
+    collector,
+    validateForbiddenEffectObligationForAudit,
+  );
+  const coverageMapHash = readOptionalNullableString(
+    record,
+    "coverageMapHash",
+    path,
+    collector,
+  );
+  const safetyEvidenceState = validateOptionalNullableAuditObject(
+    record,
+    "safetyEvidenceState",
+    path,
+    collector,
+    validateAuditExecutorSafetyState,
+  );
+  const permitIssued = readOptionalBoolean(
+    record,
+    "permitIssued",
+    path,
+    collector,
+  );
+  const executorInvoked = readOptionalBoolean(
+    record,
+    "executorInvoked",
+    path,
+    collector,
+  );
+  const permitBinding = validateOptionalNullableAuditObject(
+    record,
+    "permitBinding",
+    path,
+    collector,
+    validateAuditPermitBinding,
+  );
+  const permitDeniedEvidence = validateOptionalNullableAuditObject(
+    record,
+    "permitDeniedEvidence",
+    path,
+    collector,
+    validateAuditPermitDeniedEvidence,
+  );
+
+  if (forbiddenEffectObligations !== undefined) {
+    auditRecord.forbiddenEffectObligations = forbiddenEffectObligations;
+  }
+
+  if (coverageMapHash !== undefined) {
+    auditRecord.coverageMapHash = coverageMapHash;
+  }
+
+  if (safetyEvidenceState !== undefined) {
+    auditRecord.safetyEvidenceState = safetyEvidenceState;
+  }
+
+  if (permitIssued !== undefined) {
+    auditRecord.permitIssued = permitIssued;
+  }
+
+  if (executorInvoked !== undefined) {
+    auditRecord.executorInvoked = executorInvoked;
+  }
+
+  if (permitBinding !== undefined) {
+    auditRecord.permitBinding = permitBinding;
+  }
+
+  if (permitDeniedEvidence !== undefined) {
+    auditRecord.permitDeniedEvidence = permitDeniedEvidence;
+  }
+
+  return auditRecord;
 };
 
 export const ToolCallRequestSchema = createSchema<ToolCallRequest>(

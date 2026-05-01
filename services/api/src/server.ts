@@ -675,6 +675,7 @@ export const buildServer = (options: ApiServerOptions = {}) => {
         ...(options.auditSinkAdapter
           ? { auditSinkAdapter: options.auditSinkAdapter }
           : {}),
+        auditRepository,
         ...(options.permitEvidenceProvider
           ? { permitEvidenceProvider: options.permitEvidenceProvider }
           : {}),

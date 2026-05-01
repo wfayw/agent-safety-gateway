@@ -4,7 +4,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 
-import type { AuditRecord } from "@agent-safety-gateway/shared";
+import type {
+  AuditExecutorSafetyEvidence,
+  AuditRecord,
+} from "@agent-safety-gateway/shared";
+import {
+  EvidenceCoverageStatus,
+  ExecutorSafetyEvidenceStateName,
+  ForbiddenEffectEnvironment,
+  ForbiddenEffectEvidenceType,
+  ForbiddenEffectFailClosedAction,
+  ForbiddenEffectSeverity,
+  ForbiddenEffectType,
+} from "@agent-safety-gateway/shared/forbidden-side-effect";
 
 import { createAuditRepository } from "../src/audit-repository.js";
 import { initializeLocalStorage } from "../src/storage.js";
@@ -170,6 +182,82 @@ const createAuditRecordFixture = (id: string): AuditRecord => ({
   createdAt: "2026-04-28T06:00:02.000Z",
 });
 
+const createExecutorSafetyEvidenceFixture = (): AuditExecutorSafetyEvidence => ({
+  forbiddenEffectObligations: [
+    {
+      obligationId: "feo-audit-sql-readonly-write-denial",
+      effectType: ForbiddenEffectType.Sql,
+      resourceScope: ["orders"],
+      environment: ForbiddenEffectEnvironment.Production,
+      severity: ForbiddenEffectSeverity.Critical,
+      requiredEvidenceTypes: [
+        ForbiddenEffectEvidenceType.WriteDenial,
+        ForbiddenEffectEvidenceType.NoRowMutation,
+      ],
+      failClosedAction: ForbiddenEffectFailClosedAction.DenyPermit,
+    },
+  ],
+  coverageMapHash: "sha256:audit-coverage-map",
+  safetyEvidenceState: {
+    stateId: "safety-state-audit-sql-readonly",
+    executorId: "executor-audit-sql-readonly",
+    coverageMapId: "coverage-map-audit-sql-readonly",
+    state: ExecutorSafetyEvidenceStateName.EvidenceComplete,
+    allObligationsCovered: true,
+    evaluatedAt: "2026-04-28T06:02:00.000Z",
+    coveredObligationIds: ["feo-audit-sql-readonly-write-denial"],
+    blockedObligationIds: [],
+    blockingStatuses: [],
+    transitionReason: "all required obligations are covered by valid evidence",
+    validUntil: "2026-04-28T06:07:00.000Z",
+    coverageMapHash: "sha256:audit-coverage-map",
+    safetyEvidenceVersion: "sev-audit-sql-readonly-001",
+  },
+  permitIssued: true,
+  executorInvoked: true,
+  permitBinding: {
+    requestHash: "sha256:audit-request-hash",
+    executorId: "executor-audit-sql-readonly",
+    safetyEvidenceVersion: "sev-audit-sql-readonly-001",
+    coverageMapHash: "sha256:audit-coverage-map",
+    deniedEvidenceHash: "sha256:audit-denied-evidence",
+    sideEffectEvidenceHash: "sha256:audit-side-effect-evidence",
+    ttl: 300000,
+    nonce: "nonce-audit-permit",
+  },
+  permitDeniedEvidence: null,
+});
+
+const createPermitDeniedSafetyEvidenceFixture = (): AuditExecutorSafetyEvidence => ({
+  ...createExecutorSafetyEvidenceFixture(),
+  safetyEvidenceState: {
+    stateId: "safety-state-audit-sql-denied",
+    executorId: "executor-audit-sql-readonly",
+    coverageMapId: "coverage-map-audit-sql-readonly",
+    state: ExecutorSafetyEvidenceStateName.EvidencePartial,
+    allObligationsCovered: false,
+    evaluatedAt: "2026-04-28T06:02:00.000Z",
+    coveredObligationIds: [],
+    blockedObligationIds: ["feo-audit-sql-readonly-write-denial"],
+    blockingStatuses: [EvidenceCoverageStatus.Missing],
+    transitionReason: "required write denial evidence is missing",
+    coverageMapHash: "sha256:audit-coverage-map",
+    safetyEvidenceVersion: "sev-audit-sql-readonly-001",
+  },
+  permitIssued: false,
+  executorInvoked: false,
+  permitBinding: null,
+  permitDeniedEvidence: {
+    requestHash: "sha256:audit-request-hash",
+    executorId: "executor-audit-sql-readonly",
+    permitIssued: false,
+    executorInvoked: false,
+    missingEvidence: [ForbiddenEffectEvidenceType.WriteDenial],
+    invalidatedEvidence: [],
+    reason: "required write denial evidence is missing",
+  },
+});
+
 describe("audit repository", () => {
   it("creates and lists audit records from the JSONL store", async () => {
     const layout = await initializeLocalStorage(await createTempDataDir());
@@ -246,5 +334,71 @@ describe("audit repository", () => {
 
     assert.deepEqual(await repository.getAuditRecordById("audit-002"), secondRecord);
     assert.equal(await repository.getAuditRecordById("audit-missing"), null);
+  });
+
+  it("updates audit records with executor safety evidence and permit state", async () => {
+    const layout = await initializeLocalStorage(await createTempDataDir());
+    const repository = createAuditRepository(layout);
+    const auditRecord = createAuditRecordFixture("audit-safety-evidence");
+    const safetyEvidence = createExecutorSafetyEvidenceFixture();
+
+    await repository.createAuditRecord(auditRecord);
+
+    const updatedRecord = await repository.updateAuditExecutorSafetyEvidence(
+      "audit-safety-evidence",
+      safetyEvidence,
+    );
+    const records = await repository.listAuditRecords();
+
+    assert.deepEqual(updatedRecord?.forbiddenEffectObligations, safetyEvidence.forbiddenEffectObligations);
+    assert.equal(updatedRecord?.coverageMapHash, "sha256:audit-coverage-map");
+    assert.deepEqual(updatedRecord?.safetyEvidenceState, safetyEvidence.safetyEvidenceState);
+    assert.equal(updatedRecord?.permitIssued, true);
+    assert.equal(updatedRecord?.executorInvoked, true);
+    assert.deepEqual(updatedRecord?.permitBinding, safetyEvidence.permitBinding);
+    assert.equal(updatedRecord?.permitDeniedEvidence, null);
+    assert.deepEqual(records, [updatedRecord]);
+    assert.equal(records[0]?.decision.type, auditRecord.decision.type);
+  });
+
+  it("persists PermitDeniedEvidence without breaking existing audit reads", async () => {
+    const layout = await initializeLocalStorage(await createTempDataDir());
+    const repository = createAuditRepository(layout);
+    const legacyRecord = createAuditRecordFixture("audit-legacy");
+    const deniedRecord = createAuditRecordFixture("audit-denied");
+    const deniedSafetyEvidence = createPermitDeniedSafetyEvidenceFixture();
+
+    await repository.createAuditRecord(legacyRecord);
+    await repository.createAuditRecord(deniedRecord);
+    await repository.updateAuditExecutorSafetyEvidence(
+      "audit-denied",
+      deniedSafetyEvidence,
+    );
+
+    const records = await repository.listAuditRecords();
+    const persistedDeniedRecord = await repository.getAuditRecordById("audit-denied");
+
+    assert.deepEqual(records[0], legacyRecord);
+    assert.equal(records[0]?.forbiddenEffectObligations, undefined);
+    assert.equal(persistedDeniedRecord?.permitIssued, false);
+    assert.equal(persistedDeniedRecord?.executorInvoked, false);
+    assert.equal(persistedDeniedRecord?.permitBinding, null);
+    assert.deepEqual(
+      persistedDeniedRecord?.permitDeniedEvidence,
+      deniedSafetyEvidence.permitDeniedEvidence,
+    );
+  });
+
+  it("returns null when updating safety evidence for a missing audit record", async () => {
+    const layout = await initializeLocalStorage(await createTempDataDir());
+    const repository = createAuditRepository(layout);
+
+    assert.equal(
+      await repository.updateAuditExecutorSafetyEvidence(
+        "audit-missing",
+        createExecutorSafetyEvidenceFixture(),
+      ),
+      null,
+    );
   });
 });

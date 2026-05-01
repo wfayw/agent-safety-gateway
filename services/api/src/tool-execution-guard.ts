@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import {
+  type AuditExecutorSafetyEvidence,
   DecisionType,
   type JsonValue,
   RiskLevel,
@@ -13,6 +14,7 @@ import {
   type EvidenceCoverageEntry,
   type EvidenceCoverageMap,
   type ExecutorSafetyEvidenceState,
+  type ForbiddenEffectObligation,
   type ForbiddenEffectEvidenceType as ForbiddenEffectEvidenceTypeValue,
   type PermitBinding,
   type PermitDeniedEvidence,
@@ -42,6 +44,7 @@ import type {
   ToolCallAnalysisResult,
   ToolCallAnalysisService,
 } from "./tool-call-analysis-service.js";
+import type { AuditRepository } from "./audit-repository.js";
 
 export type ToolExecutor<ExecutorResult> = (
   request: ToolCallRequest,
@@ -83,6 +86,7 @@ export type ToolExecutionPermitEvidenceInput = {
 export type ToolExecutionPermitEvidenceSnapshot = {
   safetyState: ExecutorSafetyEvidenceState | null;
   coverageMap?: EvidenceCoverageMap;
+  forbiddenEffectObligations?: readonly ForbiddenEffectObligation[];
   deniedEvidenceHash?: PatentProofHash;
   sideEffectEvidenceHash?: PatentProofHash;
 };
@@ -124,6 +128,7 @@ export type ToolExecutionGuardDependencies<ExecutorResult> = {
   >;
   auditSinkStrict?: boolean;
   auditRedaction?: AuditRedactionOptions;
+  auditRepository?: Pick<AuditRepository, "updateAuditExecutorSafetyEvidence">;
   permitEvidenceProvider?: ToolExecutionPermitEvidenceProvider;
   permitNonceFactory?: () => string;
   permitTtlMs?: number;
@@ -190,6 +195,19 @@ const createCoverageMapHash = ({
     coverageMapId: safetyState.coverageMapId,
     coverageMap: coverageMap ?? null,
   });
+
+const getSnapshotCoverageMapHash = (
+  snapshot: ToolExecutionPermitEvidenceSnapshot | null,
+) => {
+  if (!snapshot?.safetyState) {
+    return null;
+  }
+
+  return createCoverageMapHash({
+    safetyState: snapshot.safetyState,
+    coverageMap: snapshot.coverageMap,
+  });
+};
 
 const getCoverageEntries = (
   coverageMap: EvidenceCoverageMap | undefined,
@@ -464,6 +482,27 @@ const createAuditSinkInput = <ExecutorResult>({
     redaction,
   );
 
+const createAuditExecutorSafetyEvidence = ({
+  snapshot,
+  permitBinding,
+  permitDeniedEvidence,
+  executorInvoked,
+}: {
+  snapshot: ToolExecutionPermitEvidenceSnapshot | null;
+  permitBinding: PermitBinding | null;
+  permitDeniedEvidence: PermitDeniedEvidence | null;
+  executorInvoked: boolean;
+}): AuditExecutorSafetyEvidence => ({
+  forbiddenEffectObligations: [...(snapshot?.forbiddenEffectObligations ?? [])],
+  coverageMapHash:
+    permitBinding?.coverageMapHash ?? getSnapshotCoverageMapHash(snapshot),
+  safetyEvidenceState: snapshot?.safetyState ?? null,
+  permitIssued: permitBinding !== null,
+  executorInvoked,
+  permitBinding,
+  permitDeniedEvidence,
+});
+
 const createResult = <ExecutorResult>({
   status,
   request,
@@ -507,6 +546,7 @@ export const createToolExecutionGuard = <ExecutorResult>({
   auditSinkAdapter,
   auditSinkStrict = false,
   auditRedaction,
+  auditRepository,
   permitEvidenceProvider,
   permitNonceFactory = randomUUID,
   permitTtlMs = DEFAULT_PERMIT_TTL_MS,
@@ -546,6 +586,34 @@ export const createToolExecutionGuard = <ExecutorResult>({
         error instanceof Error ? error.message : "External audit sink write failed.",
       );
     }
+  };
+
+  const updateAuditExecutorSafetyEvidence = async ({
+    analysisResult,
+    snapshot,
+    permitBinding,
+    permitDeniedEvidence,
+    executorInvoked,
+  }: {
+    analysisResult: ToolCallAnalysisResult;
+    snapshot: ToolExecutionPermitEvidenceSnapshot | null;
+    permitBinding: PermitBinding | null;
+    permitDeniedEvidence: PermitDeniedEvidence | null;
+    executorInvoked: boolean;
+  }) => {
+    const executorSafetyEvidence = createAuditExecutorSafetyEvidence({
+      snapshot,
+      permitBinding,
+      permitDeniedEvidence,
+      executorInvoked,
+    });
+
+    Object.assign(analysisResult.auditRecord, executorSafetyEvidence);
+
+    await auditRepository?.updateAuditExecutorSafetyEvidence(
+      analysisResult.auditRecordId,
+      executorSafetyEvidence,
+    );
   };
 
   const createFinalResult = async ({
@@ -651,6 +719,7 @@ export const createToolExecutionGuard = <ExecutorResult>({
       return {
         permitBinding: null,
         permitIssuedAt: null,
+        snapshot: null,
         permitDeniedEvidence: await denyPermit({
           request,
           analysisResult,
@@ -672,6 +741,7 @@ export const createToolExecutionGuard = <ExecutorResult>({
       return {
         permitBinding: null,
         permitIssuedAt: null,
+        snapshot: normalizedSnapshot,
         permitDeniedEvidence: await denyPermit({
           request,
           analysisResult,
@@ -699,6 +769,7 @@ export const createToolExecutionGuard = <ExecutorResult>({
     return {
       permitBinding,
       permitIssuedAt: evaluatedAt,
+      snapshot: normalizedSnapshot,
       permitDeniedEvidence: null,
     };
   };
@@ -742,6 +813,14 @@ export const createToolExecutionGuard = <ExecutorResult>({
     const permitDecision = await checkPermitGate({ request, analysisResult });
 
     if (permitDecision.permitDeniedEvidence) {
+      await updateAuditExecutorSafetyEvidence({
+        analysisResult,
+        snapshot: permitDecision.snapshot,
+        permitBinding: null,
+        permitDeniedEvidence: permitDecision.permitDeniedEvidence,
+        executorInvoked: false,
+      });
+
       return createFinalResult({
         status: "blocked",
         request,
@@ -771,6 +850,13 @@ export const createToolExecutionGuard = <ExecutorResult>({
         analysisResult,
         permitDeniedEvidence: brokerResult.permitDeniedEvidence,
       });
+      await updateAuditExecutorSafetyEvidence({
+        analysisResult,
+        snapshot: permitDecision.snapshot,
+        permitBinding: null,
+        permitDeniedEvidence: brokerResult.permitDeniedEvidence,
+        executorInvoked: false,
+      });
 
       return createFinalResult({
         status: "blocked",
@@ -783,6 +869,14 @@ export const createToolExecutionGuard = <ExecutorResult>({
         permitDeniedEvidence: brokerResult.permitDeniedEvidence,
       });
     }
+
+    await updateAuditExecutorSafetyEvidence({
+      analysisResult,
+      snapshot: permitDecision.snapshot,
+      permitBinding: brokerResult.permitBinding,
+      permitDeniedEvidence: null,
+      executorInvoked: true,
+    });
 
     return createFinalResult({
       status: "executed",

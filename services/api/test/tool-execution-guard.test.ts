@@ -17,16 +17,22 @@ import {
 import {
   EvidenceCoverageStatus,
   ExecutorSafetyEvidenceStateName,
+  ForbiddenEffectEnvironment,
   ForbiddenEffectEvidenceType,
+  ForbiddenEffectFailClosedAction,
+  ForbiddenEffectSeverity,
+  ForbiddenEffectType,
   type EvidenceCoverageEntry,
   type EvidenceCoverageMap,
   type ExecutorSafetyEvidenceState,
+  type ForbiddenEffectObligation,
   type PermitBinding,
   type PermitDeniedEvidence,
 } from "@agent-safety-gateway/shared/forbidden-side-effect";
 
 import { runToolGuardDemo } from "../../../scripts/tool-guard-demo.js";
 import { createFileApprovalAdapter } from "../src/approval-adapter.js";
+import { createAuditRepository } from "../src/audit-repository.js";
 import {
   createFileExternalAuditSinkAdapter,
   readExternalAuditSinkRecords,
@@ -44,6 +50,7 @@ import {
   type ToolExecutionPermitEvidenceSnapshot,
   type ToolExecutionPermitEvidenceProvider,
 } from "../src/tool-execution-guard.js";
+import { initializeLocalStorage } from "../src/storage.js";
 
 const tempDirs: string[] = [];
 
@@ -109,6 +116,19 @@ const createSafetyState = (
   ...overrides,
 });
 
+const createForbiddenEffectObligation = (): ForbiddenEffectObligation => ({
+  obligationId: "obligation-tool-guard-write-denial",
+  effectType: ForbiddenEffectType.Sql,
+  resourceScope: ["orders"],
+  environment: ForbiddenEffectEnvironment.Production,
+  severity: ForbiddenEffectSeverity.Critical,
+  requiredEvidenceTypes: [
+    ForbiddenEffectEvidenceType.WriteDenial,
+    ForbiddenEffectEvidenceType.NoRowMutation,
+  ],
+  failClosedAction: ForbiddenEffectFailClosedAction.DenyPermit,
+});
+
 const createCompletePermitSnapshot = (): ToolExecutionPermitEvidenceSnapshot => ({
   safetyState: createSafetyState(),
   coverageMap: createCoverageMap([
@@ -120,6 +140,7 @@ const createCompletePermitSnapshot = (): ToolExecutionPermitEvidenceSnapshot => 
       reason: "sandbox snapshot observed no row mutation",
     }),
   ]),
+  forbiddenEffectObligations: [createForbiddenEffectObligation()],
   deniedEvidenceHash: "sha256:tool-guard-denied-evidence-aggregate",
   sideEffectEvidenceHash: "sha256:tool-guard-side-effect-aggregate",
 });
@@ -627,6 +648,98 @@ describe("tool execution guard permit gate", () => {
       assert.deepEqual(permitEvidence.denials, [result.permitDeniedEvidence]);
     });
   }
+
+  it("persists obligations, coverage hash, state, permit, and invocation status on audit records", async () => {
+    const layout = await initializeLocalStorage(await createTempDataDir());
+    const auditRepository = createAuditRepository(layout);
+    let executorCallCount = 0;
+    const permitEvidence = createPermitEvidenceProvider();
+    const guard = createToolExecutionGuard({
+      analysisService: createAllowedAnalysisService(),
+      auditRepository,
+      permitEvidenceProvider: permitEvidence.provider,
+      permitNonceFactory: () => "nonce-persisted-audit-permit",
+      now: () => new Date("2026-04-29T08:10:00.000Z"),
+      async executor(request) {
+        executorCallCount += 1;
+        return { ok: true, requestId: request.id };
+      },
+    });
+
+    await auditRepository.createAuditRecord(
+      createAllowedAnalysisResult(allowedRequest).auditRecord,
+    );
+
+    const result = await guard.execute(allowedRequest);
+    const auditRecord = await auditRepository.getAuditRecordById(result.auditId);
+
+    assert.equal(result.status, "executed");
+    assert.equal(executorCallCount, 1);
+    assert.deepEqual(
+      auditRecord?.forbiddenEffectObligations,
+      createCompletePermitSnapshot().forbiddenEffectObligations,
+    );
+    assert.equal(auditRecord?.coverageMapHash, "sha256:tool-guard-coverage-map");
+    assert.deepEqual(auditRecord?.safetyEvidenceState, createSafetyState());
+    assert.equal(auditRecord?.permitIssued, true);
+    assert.equal(auditRecord?.executorInvoked, true);
+    assert.deepEqual(auditRecord?.permitBinding, result.permitBinding);
+    assert.equal(auditRecord?.permitDeniedEvidence, null);
+  });
+
+  it("persists PermitDeniedEvidence and executorInvoked=false on audit records", async () => {
+    const layout = await initializeLocalStorage(await createTempDataDir());
+    const auditRepository = createAuditRepository(layout);
+    let executorCallCount = 0;
+    const coverageEntry = createCoverageEntry({
+      status: EvidenceCoverageStatus.Missing,
+      covered: false,
+      evidenceHashes: [],
+      reason: "write denial evidence is missing",
+    });
+    const snapshot = {
+      safetyState: createSafetyState({
+        state: ExecutorSafetyEvidenceStateName.EvidencePartial,
+        allObligationsCovered: false,
+        coveredObligationIds: [],
+        blockedObligationIds: [coverageEntry.obligationId],
+        blockingStatuses: [EvidenceCoverageStatus.Missing],
+        transitionReason: "write denial evidence is missing",
+      }),
+      coverageMap: createCoverageMap([coverageEntry]),
+      forbiddenEffectObligations: [createForbiddenEffectObligation()],
+    } satisfies ToolExecutionPermitEvidenceSnapshot;
+    const permitEvidence = createPermitEvidenceProvider(snapshot);
+    const guard = createToolExecutionGuard({
+      analysisService: createAllowedAnalysisService(),
+      auditRepository,
+      permitEvidenceProvider: permitEvidence.provider,
+      now: () => new Date("2026-04-29T08:10:00.000Z"),
+      async executor() {
+        executorCallCount += 1;
+        return { ok: true };
+      },
+    });
+
+    await auditRepository.createAuditRecord(
+      createAllowedAnalysisResult(allowedRequest).auditRecord,
+    );
+
+    const result = await guard.execute(allowedRequest);
+    const auditRecord = await auditRepository.getAuditRecordById(result.auditId);
+
+    assert.equal(result.status, "blocked");
+    assert.equal(executorCallCount, 0);
+    assert.equal(auditRecord?.permitIssued, false);
+    assert.equal(auditRecord?.executorInvoked, false);
+    assert.equal(auditRecord?.permitBinding, null);
+    assert.deepEqual(auditRecord?.permitDeniedEvidence, result.permitDeniedEvidence);
+    assert.deepEqual(auditRecord?.safetyEvidenceState, snapshot.safetyState);
+    assert.deepEqual(
+      auditRecord?.forbiddenEffectObligations,
+      snapshot.forbiddenEffectObligations,
+    );
+  });
 });
 
 describe("tool execution guard external audit sink", () => {
