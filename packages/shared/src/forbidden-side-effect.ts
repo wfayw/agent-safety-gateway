@@ -313,6 +313,27 @@ export type ExecutorDriftFingerprint = {
   capturedAt?: ForbiddenSideEffectTimestamp;
 };
 
+export type PermitBinding = {
+  requestHash: PatentProofHash;
+  executorId: string;
+  safetyEvidenceVersion: string;
+  coverageMapHash: PatentProofHash;
+  deniedEvidenceHash: PatentProofHash;
+  sideEffectEvidenceHash: PatentProofHash;
+  ttl: number;
+  nonce: string;
+};
+
+export type PermitDeniedEvidence = {
+  requestHash: PatentProofHash;
+  executorId: string;
+  permitIssued: false;
+  executorInvoked: false;
+  missingEvidence: readonly ForbiddenEffectEvidenceType[];
+  invalidatedEvidence: readonly PatentProofHash[];
+  reason: string;
+};
+
 export type DriftEvent = {
   previous: ExecutorDriftFingerprint;
   current: ExecutorDriftFingerprint;
@@ -501,6 +522,46 @@ export type SideEffectDeltaEvidenceValidationResult =
   | SideEffectDeltaEvidenceValidationSuccess
   | SideEffectDeltaEvidenceValidationFailure;
 
+export type PermitBindingValidationIssue = {
+  path: string;
+  code: string;
+  message: string;
+};
+
+export type PermitBindingValidationSuccess = {
+  success: true;
+  data: PermitBinding;
+};
+
+export type PermitBindingValidationFailure = {
+  success: false;
+  issues: PermitBindingValidationIssue[];
+};
+
+export type PermitBindingValidationResult =
+  | PermitBindingValidationSuccess
+  | PermitBindingValidationFailure;
+
+export type PermitDeniedEvidenceValidationIssue = {
+  path: string;
+  code: string;
+  message: string;
+};
+
+export type PermitDeniedEvidenceValidationSuccess = {
+  success: true;
+  data: PermitDeniedEvidence;
+};
+
+export type PermitDeniedEvidenceValidationFailure = {
+  success: false;
+  issues: PermitDeniedEvidenceValidationIssue[];
+};
+
+export type PermitDeniedEvidenceValidationResult =
+  | PermitDeniedEvidenceValidationSuccess
+  | PermitDeniedEvidenceValidationFailure;
+
 export type NegativeProbePlanValidationSuccess = {
   success: true;
   data: NegativeProbePlan;
@@ -559,6 +620,14 @@ type SideEffectDeltaEvidenceIssueCollector = {
   issues: SideEffectDeltaEvidenceValidationIssue[];
 };
 
+type PermitBindingIssueCollector = {
+  issues: PermitBindingValidationIssue[];
+};
+
+type PermitDeniedEvidenceIssueCollector = {
+  issues: PermitDeniedEvidenceValidationIssue[];
+};
+
 type StringEnumValues<TValue extends string> = readonly TValue[];
 
 export class ForbiddenEffectObligationValidationError extends Error {
@@ -597,6 +666,26 @@ export class SideEffectDeltaEvidenceValidationError extends Error {
   constructor(issues: SideEffectDeltaEvidenceValidationIssue[]) {
     super("SideEffectDeltaEvidence validation failed");
     this.name = "SideEffectDeltaEvidenceValidationError";
+    this.issues = issues;
+  }
+}
+
+export class PermitBindingValidationError extends Error {
+  readonly issues: PermitBindingValidationIssue[];
+
+  constructor(issues: PermitBindingValidationIssue[]) {
+    super("PermitBinding validation failed");
+    this.name = "PermitBindingValidationError";
+    this.issues = issues;
+  }
+}
+
+export class PermitDeniedEvidenceValidationError extends Error {
+  readonly issues: PermitDeniedEvidenceValidationIssue[];
+
+  constructor(issues: PermitDeniedEvidenceValidationIssue[]) {
+    super("PermitDeniedEvidence validation failed");
+    this.name = "PermitDeniedEvidenceValidationError";
     this.issues = issues;
   }
 }
@@ -1207,6 +1296,196 @@ const readSideEffectDeltaEvidenceObjectArray = <TValue>(
   return value.map((item, index) =>
     readItem(item, `${issuePath}[${index}]`, collector),
   );
+};
+
+const addPermitBindingIssue = (
+  collector: PermitBindingIssueCollector,
+  path: string,
+  code: string,
+  message: string,
+) => {
+  collector.issues.push({ path, code, message });
+};
+
+const permitBindingChildPath = (path: string, key: string) => `${path}.${key}`;
+
+const isPermitBindingRecord = (
+  input: unknown,
+): input is Record<string, unknown> =>
+  typeof input === "object" && input !== null && !Array.isArray(input);
+
+const readPermitBindingString = (
+  input: Record<string, unknown>,
+  key: string,
+  path: string,
+  collector: PermitBindingIssueCollector,
+): string => {
+  const value = input[key];
+
+  if (typeof value !== "string" || value.length === 0) {
+    addPermitBindingIssue(
+      collector,
+      permitBindingChildPath(path, key),
+      "invalid_string",
+      "Expected a non-empty string.",
+    );
+    return "";
+  }
+
+  return value;
+};
+
+const readPermitBindingPositiveInteger = (
+  input: Record<string, unknown>,
+  key: string,
+  path: string,
+  collector: PermitBindingIssueCollector,
+): number => {
+  const value = input[key];
+
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    !Number.isInteger(value) ||
+    value <= 0
+  ) {
+    addPermitBindingIssue(
+      collector,
+      permitBindingChildPath(path, key),
+      "invalid_positive_integer",
+      "Expected a positive integer.",
+    );
+    return 0;
+  }
+
+  return value;
+};
+
+const addPermitDeniedEvidenceIssue = (
+  collector: PermitDeniedEvidenceIssueCollector,
+  path: string,
+  code: string,
+  message: string,
+) => {
+  collector.issues.push({ path, code, message });
+};
+
+const permitDeniedEvidenceChildPath = (path: string, key: string) =>
+  `${path}.${key}`;
+
+const isPermitDeniedEvidenceRecord = (
+  input: unknown,
+): input is Record<string, unknown> =>
+  typeof input === "object" && input !== null && !Array.isArray(input);
+
+const readPermitDeniedEvidenceString = (
+  input: Record<string, unknown>,
+  key: string,
+  path: string,
+  collector: PermitDeniedEvidenceIssueCollector,
+): string => {
+  const value = input[key];
+
+  if (typeof value !== "string" || value.length === 0) {
+    addPermitDeniedEvidenceIssue(
+      collector,
+      permitDeniedEvidenceChildPath(path, key),
+      "invalid_string",
+      "Expected a non-empty string.",
+    );
+    return "";
+  }
+
+  return value;
+};
+
+const readPermitDeniedEvidenceFalseBoolean = (
+  input: Record<string, unknown>,
+  key: string,
+  path: string,
+  collector: PermitDeniedEvidenceIssueCollector,
+): false => {
+  const value = input[key];
+
+  if (value !== false) {
+    addPermitDeniedEvidenceIssue(
+      collector,
+      permitDeniedEvidenceChildPath(path, key),
+      "invalid_false_boolean",
+      "Expected false.",
+    );
+  }
+
+  return false;
+};
+
+const readPermitDeniedEvidenceEnumArray = <TValue extends string>(
+  input: Record<string, unknown>,
+  key: string,
+  values: StringEnumValues<TValue>,
+  path: string,
+  collector: PermitDeniedEvidenceIssueCollector,
+): TValue[] => {
+  const value = input[key];
+  const issuePath = permitDeniedEvidenceChildPath(path, key);
+
+  if (!Array.isArray(value)) {
+    addPermitDeniedEvidenceIssue(
+      collector,
+      issuePath,
+      "invalid_array",
+      "Expected an array of enum values.",
+    );
+    return [];
+  }
+
+  return value.flatMap((item, index) => {
+    if (typeof item !== "string" || !values.includes(item as TValue)) {
+      addPermitDeniedEvidenceIssue(
+        collector,
+        `${issuePath}[${index}]`,
+        "invalid_enum",
+        `Expected one of: ${values.join(", ")}.`,
+      );
+      return [];
+    }
+
+    return [item as TValue];
+  });
+};
+
+const readPermitDeniedEvidenceStringArray = (
+  input: Record<string, unknown>,
+  key: string,
+  path: string,
+  collector: PermitDeniedEvidenceIssueCollector,
+): string[] => {
+  const value = input[key];
+  const issuePath = permitDeniedEvidenceChildPath(path, key);
+
+  if (!Array.isArray(value)) {
+    addPermitDeniedEvidenceIssue(
+      collector,
+      issuePath,
+      "invalid_array",
+      "Expected an array of strings.",
+    );
+    return [];
+  }
+
+  return value.flatMap((item, index) => {
+    if (typeof item !== "string" || item.length === 0) {
+      addPermitDeniedEvidenceIssue(
+        collector,
+        `${issuePath}[${index}]`,
+        "invalid_string",
+        "Expected a non-empty string.",
+      );
+      return [];
+    }
+
+    return [item];
+  });
 };
 
 const validateSideEffectObservedEventShape = (
@@ -1870,6 +2149,119 @@ const validateSideEffectDeltaEvidenceShape = (
   return evidence;
 };
 
+const validatePermitBindingShape = (
+  input: unknown,
+  collector: PermitBindingIssueCollector,
+): PermitBinding => {
+  if (!isPermitBindingRecord(input)) {
+    addPermitBindingIssue(
+      collector,
+      "$",
+      "invalid_object",
+      "Expected an object.",
+    );
+    input = {};
+  }
+
+  const record = input as Record<string, unknown>;
+  const path = "$";
+
+  return {
+    requestHash: readPermitBindingString(
+      record,
+      "requestHash",
+      path,
+      collector,
+    ),
+    executorId: readPermitBindingString(record, "executorId", path, collector),
+    safetyEvidenceVersion: readPermitBindingString(
+      record,
+      "safetyEvidenceVersion",
+      path,
+      collector,
+    ),
+    coverageMapHash: readPermitBindingString(
+      record,
+      "coverageMapHash",
+      path,
+      collector,
+    ),
+    deniedEvidenceHash: readPermitBindingString(
+      record,
+      "deniedEvidenceHash",
+      path,
+      collector,
+    ),
+    sideEffectEvidenceHash: readPermitBindingString(
+      record,
+      "sideEffectEvidenceHash",
+      path,
+      collector,
+    ),
+    ttl: readPermitBindingPositiveInteger(record, "ttl", path, collector),
+    nonce: readPermitBindingString(record, "nonce", path, collector),
+  };
+};
+
+const validatePermitDeniedEvidenceShape = (
+  input: unknown,
+  collector: PermitDeniedEvidenceIssueCollector,
+): PermitDeniedEvidence => {
+  if (!isPermitDeniedEvidenceRecord(input)) {
+    addPermitDeniedEvidenceIssue(
+      collector,
+      "$",
+      "invalid_object",
+      "Expected an object.",
+    );
+    input = {};
+  }
+
+  const record = input as Record<string, unknown>;
+  const path = "$";
+
+  return {
+    requestHash: readPermitDeniedEvidenceString(
+      record,
+      "requestHash",
+      path,
+      collector,
+    ),
+    executorId: readPermitDeniedEvidenceString(
+      record,
+      "executorId",
+      path,
+      collector,
+    ),
+    permitIssued: readPermitDeniedEvidenceFalseBoolean(
+      record,
+      "permitIssued",
+      path,
+      collector,
+    ),
+    executorInvoked: readPermitDeniedEvidenceFalseBoolean(
+      record,
+      "executorInvoked",
+      path,
+      collector,
+    ),
+    missingEvidence: readPermitDeniedEvidenceEnumArray(
+      record,
+      "missingEvidence",
+      ForbiddenEffectEvidenceTypeValues,
+      path,
+      collector,
+    ),
+    invalidatedEvidence: readPermitDeniedEvidenceStringArray(
+      record,
+      "invalidatedEvidence",
+      path,
+      collector,
+    ),
+    reason: readPermitDeniedEvidenceString(record, "reason", path, collector),
+  };
+};
+
 const validateForbiddenEffectObligationShape = (
   input: unknown,
   collector: ForbiddenEffectObligationIssueCollector,
@@ -2099,6 +2491,69 @@ export const isSideEffectDeltaEvidence = (
   input: unknown,
 ): input is SideEffectDeltaEvidence =>
   validateSideEffectDeltaEvidence(input).success;
+
+export const validatePermitBinding = (
+  input: unknown,
+): PermitBindingValidationResult => {
+  const collector: PermitBindingIssueCollector = { issues: [] };
+  const data = validatePermitBindingShape(input, collector);
+
+  if (collector.issues.length > 0) {
+    return { success: false, issues: collector.issues };
+  }
+
+  return { success: true, data };
+};
+
+export const PermitBindingSchema = {
+  parse(input: unknown): PermitBinding {
+    const result = validatePermitBinding(input);
+
+    if (!result.success) {
+      throw new PermitBindingValidationError(result.issues);
+    }
+
+    return result.data;
+  },
+  safeParse(input: unknown): PermitBindingValidationResult {
+    return validatePermitBinding(input);
+  },
+};
+
+export const isPermitBinding = (input: unknown): input is PermitBinding =>
+  validatePermitBinding(input).success;
+
+export const validatePermitDeniedEvidence = (
+  input: unknown,
+): PermitDeniedEvidenceValidationResult => {
+  const collector: PermitDeniedEvidenceIssueCollector = { issues: [] };
+  const data = validatePermitDeniedEvidenceShape(input, collector);
+
+  if (collector.issues.length > 0) {
+    return { success: false, issues: collector.issues };
+  }
+
+  return { success: true, data };
+};
+
+export const PermitDeniedEvidenceSchema = {
+  parse(input: unknown): PermitDeniedEvidence {
+    const result = validatePermitDeniedEvidence(input);
+
+    if (!result.success) {
+      throw new PermitDeniedEvidenceValidationError(result.issues);
+    }
+
+    return result.data;
+  },
+  safeParse(input: unknown): PermitDeniedEvidenceValidationResult {
+    return validatePermitDeniedEvidence(input);
+  },
+};
+
+export const isPermitDeniedEvidence = (
+  input: unknown,
+): input is PermitDeniedEvidence => validatePermitDeniedEvidence(input).success;
 
 const evidenceCoverageMapDefaultEvaluatedAt = "1970-01-01T00:00:00.000Z";
 
@@ -2858,6 +3313,40 @@ export const buildDeniedCapabilityEvidenceHashPayload = (
   });
 };
 
+export const buildPermitBindingHashPayload = (input: unknown): string => {
+  const binding = PermitBindingSchema.parse(input);
+
+  return JSON.stringify({
+    schema: "agent-safety-gateway.forbidden-side-effect.PermitBinding.v1",
+    requestHash: binding.requestHash,
+    executorId: binding.executorId,
+    safetyEvidenceVersion: binding.safetyEvidenceVersion,
+    coverageMapHash: binding.coverageMapHash,
+    deniedEvidenceHash: binding.deniedEvidenceHash,
+    sideEffectEvidenceHash: binding.sideEffectEvidenceHash,
+    ttl: binding.ttl,
+    nonce: binding.nonce,
+  });
+};
+
+export const buildPermitDeniedEvidenceHashPayload = (
+  input: unknown,
+): string => {
+  const evidence = PermitDeniedEvidenceSchema.parse(input);
+
+  return JSON.stringify({
+    schema:
+      "agent-safety-gateway.forbidden-side-effect.PermitDeniedEvidence.v1",
+    requestHash: evidence.requestHash,
+    executorId: evidence.executorId,
+    permitIssued: evidence.permitIssued,
+    executorInvoked: evidence.executorInvoked,
+    missingEvidence: evidence.missingEvidence,
+    invalidatedEvidence: evidence.invalidatedEvidence,
+    reason: evidence.reason,
+  });
+};
+
 const toHexDigest = (digest: ArrayBuffer): string =>
   Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, "0"))
@@ -2993,6 +3482,26 @@ export const createSideEffectDeltaEvidenceHash = async (
   input: unknown,
 ): Promise<PatentProofHash> => {
   const hashPayload = buildSideEffectDeltaEvidenceHashPayload(input);
+
+  return `${EvidenceHashAlgorithm.Sha256}:${await createSha256DigestHex(
+    hashPayload,
+  )}`;
+};
+
+export const createPermitBindingHash = async (
+  input: unknown,
+): Promise<PatentProofHash> => {
+  const hashPayload = buildPermitBindingHashPayload(input);
+
+  return `${EvidenceHashAlgorithm.Sha256}:${await createSha256DigestHex(
+    hashPayload,
+  )}`;
+};
+
+export const createPermitDeniedEvidenceHash = async (
+  input: unknown,
+): Promise<PatentProofHash> => {
+  const hashPayload = buildPermitDeniedEvidenceHashPayload(input);
 
   return `${EvidenceHashAlgorithm.Sha256}:${await createSha256DigestHex(
     hashPayload,
