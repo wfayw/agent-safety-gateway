@@ -75,6 +75,7 @@ export type ApiServerOptions = {
   catalogIngestionService?: CatalogIngestionService;
   toolCallAnalysisService?: ToolCallAnalysisService;
   sqlExecutor?: ToolExecutor<SqlDryRunExecutorResult>;
+  sqlExecutorId?: string;
   approvalAdapter?: Pick<
     ExternalApprovalAdapter,
     "createApprovalRequest" | "getApprovalRequest"
@@ -667,6 +668,7 @@ export const buildServer = (options: ApiServerOptions = {}) => {
       const guard = createToolExecutionGuard<SqlDryRunExecutorResult>({
         analysisService: toolCallAnalysisService,
         ...(options.sqlExecutor ? { executor: options.sqlExecutor } : {}),
+        ...(options.sqlExecutorId ? { executorId: options.sqlExecutorId } : {}),
         ...(options.approvalAdapter
           ? { approvalAdapter: options.approvalAdapter }
           : {}),

@@ -34,6 +34,10 @@ import {
   redactSensitiveAuditFields,
   type AuditRedactionOptions,
 } from "./audit-redaction.js";
+import {
+  createToolCallRequestHash,
+  createToolExecutorBroker,
+} from "./tool-executor-broker.js";
 import type {
   ToolCallAnalysisResult,
   ToolCallAnalysisService,
@@ -109,6 +113,7 @@ export type ToolExecutionPermitEvidenceProvider = {
 export type ToolExecutionGuardDependencies<ExecutorResult> = {
   analysisService: ToolCallAnalysisService;
   executor?: ToolExecutor<ExecutorResult>;
+  executorId?: string;
   approvalAdapter?: Pick<
     ExternalApprovalAdapter,
     "createApprovalRequest" | "getApprovalRequest"
@@ -171,20 +176,6 @@ const createProofHash = (payload: unknown): PatentProofHash =>
   `sha256:${createHash("sha256")
     .update(JSON.stringify(payload))
     .digest("hex")}`;
-
-const createToolCallRequestHash = (
-  request: ToolCallRequest,
-): PatentProofHash =>
-  createProofHash({
-    schema: `${FORBIDDEN_SIDE_EFFECT_PERMIT_SCHEMA}.ToolCallRequest`,
-    id: request.id,
-    actor: request.actor,
-    taskPurpose: request.taskPurpose,
-    toolType: request.toolType,
-    rawPayload: request.rawPayload,
-    environment: request.environment,
-    createdAt: request.createdAt,
-  });
 
 const createCoverageMapHash = ({
   safetyState,
@@ -511,6 +502,7 @@ const createResult = <ExecutorResult>({
 export const createToolExecutionGuard = <ExecutorResult>({
   analysisService,
   executor,
+  executorId,
   approvalAdapter,
   auditSinkAdapter,
   auditSinkStrict = false,
@@ -658,6 +650,7 @@ export const createToolExecutionGuard = <ExecutorResult>({
     if (!permitEvidenceProvider) {
       return {
         permitBinding: null,
+        permitIssuedAt: null,
         permitDeniedEvidence: await denyPermit({
           request,
           analysisResult,
@@ -678,6 +671,7 @@ export const createToolExecutionGuard = <ExecutorResult>({
     if (!normalizedSnapshot || !canBindPermit(safetyState, evaluatedAt)) {
       return {
         permitBinding: null,
+        permitIssuedAt: null,
         permitDeniedEvidence: await denyPermit({
           request,
           analysisResult,
@@ -704,6 +698,7 @@ export const createToolExecutionGuard = <ExecutorResult>({
 
     return {
       permitBinding,
+      permitIssuedAt: evaluatedAt,
       permitDeniedEvidence: null,
     };
   };
@@ -758,16 +753,45 @@ export const createToolExecutionGuard = <ExecutorResult>({
       });
     }
 
-    const executorResult = await executor(request, analysisResult);
+    const broker = createToolExecutorBroker({
+      executor,
+      expectedExecutorId: executorId ?? permitDecision.permitBinding.executorId,
+      now,
+    });
+    const brokerResult = await broker.invoke({
+      request,
+      analysisResult,
+      permitBinding: permitDecision.permitBinding,
+      permitIssuedAt: permitDecision.permitIssuedAt,
+    });
+
+    if (brokerResult.status === "denied") {
+      await permitEvidenceProvider?.appendPermitDeniedEvidence?.({
+        request,
+        analysisResult,
+        permitDeniedEvidence: brokerResult.permitDeniedEvidence,
+      });
+
+      return createFinalResult({
+        status: "blocked",
+        request,
+        analysisResult,
+        executorInvoked: false,
+        executorResult: null,
+        approvalRequest,
+        permitBinding: null,
+        permitDeniedEvidence: brokerResult.permitDeniedEvidence,
+      });
+    }
 
     return createFinalResult({
       status: "executed",
       request,
       analysisResult,
       executorInvoked: true,
-      executorResult,
+      executorResult: brokerResult.executorResult,
       approvalRequest,
-      permitBinding: permitDecision.permitBinding,
+      permitBinding: brokerResult.permitBinding,
     });
   };
 

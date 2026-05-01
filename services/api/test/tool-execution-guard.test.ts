@@ -487,6 +487,38 @@ describe("tool execution guard permit gate", () => {
     assert.deepEqual(permitEvidence.permits, [result.permitBinding]);
   });
 
+  it("routes executor invocation through the broker and rejects mismatched executor permits", async () => {
+    let executorCallCount = 0;
+    const permitEvidence = createPermitEvidenceProvider();
+    const guard = createToolExecutionGuard({
+      analysisService: createAllowedAnalysisService(),
+      executorId: "executor-sql-readonly-current",
+      permitEvidenceProvider: permitEvidence.provider,
+      permitNonceFactory: () => "nonce-mismatched-executor-permit",
+      now: () => new Date("2026-04-29T08:10:00.000Z"),
+      async executor() {
+        executorCallCount += 1;
+        return { ok: true };
+      },
+    });
+
+    const result = await guard.execute(allowedRequest);
+
+    assert.equal(result.status, "blocked");
+    assert.equal(result.executorInvoked, false);
+    assert.equal(result.executorResult, null);
+    assert.equal(executorCallCount, 0);
+    assert.equal(result.permitBinding, null);
+    assert.equal(
+      result.permitDeniedEvidence?.reason,
+      "executor broker rejected mismatched permit binding for executor executor-sql-readonly-prod; expected executor-sql-readonly-current",
+    );
+    assert.equal(result.permitDeniedEvidence?.executorInvoked, false);
+    assert.equal(result.permitDeniedEvidence?.executorId, "executor-sql-readonly-current");
+    assert.equal(permitEvidence.permits.length, 1);
+    assert.deepEqual(permitEvidence.denials, [result.permitDeniedEvidence]);
+  });
+
   it("fails closed with PermitDeniedEvidence when no evidence provider is configured", async () => {
     let executorCallCount = 0;
     const guard = createToolExecutionGuard({
