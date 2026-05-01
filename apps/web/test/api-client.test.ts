@@ -12,6 +12,7 @@ import {
   getHealth,
   listAudits,
   listExecutionLogs,
+  listExecutorSafetyEvidence,
   listHookDecisions,
   listScenarios,
   normalizeApiError,
@@ -210,6 +211,58 @@ describe('web API client requests', () => {
         client,
       ),
       [{ id: 'hook-1', shouldBlock: true }],
+    );
+  });
+
+  it('lists executor safety evidence with audit and kind filters', async () => {
+    const client = createApiClient({
+      baseUrl: 'http://api.local',
+      fetchImpl: async (url, init) => {
+        assert.equal(
+          String(url),
+          'http://api.local/api/executor-safety-evidence?requestId=req-1&auditId=audit-1&executorId=executor-sql-prod&evidenceVersion=evidence-version-001&kind=coverageMap',
+        );
+        assert.equal(init?.method, 'GET');
+        return jsonResponse({
+          executorSafetyEvidence: [
+            {
+              id: 'safety-coverage-map-001',
+              requestId: 'req-1',
+              auditId: 'audit-1',
+              executorId: 'executor-sql-prod',
+              evidenceVersion: 'evidence-version-001',
+              createdAt: '2026-05-01T06:00:00.000Z',
+              kind: 'coverageMap',
+              coverageMap: { coverageMapId: 'coverage-map-001' },
+            },
+          ],
+        });
+      },
+    });
+
+    assert.deepEqual(
+      await listExecutorSafetyEvidence(
+        {
+          requestId: 'req-1',
+          auditId: 'audit-1',
+          executorId: 'executor-sql-prod',
+          evidenceVersion: 'evidence-version-001',
+          kind: 'coverageMap',
+        },
+        client,
+      ),
+      [
+        {
+          id: 'safety-coverage-map-001',
+          requestId: 'req-1',
+          auditId: 'audit-1',
+          executorId: 'executor-sql-prod',
+          evidenceVersion: 'evidence-version-001',
+          createdAt: '2026-05-01T06:00:00.000Z',
+          kind: 'coverageMap',
+          coverageMap: { coverageMapId: 'coverage-map-001' },
+        },
+      ],
     );
   });
 

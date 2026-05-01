@@ -12,6 +12,14 @@ import type {
   ToolCallRequest,
   ToolType,
 } from '@agent-safety-gateway/shared';
+import type {
+  EvidenceCoverageMap,
+  EvidenceCoverageRecord,
+  ExecutorSafetyEvidenceState,
+  ForbiddenEffectObligation,
+  PermitBinding,
+  PermitDeniedEvidence,
+} from '@agent-safety-gateway/shared/forbidden-side-effect';
 
 import { apiClient, type ApiClient } from './client';
 
@@ -97,6 +105,77 @@ export type HookDecisionRecord = {
   auditId: string | null;
 };
 
+export const ExecutorSafetyEvidenceRecordKind = {
+  Obligation: 'obligation',
+  EvidenceRecord: 'evidenceRecord',
+  CoverageMap: 'coverageMap',
+  SafetyState: 'safetyState',
+  Permit: 'permit',
+  Denial: 'denial',
+} as const;
+
+export type ExecutorSafetyEvidenceRecordKind =
+  (typeof ExecutorSafetyEvidenceRecordKind)[keyof typeof ExecutorSafetyEvidenceRecordKind];
+
+export type ExecutorSafetyEvidenceRecordMetadata = {
+  id: string;
+  requestId: string;
+  executorId: string;
+  evidenceVersion: string;
+  auditId: string;
+  createdAt: string;
+};
+
+type ExecutorSafetyEvidenceRecordBase = ExecutorSafetyEvidenceRecordMetadata & {
+  kind: ExecutorSafetyEvidenceRecordKind;
+};
+
+export type ObligationEvidenceRecord = ExecutorSafetyEvidenceRecordBase & {
+  kind: typeof ExecutorSafetyEvidenceRecordKind.Obligation;
+  obligation: ForbiddenEffectObligation;
+};
+
+export type EvidenceCoverageStoreRecord = ExecutorSafetyEvidenceRecordBase & {
+  kind: typeof ExecutorSafetyEvidenceRecordKind.EvidenceRecord;
+  evidenceRecord: EvidenceCoverageRecord;
+};
+
+export type CoverageMapStoreRecord = ExecutorSafetyEvidenceRecordBase & {
+  kind: typeof ExecutorSafetyEvidenceRecordKind.CoverageMap;
+  coverageMap: EvidenceCoverageMap;
+};
+
+export type SafetyStateStoreRecord = ExecutorSafetyEvidenceRecordBase & {
+  kind: typeof ExecutorSafetyEvidenceRecordKind.SafetyState;
+  safetyState: ExecutorSafetyEvidenceState;
+};
+
+export type PermitStoreRecord = ExecutorSafetyEvidenceRecordBase & {
+  kind: typeof ExecutorSafetyEvidenceRecordKind.Permit;
+  permit: PermitBinding;
+};
+
+export type DenialStoreRecord = ExecutorSafetyEvidenceRecordBase & {
+  kind: typeof ExecutorSafetyEvidenceRecordKind.Denial;
+  denial: PermitDeniedEvidence;
+};
+
+export type ExecutorSafetyEvidenceRecord =
+  | ObligationEvidenceRecord
+  | EvidenceCoverageStoreRecord
+  | CoverageMapStoreRecord
+  | SafetyStateStoreRecord
+  | PermitStoreRecord
+  | DenialStoreRecord;
+
+export type ExecutorSafetyEvidenceFilters = {
+  kind?: ExecutorSafetyEvidenceRecordKind;
+  requestId?: string;
+  executorId?: string;
+  evidenceVersion?: string;
+  auditId?: string;
+};
+
 export type ListAuditsResponse = {
   audits: AuditRecord[];
 };
@@ -111,6 +190,10 @@ export type ListExecutionLogsResponse = {
 
 export type ListHookDecisionsResponse = {
   hookDecisions: HookDecisionRecord[];
+};
+
+export type ListExecutorSafetyEvidenceResponse = {
+  executorSafetyEvidence: ExecutorSafetyEvidenceRecord[];
 };
 
 const createQueryString = (filters: object = {}) => {
@@ -176,4 +259,15 @@ export const listHookDecisions = async (
   );
 
   return response.hookDecisions;
+};
+
+export const listExecutorSafetyEvidence = async (
+  filters: ExecutorSafetyEvidenceFilters = {},
+  client: ApiClient = apiClient,
+) => {
+  const response = await client.get<ListExecutorSafetyEvidenceResponse>(
+    `/api/executor-safety-evidence${createQueryString(filters)}`,
+  );
+
+  return response.executorSafetyEvidence;
 };

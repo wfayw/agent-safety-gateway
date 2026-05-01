@@ -2,7 +2,8 @@ import { Alert, Button, Card, ConfigProvider, Descriptions, Flex, Form, Input, L
 import type { FormProps, MenuProps, TableProps } from 'antd';
 import type { AffectedResource, AuditRecord, DecisionType, Environment, ImpactPath, JsonObject, JsonValue, RiskFactor, RiskFactorSeverity, RiskLevel, ToolCallRequest, ToolType } from '@agent-safety-gateway/shared';
 import { useEffect, useMemo, useState } from 'react';
-import { analyzeToolCall, getAudit, listAudits, listExecutionLogs, listHookDecisions, listScenarios, normalizeApiError, type AnalyzeToolCallResponse, type ApiErrorPayload, type AuditFilters, type ExecutionLogEntry, type HookDecisionRecord, type ScenarioSummary } from './api';
+import { analyzeToolCall, getAudit, listAudits, listExecutionLogs, listExecutorSafetyEvidence, listHookDecisions, listScenarios, normalizeApiError, type AnalyzeToolCallResponse, type ApiErrorPayload, type AuditFilters, type ExecutionLogEntry, type ExecutorSafetyEvidenceRecord, type HookDecisionRecord, type ScenarioSummary } from './api';
+import { ExecutorSafetyEvidencePanel, mergeExecutorSafetyEvidenceRecords } from './executor-safety-evidence';
 import { safetyGatewayTheme } from './theme';
 import { EmptyState, ErrorState, LoadingState, SectionHeader } from './ui/states';
 import { DecisionStatusTag, RiskStatusTag } from './ui/status-tags';
@@ -747,6 +748,7 @@ const auditRequestDescriptionItems = (audit: AuditRecord) => [
 function AuditDetailPage({ auditId, navigateToAuditList }: AuditDetailPageProps) {
   const [audit, setAudit] = useState<AuditRecord | null>(null);
   const [executionLogs, setExecutionLogs] = useState<ExecutionLogEntry[]>([]);
+  const [executorSafetyEvidence, setExecutorSafetyEvidence] = useState<ExecutorSafetyEvidenceRecord[]>([]);
   const [matchingHookDecisions, setMatchingHookDecisions] = useState<HookDecisionTableRow[]>([]);
   const [localHookBlocks, setLocalHookBlocks] = useState<HookDecisionRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -759,6 +761,7 @@ function AuditDetailPage({ auditId, navigateToAuditList }: AuditDetailPageProps)
       if (!auditId) {
         setAudit(null);
         setExecutionLogs([]);
+        setExecutorSafetyEvidence([]);
         setMatchingHookDecisions([]);
         setLocalHookBlocks([]);
         setError({
@@ -775,9 +778,19 @@ function AuditDetailPage({ auditId, navigateToAuditList }: AuditDetailPageProps)
 
       try {
         const nextAudit = await getAudit(auditId);
-        const [logsByAuditId, logsByRequestId, hooksByAuditId, hooksByRequestId, localBlocks] = await Promise.all([
+        const [
+          logsByAuditId,
+          logsByRequestId,
+          safetyEvidenceByAuditId,
+          safetyEvidenceByRequestId,
+          hooksByAuditId,
+          hooksByRequestId,
+          localBlocks,
+        ] = await Promise.all([
           listExecutionLogs({ auditId: nextAudit.id }),
           listExecutionLogs({ requestId: nextAudit.request.id }),
+          listExecutorSafetyEvidence({ auditId: nextAudit.id }),
+          listExecutorSafetyEvidence({ requestId: nextAudit.request.id }),
           listHookDecisions({ auditId: nextAudit.id }),
           listHookDecisions({ requestId: nextAudit.request.id }),
           listHookDecisions({ shouldBlock: true }),
@@ -786,6 +799,7 @@ function AuditDetailPage({ auditId, navigateToAuditList }: AuditDetailPageProps)
         if (isCurrent) {
           setAudit(nextAudit);
           setExecutionLogs(mergeExecutionLogs(logsByAuditId, logsByRequestId));
+          setExecutorSafetyEvidence(mergeExecutorSafetyEvidenceRecords(safetyEvidenceByAuditId, safetyEvidenceByRequestId));
           setMatchingHookDecisions(mergeHookDecisionMatches(nextAudit, hooksByAuditId, hooksByRequestId));
           setLocalHookBlocks(localBlocks.filter((record) => record.auditId === null && record.adaptedRequest === null));
         }
@@ -794,6 +808,7 @@ function AuditDetailPage({ auditId, navigateToAuditList }: AuditDetailPageProps)
           setError(normalizeApiError(loadError, '无法加载审计详情'));
           setAudit(null);
           setExecutionLogs([]);
+          setExecutorSafetyEvidence([]);
           setMatchingHookDecisions([]);
           setLocalHookBlocks([]);
         }
@@ -1045,6 +1060,7 @@ function AuditDetailPage({ auditId, navigateToAuditList }: AuditDetailPageProps)
               />
             </Space>
           </Card>
+          <ExecutorSafetyEvidencePanel audit={audit} records={executorSafetyEvidence} />
           <Card size="small" title="Executor 调用证据">
             <Table
               columns={executionLogColumns}

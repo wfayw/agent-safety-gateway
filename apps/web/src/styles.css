@@ -121,6 +121,21 @@ body {
   min-width: 0;
 }
 
+.executor-safety-evidence-panel {
+  width: 100%;
+  min-width: 0;
+}
+
+.executor-safety-permit-card {
+  flex: 1 1 360px;
+  min-width: 0;
+}
+
+.executor-safety-json-card {
+  width: 100%;
+  min-width: 0;
+}
+
 .simulator-result-stack > .ant-space-item,
 .simulator-result-details > .ant-flex,
 .simulator-result-details > .ant-card {
