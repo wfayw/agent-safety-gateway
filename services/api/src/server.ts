@@ -45,6 +45,12 @@ import {
   type HookDecisionRepository,
 } from "./hook-decision-repository.js";
 import {
+  createExecutorSafetyEvidenceRepository,
+  ExecutorSafetyEvidenceRecordKind,
+  type ExecutorSafetyEvidenceRecordFilters,
+  type ExecutorSafetyEvidenceRepository,
+} from "./executor-safety-evidence-repository.js";
+import {
   createDefaultToolCallAnalysisService,
   ToolCallAnalysisError,
   type ToolCallAnalysisService,
@@ -71,6 +77,7 @@ export type ApiServerOptions = {
   auditRepository?: AuditRepository;
   executionLogRepository?: ExecutionLogRepository;
   hookDecisionRepository?: HookDecisionRepository;
+  executorSafetyEvidenceRepository?: ExecutorSafetyEvidenceRepository;
   scenarioRepository?: ScenarioRepository;
   catalogIngestionService?: CatalogIngestionService;
   toolCallAnalysisService?: ToolCallAnalysisService;
@@ -279,6 +286,9 @@ export const buildServer = (options: ApiServerOptions = {}) => {
     options.executionLogRepository ?? createExecutionLogRepository(localStorageLayout);
   const hookDecisionRepository =
     options.hookDecisionRepository ?? createHookDecisionRepository(localStorageLayout);
+  const executorSafetyEvidenceRepository =
+    options.executorSafetyEvidenceRepository ??
+    createExecutorSafetyEvidenceRepository(localStorageLayout);
   const catalogIngestionService =
     options.catalogIngestionService ??
     createCatalogIngestionService(localStorageLayout);
@@ -530,6 +540,58 @@ export const buildServer = (options: ApiServerOptions = {}) => {
 
       return {
         hookDecisions: await hookDecisionRepository.listHookDecisions(filters),
+      };
+    },
+  );
+
+  server.get(
+    "/api/executor-safety-evidence",
+    {
+      schema: {
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            kind: {
+              type: "string",
+              enum: enumValues(ExecutorSafetyEvidenceRecordKind),
+            },
+            requestId: {
+              type: "string",
+              minLength: 1,
+            },
+            auditId: {
+              type: "string",
+              minLength: 1,
+            },
+            executorId: {
+              type: "string",
+              minLength: 1,
+            },
+            evidenceVersion: {
+              type: "string",
+              minLength: 1,
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const permissionResult = requireManagementPermission(
+        request,
+        reply,
+        config,
+        ManagementPermission.ViewAuditEvidence,
+      );
+
+      if (permissionResult !== true) {
+        return permissionResult;
+      }
+
+      return {
+        executorSafetyEvidence: await executorSafetyEvidenceRepository.listRecords(
+          request.query as ExecutorSafetyEvidenceRecordFilters,
+        ),
       };
     },
   );

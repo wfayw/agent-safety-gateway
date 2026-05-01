@@ -17,10 +17,24 @@ import {
   configScenarioFixtures,
   sqlScenarioFixtures,
 } from "@agent-safety-gateway/shared";
+import type {
+  EvidenceCoverageEntry,
+  EvidenceCoverageMap,
+  EvidenceCoverageObligation,
+  EvidenceCoverageRecord,
+  ExecutorSafetyEvidenceState,
+  ForbiddenEffectObligation,
+  PermitBinding,
+  PermitDeniedEvidence,
+} from "@agent-safety-gateway/shared/forbidden-side-effect";
 import type { FastifyInstance } from "fastify";
 
 import { createApiConfig } from "../src/config.js";
 import { createExecutionLogRepository } from "../src/execution-log-repository.js";
+import {
+  createExecutorSafetyEvidenceRepository,
+  ExecutorSafetyEvidenceRecordKind,
+} from "../src/executor-safety-evidence-repository.js";
 import { seedLocalData } from "../src/seed.js";
 import { buildServer } from "../src/server.js";
 import { initializeLocalStorage, type LocalStorageLayout } from "../src/storage.js";
@@ -163,6 +177,149 @@ const appendHookDecisionRecord = async (
     layout.stores.hookDecisions,
     `${JSON.stringify(record)}\n`,
     "utf8",
+  );
+};
+
+const executorSafetyMetadata = (
+  id: string,
+  overrides: Partial<{
+    requestId: string;
+    executorId: string;
+    evidenceVersion: string;
+    auditId: string;
+  }> = {},
+) => ({
+  id,
+  requestId: "request-sql-delete-001",
+  executorId: "executor-sql-prod",
+  evidenceVersion: "evidence-version-001",
+  auditId: "audit-sql-delete-001",
+  createdAt: "2026-05-01T06:00:00.000Z",
+  ...overrides,
+});
+
+const executorSafetyObligationFixture: ForbiddenEffectObligation = {
+  obligationId: "obligation-sql-delete-denial",
+  effectType: "sql",
+  resourceScope: ["database.orders"],
+  environment: "production",
+  severity: "critical",
+  requiredEvidenceTypes: ["delete_denial", "no_row_mutation"],
+  failClosedAction: "deny_permit",
+};
+
+const executorSafetyEvidenceRecordFixture: EvidenceCoverageRecord = {
+  obligationId: "obligation-sql-delete-denial",
+  requiredEvidenceType: "delete_denial",
+  evidenceType: "delete_denial",
+  evidenceHash: "sha256:denied-capability-001",
+  status: "covered",
+  completedAt: "2026-05-01T06:00:01.000Z",
+};
+
+const executorSafetyCoverageEntryFixture: EvidenceCoverageEntry = {
+  obligationId: "obligation-sql-delete-denial",
+  requiredEvidenceType: "delete_denial",
+  status: "covered",
+  covered: true,
+  evidenceHashes: ["sha256:denied-capability-001"],
+  reason: "Executor rejected the destructive SQL mutation probe.",
+  evaluatedAt: "2026-05-01T06:00:02.000Z",
+  completedAt: "2026-05-01T06:00:01.000Z",
+};
+
+const executorSafetyCoverageObligationFixture: EvidenceCoverageObligation = {
+  obligationId: "obligation-sql-delete-denial",
+  status: "covered",
+  covered: true,
+  requiredEvidence: [executorSafetyCoverageEntryFixture],
+};
+
+const executorSafetyCoverageMapFixture: EvidenceCoverageMap = {
+  coverageMapId: "coverage-map-sql-delete-001",
+  executorId: "executor-sql-prod",
+  evaluatedAt: "2026-05-01T06:00:02.000Z",
+  coverage: [executorSafetyCoverageEntryFixture],
+  obligations: [executorSafetyCoverageObligationFixture],
+  allObligationsCovered: true,
+};
+
+const executorSafetyStateFixture: ExecutorSafetyEvidenceState = {
+  stateId: "safety-state-sql-delete-001",
+  executorId: "executor-sql-prod",
+  coverageMapId: "coverage-map-sql-delete-001",
+  state: "EvidenceComplete",
+  allObligationsCovered: true,
+  evaluatedAt: "2026-05-01T06:00:03.000Z",
+  coveredObligationIds: ["obligation-sql-delete-denial"],
+  blockedObligationIds: [],
+  blockingStatuses: [],
+  transitionReason: "All required forbidden side-effect evidence is covered.",
+  coverageMapHash: "sha256:coverage-map-001",
+  safetyEvidenceVersion: "evidence-version-001",
+};
+
+const executorSafetyPermitFixture: PermitBinding = {
+  requestHash: "sha256:request-sql-delete-001",
+  executorId: "executor-sql-prod",
+  safetyEvidenceVersion: "evidence-version-001",
+  coverageMapHash: "sha256:coverage-map-001",
+  deniedEvidenceHash: "sha256:denied-capability-001",
+  sideEffectEvidenceHash: "sha256:side-effect-delta-001",
+  ttl: 300000,
+  nonce: "nonce-sql-delete-001",
+};
+
+const executorSafetyDenialFixture: PermitDeniedEvidence = {
+  requestHash: "sha256:request-sql-delete-001",
+  executorId: "executor-sql-prod",
+  permitIssued: false,
+  executorInvoked: false,
+  missingEvidence: ["no_row_mutation"],
+  invalidatedEvidence: ["sha256:stale-side-effect-delta-001"],
+  reason: "Side-effect delta evidence is missing for the executor.",
+};
+
+const appendExecutorSafetyEvidenceSamples = async (layout: LocalStorageLayout) => {
+  const repository = createExecutorSafetyEvidenceRepository(layout);
+
+  await repository.appendObligation(
+    executorSafetyMetadata("safety-obligation-001"),
+    executorSafetyObligationFixture,
+  );
+  await repository.appendEvidenceRecord(
+    executorSafetyMetadata("safety-evidence-record-001"),
+    executorSafetyEvidenceRecordFixture,
+  );
+  await repository.appendCoverageMap(
+    executorSafetyMetadata("safety-coverage-map-001"),
+    executorSafetyCoverageMapFixture,
+  );
+  await repository.appendSafetyState(
+    executorSafetyMetadata("safety-state-001"),
+    executorSafetyStateFixture,
+  );
+  await repository.appendPermit(
+    executorSafetyMetadata("safety-permit-001"),
+    executorSafetyPermitFixture,
+  );
+  await repository.appendDenial(
+    executorSafetyMetadata("safety-denial-001"),
+    executorSafetyDenialFixture,
+  );
+  await repository.appendPermit(
+    executorSafetyMetadata("safety-permit-ci-001", {
+      requestId: "request-ci-release-001",
+      executorId: "executor-ci-prod",
+      evidenceVersion: "evidence-version-002",
+      auditId: "audit-ci-release-001",
+    }),
+    {
+      ...executorSafetyPermitFixture,
+      executorId: "executor-ci-prod",
+      safetyEvidenceVersion: "evidence-version-002",
+      nonce: "nonce-ci-release-001",
+    },
   );
 };
 
@@ -814,6 +971,96 @@ describe("API server", () => {
     const invalidFilterResponse = await server.inject({
       method: "GET",
       url: "/api/hook-decisions?shouldBlock=maybe",
+    });
+    assert.equal(invalidFilterResponse.statusCode, 400);
+    assert.equal(invalidFilterResponse.json().code, "INVALID_REQUEST");
+
+    const auditResponse = await server.inject({ method: "GET", url: "/api/audits" });
+    assert.deepEqual(auditResponse.json(), { audits: [] });
+  });
+
+  it("lists executor safety evidence and filters without triggering analysis", async () => {
+    const { server, layout } = await createAnalysisServerContext();
+
+    const emptyResponse = await server.inject({
+      method: "GET",
+      url: "/api/executor-safety-evidence",
+    });
+    assert.equal(emptyResponse.statusCode, 200);
+    assert.deepEqual(emptyResponse.json(), { executorSafetyEvidence: [] });
+
+    await appendExecutorSafetyEvidenceSamples(layout);
+
+    const listResponse = await server.inject({
+      method: "GET",
+      url: "/api/executor-safety-evidence",
+    });
+    assert.equal(listResponse.statusCode, 200);
+    assert.deepEqual(
+      listResponse
+        .json()
+        .executorSafetyEvidence.map((record: { id: string }) => record.id),
+      [
+        "safety-obligation-001",
+        "safety-evidence-record-001",
+        "safety-coverage-map-001",
+        "safety-state-001",
+        "safety-permit-001",
+        "safety-denial-001",
+        "safety-permit-ci-001",
+      ],
+    );
+
+    const requestFilterResponse = await server.inject({
+      method: "GET",
+      url: "/api/executor-safety-evidence?requestId=request-sql-delete-001",
+    });
+    assert.deepEqual(
+      requestFilterResponse
+        .json()
+        .executorSafetyEvidence.map((record: { id: string }) => record.id),
+      [
+        "safety-obligation-001",
+        "safety-evidence-record-001",
+        "safety-coverage-map-001",
+        "safety-state-001",
+        "safety-permit-001",
+        "safety-denial-001",
+      ],
+    );
+
+    const combinedFilterResponse = await server.inject({
+      method: "GET",
+      url:
+        "/api/executor-safety-evidence?auditId=audit-ci-release-001&executorId=executor-ci-prod&evidenceVersion=evidence-version-002&kind=permit",
+    });
+    assert.deepEqual(combinedFilterResponse.json().executorSafetyEvidence, [
+      {
+        ...executorSafetyMetadata("safety-permit-ci-001", {
+          requestId: "request-ci-release-001",
+          executorId: "executor-ci-prod",
+          evidenceVersion: "evidence-version-002",
+          auditId: "audit-ci-release-001",
+        }),
+        kind: ExecutorSafetyEvidenceRecordKind.Permit,
+        permit: {
+          ...executorSafetyPermitFixture,
+          executorId: "executor-ci-prod",
+          safetyEvidenceVersion: "evidence-version-002",
+          nonce: "nonce-ci-release-001",
+        },
+      },
+    ]);
+
+    const emptyFilterResponse = await server.inject({
+      method: "GET",
+      url: "/api/executor-safety-evidence?requestId=req-missing",
+    });
+    assert.deepEqual(emptyFilterResponse.json(), { executorSafetyEvidence: [] });
+
+    const invalidFilterResponse = await server.inject({
+      method: "GET",
+      url: "/api/executor-safety-evidence?kind=probe",
     });
     assert.equal(invalidFilterResponse.statusCode, 400);
     assert.equal(invalidFilterResponse.json().code, "INVALID_REQUEST");
