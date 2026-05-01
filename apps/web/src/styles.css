@@ -126,6 +126,11 @@ body {
   min-width: 0;
 }
 
+.context-evidence-panel {
+  width: 100%;
+  min-width: 0;
+}
+
 .executor-safety-permit-card {
   flex: 1 1 360px;
   min-width: 0;

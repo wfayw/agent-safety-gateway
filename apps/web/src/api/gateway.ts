@@ -20,6 +20,14 @@ import type {
   PermitBinding,
   PermitDeniedEvidence,
 } from '@agent-safety-gateway/shared/forbidden-side-effect';
+import type {
+  ContextAdequacyEvidence,
+  ContextAnchor,
+  ContextRetentionEvidence,
+  ContextSufficiencyState,
+  PromptAssemblyManifest,
+  RequiredContextObligation,
+} from '@agent-safety-gateway/shared/context-retention';
 
 import { apiClient, type ApiClient } from './client';
 
@@ -176,6 +184,78 @@ export type ExecutorSafetyEvidenceFilters = {
   auditId?: string;
 };
 
+export const ContextAdequacyEvidenceRecordKind = {
+  ContextAnchor: 'contextAnchor',
+  PromptAssemblyManifest: 'promptAssemblyManifest',
+  RequiredContextObligation: 'requiredContextObligation',
+  ContextRetentionEvidence: 'contextRetentionEvidence',
+  ContextSufficiencyState: 'contextSufficiencyState',
+  ContextAdequacyEvidence: 'contextAdequacyEvidence',
+} as const;
+
+export type ContextAdequacyEvidenceRecordKind =
+  (typeof ContextAdequacyEvidenceRecordKind)[keyof typeof ContextAdequacyEvidenceRecordKind];
+
+export type ContextAdequacyEvidenceRecordMetadata = {
+  id: string;
+  requestId: string;
+  auditId: string;
+  inferenceId: string;
+  toolCallDigest: string;
+  createdAt: string;
+};
+
+type ContextAdequacyEvidenceRecordBase = ContextAdequacyEvidenceRecordMetadata & {
+  kind: ContextAdequacyEvidenceRecordKind;
+};
+
+export type ContextAnchorStoreRecord = ContextAdequacyEvidenceRecordBase & {
+  kind: typeof ContextAdequacyEvidenceRecordKind.ContextAnchor;
+  contextAnchor: ContextAnchor;
+};
+
+export type PromptAssemblyManifestStoreRecord = ContextAdequacyEvidenceRecordBase & {
+  kind: typeof ContextAdequacyEvidenceRecordKind.PromptAssemblyManifest;
+  promptAssemblyManifest: PromptAssemblyManifest;
+};
+
+export type RequiredContextObligationStoreRecord = ContextAdequacyEvidenceRecordBase & {
+  kind: typeof ContextAdequacyEvidenceRecordKind.RequiredContextObligation;
+  requiredContextObligation: RequiredContextObligation;
+};
+
+export type ContextRetentionEvidenceStoreRecord = ContextAdequacyEvidenceRecordBase & {
+  kind: typeof ContextAdequacyEvidenceRecordKind.ContextRetentionEvidence;
+  contextRetentionEvidence: ContextRetentionEvidence;
+};
+
+export type ContextSufficiencyStateStoreRecord = ContextAdequacyEvidenceRecordBase & {
+  kind: typeof ContextAdequacyEvidenceRecordKind.ContextSufficiencyState;
+  contextSufficiencyState: ContextSufficiencyState;
+};
+
+export type ContextAdequacyEvidenceStoreRecord = ContextAdequacyEvidenceRecordBase & {
+  kind: typeof ContextAdequacyEvidenceRecordKind.ContextAdequacyEvidence;
+  contextAdequacyEvidence: ContextAdequacyEvidence;
+  evidenceHash: string;
+};
+
+export type ContextAdequacyEvidenceRecord =
+  | ContextAnchorStoreRecord
+  | PromptAssemblyManifestStoreRecord
+  | RequiredContextObligationStoreRecord
+  | ContextRetentionEvidenceStoreRecord
+  | ContextSufficiencyStateStoreRecord
+  | ContextAdequacyEvidenceStoreRecord;
+
+export type ContextAdequacyEvidenceFilters = {
+  kind?: ContextAdequacyEvidenceRecordKind;
+  requestId?: string;
+  auditId?: string;
+  inferenceId?: string;
+  toolCallDigest?: string;
+};
+
 export type ListAuditsResponse = {
   audits: AuditRecord[];
 };
@@ -194,6 +274,10 @@ export type ListHookDecisionsResponse = {
 
 export type ListExecutorSafetyEvidenceResponse = {
   executorSafetyEvidence: ExecutorSafetyEvidenceRecord[];
+};
+
+export type ListContextEvidenceResponse = {
+  contextEvidence: ContextAdequacyEvidenceRecord[];
 };
 
 const createQueryString = (filters: object = {}) => {
@@ -270,4 +354,15 @@ export const listExecutorSafetyEvidence = async (
   );
 
   return response.executorSafetyEvidence;
+};
+
+export const listContextEvidence = async (
+  filters: ContextAdequacyEvidenceFilters = {},
+  client: ApiClient = apiClient,
+) => {
+  const response = await client.get<ListContextEvidenceResponse>(
+    `/api/context-evidence${createQueryString(filters)}`,
+  );
+
+  return response.contextEvidence;
 };

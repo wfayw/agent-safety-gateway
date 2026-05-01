@@ -11,6 +11,7 @@ import {
   getAudit,
   getHealth,
   listAudits,
+  listContextEvidence,
   listExecutionLogs,
   listExecutorSafetyEvidence,
   listHookDecisions,
@@ -261,6 +262,98 @@ describe('web API client requests', () => {
           createdAt: '2026-05-01T06:00:00.000Z',
           kind: 'coverageMap',
           coverageMap: { coverageMapId: 'coverage-map-001' },
+        },
+      ],
+    );
+  });
+
+  it('lists context evidence with audit, inference, digest, and kind filters', async () => {
+    const client = createApiClient({
+      baseUrl: 'http://api.local',
+      fetchImpl: async (url, init) => {
+        assert.equal(
+          String(url),
+          'http://api.local/api/context-evidence?requestId=req-1&auditId=audit-1&inferenceId=inference-1&toolCallDigest=sha256%3Atool-call-1&kind=contextSufficiencyState',
+        );
+        assert.equal(init?.method, 'GET');
+        return jsonResponse({
+          contextEvidence: [
+            {
+              id: 'context-state-001',
+              requestId: 'req-1',
+              auditId: 'audit-1',
+              inferenceId: 'inference-1',
+              toolCallDigest: 'sha256:tool-call-1',
+              createdAt: '2026-05-01T07:00:00.000Z',
+              kind: 'contextSufficiencyState',
+              contextSufficiencyState: {
+                stateId: 'context-state-001',
+                obligationId: 'required-context-001',
+                toolCallDigest: 'sha256:tool-call-1',
+                promptAssemblyManifestId: 'manifest-001',
+                inferenceId: 'inference-1',
+                state: 'RegroundRequired',
+                sufficient: false,
+                evaluatedAt: '2026-05-01T07:00:00.000Z',
+                requiredAnchorIds: ['anchor-user-instruction'],
+                coveredAnchorIds: [],
+                blockedAnchorIds: ['anchor-user-instruction'],
+                missingAnchorIds: ['anchor-user-instruction'],
+                staleAnchorIds: [],
+                conflictingAnchorIds: [],
+                contaminatedAnchorIds: [],
+                verbatimAnchorIds: [],
+                certifiedSummaryAnchorIds: [],
+                retrievableReferenceAnchorIds: [],
+                transitionReason: 'Latest user instruction was omitted from the prompt.',
+              },
+            },
+          ],
+        });
+      },
+    });
+
+    assert.deepEqual(
+      await listContextEvidence(
+        {
+          requestId: 'req-1',
+          auditId: 'audit-1',
+          inferenceId: 'inference-1',
+          toolCallDigest: 'sha256:tool-call-1',
+          kind: 'contextSufficiencyState',
+        },
+        client,
+      ),
+      [
+        {
+          id: 'context-state-001',
+          requestId: 'req-1',
+          auditId: 'audit-1',
+          inferenceId: 'inference-1',
+          toolCallDigest: 'sha256:tool-call-1',
+          createdAt: '2026-05-01T07:00:00.000Z',
+          kind: 'contextSufficiencyState',
+          contextSufficiencyState: {
+            stateId: 'context-state-001',
+            obligationId: 'required-context-001',
+            toolCallDigest: 'sha256:tool-call-1',
+            promptAssemblyManifestId: 'manifest-001',
+            inferenceId: 'inference-1',
+            state: 'RegroundRequired',
+            sufficient: false,
+            evaluatedAt: '2026-05-01T07:00:00.000Z',
+            requiredAnchorIds: ['anchor-user-instruction'],
+            coveredAnchorIds: [],
+            blockedAnchorIds: ['anchor-user-instruction'],
+            missingAnchorIds: ['anchor-user-instruction'],
+            staleAnchorIds: [],
+            conflictingAnchorIds: [],
+            contaminatedAnchorIds: [],
+            verbatimAnchorIds: [],
+            certifiedSummaryAnchorIds: [],
+            retrievableReferenceAnchorIds: [],
+            transitionReason: 'Latest user instruction was omitted from the prompt.',
+          },
         },
       ],
     );
