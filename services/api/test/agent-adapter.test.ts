@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { Environment, ToolType } from "@agent-safety-gateway/shared";
+import { isPromptAssemblyManifest } from "@agent-safety-gateway/shared/context-retention";
 
 import { createDeterministicAgentAdapter } from "../src/agent-adapter.js";
 
@@ -21,6 +22,10 @@ describe("deterministic agent adapter", () => {
     const output = await adaptSampleTask("sql-delete-pending-orders");
 
     assert.equal(output.request.id, "req-agent-task-sql-delete-pending-orders");
+    assert.equal(
+      output.request.rawPayload.inferenceId,
+      "inference-agent-task-sql-delete-pending-orders",
+    );
     assert.equal(output.request.toolType, ToolType.Sql);
     assert.equal(output.request.environment, Environment.Production);
     assert.equal(
@@ -30,6 +35,35 @@ describe("deterministic agent adapter", () => {
     assert.equal(output.request.rawPayload.database, "orders-prod");
     assert.equal(output.request.rawPayload.agentOutput, output.agentOutput);
     assert.match(String(output.request.rawPayload.sourceTaskExcerpt), /清理待支付订单/);
+  });
+
+  it("binds the ToolCallRequest and PromptAssemblyManifest to one inference", async () => {
+    const output = await adaptSampleTask("sql-delete-pending-orders");
+    const sourceTaskDigest = output.request.rawPayload.sourceTaskDigest;
+
+    assert.equal(output.inferenceId, output.promptAssemblyManifest.inferenceId);
+    assert.equal(output.request.rawPayload.inferenceId, output.inferenceId);
+    assert.equal(
+      output.promptAssemblyManifest.manifestId,
+      "prompt-manifest-agent-task-sql-delete-pending-orders",
+    );
+    assert.equal(output.promptAssemblyManifest.modelId, "deterministic-agent-adapter-v1");
+    assert.equal(isPromptAssemblyManifest(output.promptAssemblyManifest), true);
+    assert.equal(typeof sourceTaskDigest, "string");
+    assert.match(sourceTaskDigest, /^sha256:[0-9a-f]{64}$/);
+    assert.equal(
+      output.promptAssemblyManifest.contextUnitDigests[0]?.contextUnitId,
+      "ctx-source-task-sql-delete-pending-orders",
+    );
+    assert.equal(output.promptAssemblyManifest.contextUnitDigests[0]?.digest, sourceTaskDigest);
+    assert.deepEqual(output.promptAssemblyManifest.contextUnitOrder, [
+      "ctx-source-task-sql-delete-pending-orders",
+      "ctx-agent-output-sql-delete-pending-orders",
+      "ctx-tool-call-template-sql-delete-pending-orders",
+    ]);
+    assert.deepEqual(output.promptAssemblyManifest.retrievedDocumentDigests, [
+      sourceTaskDigest,
+    ]);
   });
 
   it("converts the SQL read-only task into a bounded SELECT ToolCallRequest", async () => {
@@ -108,9 +142,31 @@ describe("deterministic agent adapter", () => {
     });
 
     assert.equal(output.request.id, "req-custom");
+    assert.equal(output.inferenceId, "inference-custom");
+    assert.equal(output.request.rawPayload.inferenceId, output.inferenceId);
     assert.equal(output.request.actor, "agent:test-adapter");
     assert.equal(output.request.createdAt, "2026-04-28T09:00:00.000Z");
     assert.equal(output.source.taskId, "sql-delete-pending-orders");
+  });
+
+  it("allows tests to override the deterministic inference id", async () => {
+    const output = await createDeterministicAgentAdapter().adaptTask({
+      taskId: "sql-readonly-pending-orders",
+      requestId: "req-readonly-custom",
+      inferenceId: "inference-readonly-custom",
+      taskContent: "# Agent 任务：统计待支付订单",
+    });
+
+    assert.equal(output.inferenceId, "inference-readonly-custom");
+    assert.equal(output.request.rawPayload.inferenceId, "inference-readonly-custom");
+    assert.equal(
+      output.promptAssemblyManifest.inferenceId,
+      "inference-readonly-custom",
+    );
+    assert.equal(
+      output.promptAssemblyManifest.manifestId,
+      "prompt-manifest-readonly-custom",
+    );
   });
 
   it("returns a clear error for unknown local task samples", async () => {
