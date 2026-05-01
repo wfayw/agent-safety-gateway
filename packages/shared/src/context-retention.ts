@@ -495,6 +495,54 @@ export type ContextRetentionEvidenceMatcherInput = {
   taintedAnchorIds?: readonly ContextAnchorId[];
 };
 
+export const ContextSufficiencyStateName = {
+  Sufficient: "Sufficient",
+  SufficientByCertifiedSummary: "SufficientByCertifiedSummary",
+  RegroundRequired: "RegroundRequired",
+  ReapprovalRequired: "ReapprovalRequired",
+  Stale: "Stale",
+  Conflicting: "Conflicting",
+  Contaminated: "Contaminated",
+  Insufficient: "Insufficient",
+} as const;
+
+export type ContextSufficiencyStateName =
+  (typeof ContextSufficiencyStateName)[keyof typeof ContextSufficiencyStateName];
+
+export const ContextSufficiencyStateNameValues = Object.values(
+  ContextSufficiencyStateName,
+) as ContextSufficiencyStateName[];
+
+export type ContextSufficiencyState = {
+  stateId: ContextSufficiencyStateId;
+  obligationId: RequiredContextObligationId;
+  toolCallDigest: PatentProofHash;
+  promptAssemblyManifestId: PromptAssemblyManifestId | null;
+  inferenceId: ContextRetentionRunId | null;
+  state: ContextSufficiencyStateName;
+  sufficient: boolean;
+  evaluatedAt: ContextRetentionTimestamp;
+  requiredAnchorIds: readonly ContextAnchorId[];
+  coveredAnchorIds: readonly ContextAnchorId[];
+  blockedAnchorIds: readonly ContextAnchorId[];
+  missingAnchorIds: readonly ContextAnchorId[];
+  staleAnchorIds: readonly ContextAnchorId[];
+  conflictingAnchorIds: readonly ContextAnchorId[];
+  contaminatedAnchorIds: readonly ContextAnchorId[];
+  verbatimAnchorIds: readonly ContextAnchorId[];
+  certifiedSummaryAnchorIds: readonly ContextAnchorId[];
+  retrievableReferenceAnchorIds: readonly ContextAnchorId[];
+  transitionReason: string;
+};
+
+export type ContextSufficiencyStateEvaluationInput = {
+  obligation: RequiredContextObligation;
+  evidence: readonly ContextRetentionEvidence[];
+  anchors: readonly ContextAnchor[];
+  evaluatedAt: ContextRetentionTimestamp;
+  stateId?: ContextSufficiencyStateId;
+};
+
 export type ContextRetentionRuleEvaluation = {
   staleAnchorIds: readonly ContextAnchorId[];
   conflictingAnchorIds: readonly ContextAnchorId[];
@@ -4330,6 +4378,298 @@ export const matchContextRetentionEvidence = (
   });
 };
 
+const positiveContextRetentionModes = new Set<ContextRetentionMode>([
+  ContextRetentionMode.Verbatim,
+  ContextRetentionMode.CertifiedSummary,
+  ContextRetentionMode.RetrievableReference,
+]);
+
+const isPositiveContextRetentionMode = (
+  retentionMode: ContextRetentionMode,
+): boolean => positiveContextRetentionModes.has(retentionMode);
+
+const isContextRetentionEvidenceCovered = (
+  evidence: ContextRetentionEvidence | undefined,
+): boolean =>
+  evidence !== undefined &&
+  isPositiveContextRetentionMode(evidence.retentionMode) &&
+  evidence.coverageScore >= 1 &&
+  evidence.freshnessScore > 0 &&
+  evidence.trustScore > 0 &&
+  evidence.conflictEvidence.length === 0;
+
+const isContextRetentionEvidenceMissing = (
+  evidence: ContextRetentionEvidence | undefined,
+): boolean =>
+  evidence === undefined ||
+  evidence.retentionMode === ContextRetentionMode.Missing ||
+  evidence.coverageScore < 1;
+
+const isContextRetentionEvidenceStale = (
+  evidence: ContextRetentionEvidence | undefined,
+): boolean =>
+  evidence !== undefined &&
+  (evidence.retentionMode === ContextRetentionMode.Stale ||
+    evidence.freshnessScore <= 0);
+
+const isContextRetentionEvidenceConflicting = (
+  evidence: ContextRetentionEvidence | undefined,
+): boolean =>
+  evidence !== undefined &&
+  (evidence.retentionMode === ContextRetentionMode.Conflicting ||
+    evidence.conflictEvidence.length > 0);
+
+const isContextRetentionEvidenceContaminated = (
+  evidence: ContextRetentionEvidence | undefined,
+): boolean =>
+  evidence !== undefined &&
+  (evidence.retentionMode === ContextRetentionMode.Tainted ||
+    evidence.trustScore <= 0);
+
+const getContextSufficiencyStateId = (
+  obligation: RequiredContextObligation,
+  state: ContextSufficiencyStateName,
+  evaluatedAt: ContextRetentionTimestamp,
+): ContextSufficiencyStateId =>
+  `css:${contextRetentionSlug(obligation.obligationId)}:${contextRetentionSlug(
+    state,
+  )}:${evaluatedAt}`;
+
+const createContextSufficiencyEvidenceMap = (
+  obligation: RequiredContextObligation,
+  evidence: readonly ContextRetentionEvidence[],
+): ReadonlyMap<ContextAnchorId, ContextRetentionEvidence> => {
+  const requiredAnchorIds = new Set(obligation.requiredAnchors);
+  const evidenceByAnchorId = new Map<ContextAnchorId, ContextRetentionEvidence>();
+
+  for (const item of evidence) {
+    if (
+      item.obligationId === obligation.obligationId &&
+      item.toolCallDigest === obligation.toolCallDigest &&
+      requiredAnchorIds.has(item.anchorId)
+    ) {
+      evidenceByAnchorId.set(item.anchorId, item);
+    }
+  }
+
+  return evidenceByAnchorId;
+};
+
+const getFirstContextSufficiencyEvidence = (
+  requiredAnchorIds: readonly ContextAnchorId[],
+  evidenceByAnchorId: ReadonlyMap<ContextAnchorId, ContextRetentionEvidence>,
+): ContextRetentionEvidence | undefined => {
+  for (const anchorId of requiredAnchorIds) {
+    const evidence = evidenceByAnchorId.get(anchorId);
+
+    if (evidence !== undefined) {
+      return evidence;
+    }
+  }
+
+  return undefined;
+};
+
+const getContextSufficiencyAnchorIds = (
+  requiredAnchorIds: readonly ContextAnchorId[],
+  evidenceByAnchorId: ReadonlyMap<ContextAnchorId, ContextRetentionEvidence>,
+  predicate: (evidence: ContextRetentionEvidence | undefined) => boolean,
+): readonly ContextAnchorId[] =>
+  requiredAnchorIds.filter((anchorId) =>
+    predicate(evidenceByAnchorId.get(anchorId)),
+  );
+
+const getContextSufficiencyRetainedAnchorIds = (
+  requiredAnchorIds: readonly ContextAnchorId[],
+  evidenceByAnchorId: ReadonlyMap<ContextAnchorId, ContextRetentionEvidence>,
+  retentionMode: RequiredContextMinimumRetentionMode,
+): readonly ContextAnchorId[] =>
+  requiredAnchorIds.filter(
+    (anchorId) =>
+      evidenceByAnchorId.get(anchorId)?.retentionMode === retentionMode,
+  );
+
+const isMissingVerbatimApprovalAnchor = (
+  anchorId: ContextAnchorId,
+  anchorsById: ReadonlyMap<ContextAnchorId, ContextAnchor>,
+  evidenceByAnchorId: ReadonlyMap<ContextAnchorId, ContextRetentionEvidence>,
+): boolean => {
+  const anchor = anchorsById.get(anchorId);
+  const evidence = evidenceByAnchorId.get(anchorId);
+
+  return (
+    anchor?.anchorType === ContextAnchorType.ApprovalNote &&
+    (anchor.mustBeVerbatim ||
+      evidence?.minimumRetentionMode === ContextRetentionMode.Verbatim) &&
+    evidence?.retentionMode !== ContextRetentionMode.Verbatim
+  );
+};
+
+const getContextSufficiencyMissingVerbatimApprovalAnchorIds = (
+  missingAnchorIds: readonly ContextAnchorId[],
+  anchorsById: ReadonlyMap<ContextAnchorId, ContextAnchor>,
+  evidenceByAnchorId: ReadonlyMap<ContextAnchorId, ContextRetentionEvidence>,
+): readonly ContextAnchorId[] =>
+  missingAnchorIds.filter((anchorId) =>
+    isMissingVerbatimApprovalAnchor(anchorId, anchorsById, evidenceByAnchorId),
+  );
+
+export const evaluateContextSufficiencyState = (
+  input: ContextSufficiencyStateEvaluationInput,
+): ContextSufficiencyState => {
+  const obligation = RequiredContextObligationSchema.parse(input.obligation);
+  const anchors = input.anchors.map((anchor) => ContextAnchorSchema.parse(anchor));
+  const anchorsById = new Map(
+    anchors.map((anchor) => [anchor.anchorId, anchor] as const),
+  );
+  const requiredAnchorIds = [...obligation.requiredAnchors];
+  const evidenceByAnchorId = createContextSufficiencyEvidenceMap(
+    obligation,
+    input.evidence,
+  );
+  const firstEvidence = getFirstContextSufficiencyEvidence(
+    requiredAnchorIds,
+    evidenceByAnchorId,
+  );
+  const coveredAnchorIds = getContextSufficiencyAnchorIds(
+    requiredAnchorIds,
+    evidenceByAnchorId,
+    isContextRetentionEvidenceCovered,
+  );
+  const missingAnchorIds = getContextSufficiencyAnchorIds(
+    requiredAnchorIds,
+    evidenceByAnchorId,
+    isContextRetentionEvidenceMissing,
+  );
+  const staleAnchorIds = getContextSufficiencyAnchorIds(
+    requiredAnchorIds,
+    evidenceByAnchorId,
+    isContextRetentionEvidenceStale,
+  );
+  const conflictingAnchorIds = getContextSufficiencyAnchorIds(
+    requiredAnchorIds,
+    evidenceByAnchorId,
+    isContextRetentionEvidenceConflicting,
+  );
+  const contaminatedAnchorIds = getContextSufficiencyAnchorIds(
+    requiredAnchorIds,
+    evidenceByAnchorId,
+    isContextRetentionEvidenceContaminated,
+  );
+  const blockedAnchorIds = getContextSufficiencyAnchorIds(
+    requiredAnchorIds,
+    evidenceByAnchorId,
+    (evidence) => !isContextRetentionEvidenceCovered(evidence),
+  );
+  const missingVerbatimApprovalAnchorIds =
+    getContextSufficiencyMissingVerbatimApprovalAnchorIds(
+      missingAnchorIds,
+      anchorsById,
+      evidenceByAnchorId,
+    );
+  const verbatimAnchorIds = getContextSufficiencyRetainedAnchorIds(
+    requiredAnchorIds,
+    evidenceByAnchorId,
+    ContextRetentionMode.Verbatim,
+  );
+  const certifiedSummaryAnchorIds = getContextSufficiencyRetainedAnchorIds(
+    requiredAnchorIds,
+    evidenceByAnchorId,
+    ContextRetentionMode.CertifiedSummary,
+  );
+  const retrievableReferenceAnchorIds = getContextSufficiencyRetainedAnchorIds(
+    requiredAnchorIds,
+    evidenceByAnchorId,
+    ContextRetentionMode.RetrievableReference,
+  );
+  const hasAllRequiredAnchorsCovered =
+    requiredAnchorIds.length > 0 && blockedAnchorIds.length === 0;
+  const hasCertifiedOrReferenceRetention =
+    certifiedSummaryAnchorIds.length > 0 || retrievableReferenceAnchorIds.length > 0;
+
+  let state: ContextSufficiencyStateName;
+  let transitionReason: string;
+
+  if (contaminatedAnchorIds.length > 0) {
+    state = ContextSufficiencyStateName.Contaminated;
+    transitionReason = "one or more required context anchors are tainted";
+  } else if (conflictingAnchorIds.length > 0) {
+    state = ContextSufficiencyStateName.Conflicting;
+    transitionReason = "one or more required context anchors have conflicting evidence";
+  } else if (staleAnchorIds.length > 0) {
+    state = ContextSufficiencyStateName.Stale;
+    transitionReason = "one or more required context anchors are stale";
+  } else if (missingAnchorIds.length > 0) {
+    if (missingVerbatimApprovalAnchorIds.length > 0) {
+      if (
+        obligation.missingAnchorAction ===
+        RequiredContextMissingAnchorAction.Reapproval
+      ) {
+        state = ContextSufficiencyStateName.ReapprovalRequired;
+        transitionReason =
+          "required approval note is missing verbatim retention and policy requires reapproval";
+      } else {
+        state = ContextSufficiencyStateName.Insufficient;
+        transitionReason =
+          "required approval note is missing verbatim retention and policy denies continuation";
+      }
+    } else if (
+      obligation.missingAnchorAction === RequiredContextMissingAnchorAction.Reapproval
+    ) {
+      state = ContextSufficiencyStateName.ReapprovalRequired;
+      transitionReason =
+        "one or more required context anchors are missing and policy requires reapproval";
+    } else if (
+      obligation.missingAnchorAction === RequiredContextMissingAnchorAction.Reground ||
+      obligation.missingAnchorAction === RequiredContextMissingAnchorAction.RegroundOrDeny
+    ) {
+      state = ContextSufficiencyStateName.RegroundRequired;
+      transitionReason =
+        "one or more required context anchors are missing and policy allows regrounding";
+    } else {
+      state = ContextSufficiencyStateName.Insufficient;
+      transitionReason =
+        "one or more required context anchors are missing and policy denies continuation";
+    }
+  } else if (hasAllRequiredAnchorsCovered && hasCertifiedOrReferenceRetention) {
+    state = ContextSufficiencyStateName.SufficientByCertifiedSummary;
+    transitionReason =
+      "all required context anchors are covered by certified summary or retrievable reference retention";
+  } else if (hasAllRequiredAnchorsCovered) {
+    state = ContextSufficiencyStateName.Sufficient;
+    transitionReason = "all required context anchors are retained verbatim";
+  } else {
+    state = ContextSufficiencyStateName.Insufficient;
+    transitionReason = "required context anchors are not sufficiently retained";
+  }
+
+  return {
+    stateId:
+      input.stateId ??
+      getContextSufficiencyStateId(obligation, state, input.evaluatedAt),
+    obligationId: obligation.obligationId,
+    toolCallDigest: obligation.toolCallDigest,
+    promptAssemblyManifestId: firstEvidence?.promptAssemblyManifestId ?? null,
+    inferenceId: firstEvidence?.inferenceId ?? null,
+    state,
+    sufficient:
+      state === ContextSufficiencyStateName.Sufficient ||
+      state === ContextSufficiencyStateName.SufficientByCertifiedSummary,
+    evaluatedAt: input.evaluatedAt,
+    requiredAnchorIds,
+    coveredAnchorIds,
+    blockedAnchorIds,
+    missingAnchorIds,
+    staleAnchorIds,
+    conflictingAnchorIds,
+    contaminatedAnchorIds,
+    verbatimAnchorIds,
+    certifiedSummaryAnchorIds,
+    retrievableReferenceAnchorIds,
+    transitionReason,
+  };
+};
+
 export const ContextRetentionDomain = {
   name: ContextRetentionDomainName,
   stateMachine: "context-sufficiency",
@@ -4337,5 +4677,6 @@ export const ContextRetentionDomain = {
   obligation: "RequiredContextObligation",
   manifest: "PromptAssemblyManifest",
   evidence: "ContextRetentionEvidence",
+  sufficiencyState: "ContextSufficiencyState",
   permitExit: "PermitDecision",
 } as const;
