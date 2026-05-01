@@ -489,6 +489,65 @@ export type SqlForbiddenEffectObligationCompilation = {
   obligations: readonly ForbiddenEffectObligation[];
 };
 
+export const CiCdForbiddenEffectOperation = {
+  Deploy: "deploy",
+  Release: "release",
+  Promote: "promote",
+  Rollback: "rollback",
+  Unknown: "unknown",
+} as const;
+
+export type CiCdForbiddenEffectOperation =
+  (typeof CiCdForbiddenEffectOperation)[keyof typeof CiCdForbiddenEffectOperation];
+
+export const CiCdPipelineTestStatus = {
+  Passed: "passed",
+  Failed: "failed",
+  Unknown: "unknown",
+  Missing: "missing",
+} as const;
+
+export type CiCdPipelineTestStatus =
+  (typeof CiCdPipelineTestStatus)[keyof typeof CiCdPipelineTestStatus];
+
+export const CiCdForbiddenEffectObligationKind = {
+  ProductionDeploy: "production_deploy",
+  ExternalWebhook: "external_webhook",
+  ArtifactPromotion: "artifact_promotion",
+  EnvironmentMutation: "environment_mutation",
+  NoRealDeploy: "no_real_deploy",
+  TestsNotPassed: "tests_not_passed",
+} as const;
+
+export type CiCdForbiddenEffectObligationKind =
+  (typeof CiCdForbiddenEffectObligationKind)[keyof typeof CiCdForbiddenEffectObligationKind];
+
+export type CiCdForbiddenEffectObligationCompilerInput = {
+  operation?: string;
+  service?: string;
+  pipeline?: string;
+  version?: string;
+  requestId?: string;
+  requestHash?: PatentProofHash;
+  environment?: ForbiddenEffectEnvironment;
+  targetEnvironment?: ForbiddenEffectEnvironment;
+  requiredExecutionMode?: string;
+  dryRun?: boolean;
+  testStatus?: string;
+  resourceScope?: readonly string[];
+  createdAt?: ForbiddenSideEffectTimestamp;
+};
+
+export type CiCdForbiddenEffectObligationCompilation = {
+  operation: CiCdForbiddenEffectOperation;
+  resourceScope: readonly string[];
+  targetEnvironment: ForbiddenEffectEnvironment;
+  dryRun: boolean;
+  testStatus: CiCdPipelineTestStatus;
+  failClosed: boolean;
+  obligations: readonly ForbiddenEffectObligation[];
+};
+
 export type ForbiddenEffectObligationValidationIssue = {
   path: string;
   code: string;
@@ -2912,6 +2971,401 @@ export const compileSqlForbiddenEffectObligations = (
         resourceScope,
       ),
     ],
+  };
+};
+
+
+const CiCdUnresolvedResourceScope = "unresolved_cicd_release";
+
+const cicdOperationByKeyword: Record<string, CiCdForbiddenEffectOperation> = {
+  deploy: CiCdForbiddenEffectOperation.Deploy,
+  deployment: CiCdForbiddenEffectOperation.Deploy,
+  release: CiCdForbiddenEffectOperation.Release,
+  promote: CiCdForbiddenEffectOperation.Promote,
+  promotion: CiCdForbiddenEffectOperation.Promote,
+  rollback: CiCdForbiddenEffectOperation.Rollback,
+};
+
+const cicdProductionOperations = new Set<CiCdForbiddenEffectOperation>([
+  CiCdForbiddenEffectOperation.Deploy,
+  CiCdForbiddenEffectOperation.Release,
+  CiCdForbiddenEffectOperation.Promote,
+  CiCdForbiddenEffectOperation.Rollback,
+]);
+
+const normalizeCiCdCompilerKeyword = (value: string | undefined): string =>
+  (value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+const getCiCdCompilerOperation = (
+  input: CiCdForbiddenEffectObligationCompilerInput,
+): CiCdForbiddenEffectOperation => {
+  const normalizedOperation = normalizeCiCdCompilerKeyword(input.operation);
+
+  if (normalizedOperation.length > 0) {
+    return (
+      cicdOperationByKeyword[normalizedOperation] ??
+      CiCdForbiddenEffectOperation.Unknown
+    );
+  }
+
+  const normalizedExecutionMode = normalizeCiCdCompilerKeyword(
+    input.requiredExecutionMode,
+  );
+
+  if (
+    normalizedExecutionMode.includes("deploy") ||
+    normalizedExecutionMode.includes("deployment")
+  ) {
+    return CiCdForbiddenEffectOperation.Deploy;
+  }
+
+  if (normalizedExecutionMode.includes("release")) {
+    return CiCdForbiddenEffectOperation.Release;
+  }
+
+  if (normalizedExecutionMode.includes("promote")) {
+    return CiCdForbiddenEffectOperation.Promote;
+  }
+
+  if (normalizedExecutionMode.includes("rollback")) {
+    return CiCdForbiddenEffectOperation.Rollback;
+  }
+
+  return CiCdForbiddenEffectOperation.Unknown;
+};
+
+const getCiCdCompilerTestStatus = (
+  testStatus: string | undefined,
+): CiCdPipelineTestStatus => {
+  const normalizedStatus = normalizeCiCdCompilerKeyword(testStatus);
+
+  if (normalizedStatus.length === 0) {
+    return CiCdPipelineTestStatus.Missing;
+  }
+
+  if (["pass", "passed", "success", "succeeded"].includes(normalizedStatus)) {
+    return CiCdPipelineTestStatus.Passed;
+  }
+
+  if (["fail", "failed", "failure", "errored", "error"].includes(normalizedStatus)) {
+    return CiCdPipelineTestStatus.Failed;
+  }
+
+  return CiCdPipelineTestStatus.Unknown;
+};
+
+const isCiCdDryRunExecutionMode = (requiredExecutionMode: string | undefined) =>
+  normalizeCiCdCompilerKeyword(requiredExecutionMode).includes("dry_run") ||
+  normalizeCiCdCompilerKeyword(requiredExecutionMode).includes("dryrun");
+
+const normalizeCiCdCompilerScopeValue = (value: string): string =>
+  value.trim().replace(/\s+/g, " ");
+
+const uniqueCiCdCompilerStrings = (values: readonly string[]): string[] => {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  values.forEach((value) => {
+    if (!seen.has(value)) {
+      seen.add(value);
+      result.push(value);
+    }
+  });
+
+  return result;
+};
+
+const getCiCdCompilerResourceScope = (
+  input: CiCdForbiddenEffectObligationCompilerInput,
+  targetEnvironment: ForbiddenEffectEnvironment,
+): string[] => {
+  const explicitResourceScope = uniqueCiCdCompilerStrings(
+    (input.resourceScope ?? [])
+      .map(normalizeCiCdCompilerScopeValue)
+      .filter((value) => value.length > 0),
+  );
+
+  if (explicitResourceScope.length > 0) {
+    return explicitResourceScope;
+  }
+
+  const inferredResourceScope = uniqueCiCdCompilerStrings(
+    [input.service, input.pipeline, targetEnvironment]
+      .filter((value): value is string => value !== undefined)
+      .map(normalizeCiCdCompilerScopeValue)
+      .filter((value) => value.length > 0),
+  );
+
+  return inferredResourceScope.length > 0
+    ? inferredResourceScope
+    : [CiCdUnresolvedResourceScope];
+};
+
+const toCiCdCompilerSlug = (value: string): string =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 72) || "unknown";
+
+type CiCdObligationBuildOptions = {
+  input: CiCdForbiddenEffectObligationCompilerInput;
+  kind: CiCdForbiddenEffectObligationKind;
+  resourceScope: readonly string[];
+  targetEnvironment: ForbiddenEffectEnvironment;
+  severity: ForbiddenEffectSeverity;
+  requiredEvidenceTypes: readonly ForbiddenEffectEvidenceType[];
+  failClosedAction?: ForbiddenEffectFailClosedAction;
+  requiredExecutionMode: string;
+  forbiddenCapabilities: readonly string[];
+  forbiddenEffects: readonly string[];
+};
+
+const createCiCdForbiddenEffectObligation = ({
+  input,
+  kind,
+  resourceScope,
+  targetEnvironment,
+  severity,
+  requiredEvidenceTypes,
+  failClosedAction,
+  requiredExecutionMode,
+  forbiddenCapabilities,
+  forbiddenEffects,
+}: CiCdObligationBuildOptions): ForbiddenEffectObligation => {
+  const requestScopeKey = [
+    input.operation,
+    input.service,
+    input.pipeline,
+    input.version,
+  ]
+    .filter((value): value is string => value !== undefined)
+    .join("-");
+  const requestKey = (input.requestId ?? input.requestHash ?? requestScopeKey) || kind;
+  const obligation: ForbiddenEffectObligation = {
+    obligationId: `feo-cicd-${toCiCdCompilerSlug(requestKey)}-${kind}-${toCiCdCompilerSlug(
+      resourceScope.join("-"),
+    )}`,
+    effectType: ForbiddenEffectType.CiCd,
+    resourceScope,
+    environment: targetEnvironment,
+    severity,
+    requiredEvidenceTypes,
+    failClosedAction: failClosedAction ?? ForbiddenEffectFailClosedAction.DenyPermit,
+    requiredExecutionMode,
+    executorType: ForbiddenEffectType.CiCd,
+    forbiddenCapabilities,
+    forbiddenEffects,
+  };
+
+  if (input.requestHash !== undefined) {
+    obligation.requestHash = input.requestHash;
+  }
+
+  if (input.createdAt !== undefined) {
+    obligation.createdAt = input.createdAt;
+  }
+
+  return obligation;
+};
+
+const buildProductionCiCdForbiddenEffectObligations = (
+  input: CiCdForbiddenEffectObligationCompilerInput,
+  resourceScope: readonly string[],
+  targetEnvironment: ForbiddenEffectEnvironment,
+): ForbiddenEffectObligation[] => [
+  createCiCdForbiddenEffectObligation({
+    input,
+    kind: CiCdForbiddenEffectObligationKind.ProductionDeploy,
+    resourceScope,
+    targetEnvironment,
+    severity: ForbiddenEffectSeverity.Critical,
+    requiredEvidenceTypes: [
+      ForbiddenEffectEvidenceType.ProductionDeployDenial,
+    ],
+    requiredExecutionMode: input.requiredExecutionMode ?? "production_deploy_guarded",
+    forbiddenCapabilities: ["production_deploy", "deploy_endpoint_call"],
+    forbiddenEffects: ["production_deploy", "deployment_state_change"],
+  }),
+  createCiCdForbiddenEffectObligation({
+    input,
+    kind: CiCdForbiddenEffectObligationKind.ExternalWebhook,
+    resourceScope,
+    targetEnvironment,
+    severity: ForbiddenEffectSeverity.High,
+    requiredEvidenceTypes: [
+      ForbiddenEffectEvidenceType.ExternalWebhookDenial,
+      ForbiddenEffectEvidenceType.NoExternalSideEffect,
+    ],
+    requiredExecutionMode: input.requiredExecutionMode ?? "production_deploy_guarded",
+    forbiddenCapabilities: ["external_webhook", "webhook_dispatch"],
+    forbiddenEffects: ["external_webhook", "external_side_effect"],
+  }),
+  createCiCdForbiddenEffectObligation({
+    input,
+    kind: CiCdForbiddenEffectObligationKind.ArtifactPromotion,
+    resourceScope,
+    targetEnvironment,
+    severity: ForbiddenEffectSeverity.Critical,
+    requiredEvidenceTypes: [
+      ForbiddenEffectEvidenceType.ArtifactPromotionDenial,
+    ],
+    requiredExecutionMode: input.requiredExecutionMode ?? "production_deploy_guarded",
+    forbiddenCapabilities: ["artifact_promotion", "artifact_registry_write"],
+    forbiddenEffects: ["artifact_promotion", "artifact_registry_mutation"],
+  }),
+  createCiCdForbiddenEffectObligation({
+    input,
+    kind: CiCdForbiddenEffectObligationKind.EnvironmentMutation,
+    resourceScope,
+    targetEnvironment,
+    severity: ForbiddenEffectSeverity.Critical,
+    requiredEvidenceTypes: [
+      ForbiddenEffectEvidenceType.ProductionNamespaceWriteDenial,
+      ForbiddenEffectEvidenceType.ProductionCredentialUseDenial,
+      ForbiddenEffectEvidenceType.ProductionWriteEndpointAccessDenial,
+    ],
+    requiredExecutionMode: input.requiredExecutionMode ?? "production_deploy_guarded",
+    forbiddenCapabilities: [
+      "environment_mutation",
+      "production_namespace_write",
+      "production_credential_use",
+      "production_write_endpoint_access",
+    ],
+    forbiddenEffects: ["environment_mutation", "production_state_change"],
+  }),
+];
+
+const buildNoRealDeployCiCdForbiddenEffectObligation = (
+  input: CiCdForbiddenEffectObligationCompilerInput,
+  resourceScope: readonly string[],
+  targetEnvironment: ForbiddenEffectEnvironment,
+): ForbiddenEffectObligation =>
+  createCiCdForbiddenEffectObligation({
+    input,
+    kind: CiCdForbiddenEffectObligationKind.NoRealDeploy,
+    resourceScope,
+    targetEnvironment,
+    severity: ForbiddenEffectSeverity.Critical,
+    requiredEvidenceTypes: [
+      ForbiddenEffectEvidenceType.ProductionDeployDenial,
+      ForbiddenEffectEvidenceType.ExternalWebhookDenial,
+      ForbiddenEffectEvidenceType.ArtifactPromotionDenial,
+      ForbiddenEffectEvidenceType.ProductionNamespaceWriteDenial,
+      ForbiddenEffectEvidenceType.NoExternalSideEffect,
+    ],
+    requiredExecutionMode: input.requiredExecutionMode ?? "dry_run",
+    forbiddenCapabilities: [
+      "real_deploy",
+      "production_deploy",
+      "deploy_endpoint_call",
+      "external_webhook",
+      "artifact_promotion",
+      "environment_mutation",
+    ],
+    forbiddenEffects: [
+      "production_deploy",
+      "external_webhook",
+      "artifact_promotion",
+      "environment_mutation",
+    ],
+  });
+
+const buildTestsNotPassedCiCdForbiddenEffectObligation = (
+  input: CiCdForbiddenEffectObligationCompilerInput,
+  resourceScope: readonly string[],
+  targetEnvironment: ForbiddenEffectEnvironment,
+  testStatus: CiCdPipelineTestStatus,
+): ForbiddenEffectObligation =>
+  createCiCdForbiddenEffectObligation({
+    input,
+    kind: CiCdForbiddenEffectObligationKind.TestsNotPassed,
+    resourceScope,
+    targetEnvironment,
+    severity: ForbiddenEffectSeverity.Critical,
+    requiredEvidenceTypes: [
+      ForbiddenEffectEvidenceType.ProductionDeployDenial,
+      ForbiddenEffectEvidenceType.ExternalWebhookDenial,
+      ForbiddenEffectEvidenceType.ArtifactPromotionDenial,
+      ForbiddenEffectEvidenceType.ProductionNamespaceWriteDenial,
+    ],
+    requiredExecutionMode: "fail_closed",
+    forbiddenCapabilities: [
+      testStatus === CiCdPipelineTestStatus.Failed
+        ? "deploy_with_failed_tests"
+        : "deploy_with_unverified_tests",
+      "production_deploy",
+      "external_webhook",
+      "artifact_promotion",
+      "environment_mutation",
+    ],
+    forbiddenEffects: [
+      "production_deploy_without_passing_tests",
+      "external_webhook",
+      "artifact_promotion",
+      "environment_mutation",
+    ],
+  });
+
+export const compileCiCdForbiddenEffectObligations = (
+  input: CiCdForbiddenEffectObligationCompilerInput,
+): CiCdForbiddenEffectObligationCompilation => {
+  const operation = getCiCdCompilerOperation(input);
+  const targetEnvironment =
+    input.targetEnvironment ??
+    input.environment ??
+    ForbiddenEffectEnvironment.Production;
+  const resourceScope = getCiCdCompilerResourceScope(input, targetEnvironment);
+  const dryRun = input.dryRun ?? isCiCdDryRunExecutionMode(input.requiredExecutionMode);
+  const testStatus = getCiCdCompilerTestStatus(input.testStatus);
+  const isProductionRelease =
+    targetEnvironment === ForbiddenEffectEnvironment.Production &&
+    cicdProductionOperations.has(operation);
+  const obligations: ForbiddenEffectObligation[] = [];
+
+  if (isProductionRelease && dryRun) {
+    obligations.push(
+      buildNoRealDeployCiCdForbiddenEffectObligation(
+        input,
+        resourceScope,
+        targetEnvironment,
+      ),
+    );
+  } else if (isProductionRelease) {
+    obligations.push(
+      ...buildProductionCiCdForbiddenEffectObligations(
+        input,
+        resourceScope,
+        targetEnvironment,
+      ),
+    );
+  }
+
+  if (isProductionRelease && testStatus !== CiCdPipelineTestStatus.Passed) {
+    obligations.push(
+      buildTestsNotPassedCiCdForbiddenEffectObligation(
+        input,
+        resourceScope,
+        targetEnvironment,
+        testStatus,
+      ),
+    );
+  }
+
+  return {
+    operation,
+    resourceScope,
+    targetEnvironment,
+    dryRun,
+    testStatus,
+    failClosed:
+      operation === CiCdForbiddenEffectOperation.Unknown ||
+      (isProductionRelease && testStatus !== CiCdPipelineTestStatus.Passed),
+    obligations,
   };
 };
 
