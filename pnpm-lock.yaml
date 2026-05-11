@@ -14,6 +14,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@agent-safety-gateway/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       antd:
         specifier: ^6.0.0
         version: 6.3.7(react-dom@19.2.5(react@19.2.5))(react@19.2.5)

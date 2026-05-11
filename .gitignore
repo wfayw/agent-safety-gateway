@@ -2,6 +2,7 @@ node_modules/
 dist/
 coverage/
 .data/
+.data-backups/
 .local/
 docs/evidence/local-start/
 
