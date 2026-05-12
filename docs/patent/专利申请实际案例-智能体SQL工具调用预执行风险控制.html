@@ -1,0 +1,1123 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>智能体工具调用预执行风险控制通用演示</title>
+    <link rel="icon" href="data:," />
+    <style>
+      :root {
+        --bg: #f6f8fb;
+        --surface: #ffffff;
+        --surface-2: #eef3f8;
+        --text: #172033;
+        --muted: #5a667a;
+        --line: #d8e0ea;
+        --blue: #1f6feb;
+        --blue-soft: #e8f1ff;
+        --red: #c2412f;
+        --red-soft: #fff0ed;
+        --green: #1f7a4d;
+        --green-soft: #e9f8ef;
+        --amber: #a65f00;
+        --amber-soft: #fff5df;
+        --teal: #087b83;
+        --teal-soft: #e6f7f8;
+        --shadow: 0 10px 30px rgba(23, 32, 51, 0.08);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          "PingFang SC",
+          "Microsoft YaHei",
+          sans-serif;
+        line-height: 1.5;
+      }
+
+      button,
+      input,
+      select,
+      textarea {
+        font: inherit;
+      }
+
+      .page {
+        min-height: 100vh;
+      }
+
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        border-bottom: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.94);
+        backdrop-filter: blur(8px);
+      }
+
+      .topbar-inner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+        max-width: 1280px;
+        margin: 0 auto;
+        padding: 14px 24px;
+      }
+
+      .brand {
+        min-width: 280px;
+      }
+
+      .brand-title {
+        margin: 0;
+        font-size: 18px;
+        font-weight: 700;
+      }
+
+      .brand-subtitle {
+        margin: 2px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .scenario-switch {
+        display: inline-flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 4px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface-2);
+      }
+
+      .scenario-button {
+        min-height: 36px;
+        border: 0;
+        border-radius: 6px;
+        padding: 0 14px;
+        color: var(--muted);
+        background: transparent;
+        cursor: pointer;
+      }
+
+      .scenario-button[aria-pressed="true"] {
+        color: #ffffff;
+        background: var(--blue);
+      }
+
+      .content {
+        max-width: 1280px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+
+      .summary-band {
+        display: grid;
+        grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.7fr);
+        gap: 16px;
+        align-items: stretch;
+        margin-bottom: 18px;
+      }
+
+      .section {
+        margin: 18px 0;
+      }
+
+      .section-title {
+        margin: 0 0 10px;
+        font-size: 18px;
+        font-weight: 700;
+      }
+
+      .plain-panel,
+      .metric-panel,
+      .code-panel {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .plain-panel {
+        padding: 18px;
+      }
+
+      .metric-panel {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1px;
+        overflow: hidden;
+      }
+
+      .metric {
+        min-height: 92px;
+        padding: 16px;
+        background: var(--surface);
+      }
+
+      .metric-label {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .metric-value {
+        margin-top: 6px;
+        font-size: 24px;
+        font-weight: 760;
+      }
+
+      .metric-note {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .status-red {
+        color: var(--red);
+      }
+
+      .status-green {
+        color: var(--green);
+      }
+
+      .status-amber {
+        color: var(--amber);
+      }
+
+      .lead {
+        margin: 0;
+        color: var(--muted);
+      }
+
+      .patent-point {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 16px;
+      }
+
+      .point {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px;
+        background: #fbfcfe;
+      }
+
+      .point strong {
+        display: block;
+        margin-bottom: 4px;
+      }
+
+      .point span {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .grid-two {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 16px;
+      }
+
+      .code-panel {
+        overflow: hidden;
+      }
+
+      .panel-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        min-height: 44px;
+        padding: 0 14px;
+        border-bottom: 1px solid var(--line);
+        background: #fbfcfe;
+      }
+
+      .panel-title {
+        font-weight: 700;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        border-radius: 999px;
+        padding: 0 9px;
+        font-size: 12px;
+        font-weight: 650;
+      }
+
+      .pill-red {
+        color: var(--red);
+        background: var(--red-soft);
+      }
+
+      .pill-green {
+        color: var(--green);
+        background: var(--green-soft);
+      }
+
+      .pill-amber {
+        color: var(--amber);
+        background: var(--amber-soft);
+      }
+
+      pre {
+        margin: 0;
+        padding: 14px;
+        overflow: auto;
+        background: #111827;
+        color: #edf2f7;
+        font-size: 13px;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .flow {
+        display: grid;
+        grid-template-columns: repeat(8, minmax(110px, 1fr));
+        gap: 10px;
+        align-items: stretch;
+      }
+
+      .flow-step {
+        position: relative;
+        min-height: 94px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px;
+        background: var(--surface);
+      }
+
+      .flow-step::after {
+        content: "";
+        position: absolute;
+        top: 50%;
+        right: -11px;
+        width: 10px;
+        height: 2px;
+        background: var(--line);
+      }
+
+      .flow-step:last-child::after {
+        display: none;
+      }
+
+      .flow-index {
+        display: inline-grid;
+        place-items: center;
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        color: #ffffff;
+        background: var(--blue);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .flow-name {
+        margin-top: 8px;
+        font-weight: 700;
+      }
+
+      .flow-desc {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .graph-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1.4fr) minmax(320px, 0.6fr);
+        gap: 16px;
+      }
+
+      .graph-canvas {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+
+      .graph-head {
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--line);
+        background: #fbfcfe;
+      }
+
+      .graph-title {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 700;
+      }
+
+      .graph-subtitle {
+        margin: 2px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .graph-svg-wrap {
+        overflow-x: auto;
+      }
+
+      svg {
+        display: block;
+        min-width: 860px;
+        width: 100%;
+        height: auto;
+      }
+
+      .edge {
+        fill: none;
+        stroke: #9aa8ba;
+        stroke-width: 2;
+      }
+
+      .edge-risk {
+        stroke: var(--red);
+        stroke-width: 3;
+      }
+
+      .node rect {
+        stroke: #9aa8ba;
+        stroke-width: 1.5;
+        fill: #ffffff;
+      }
+
+      .node text {
+        fill: var(--text);
+        font-size: 13px;
+        font-weight: 650;
+      }
+
+      .node .node-subtitle {
+        fill: var(--muted);
+        font-size: 11px;
+        font-weight: 500;
+      }
+
+      .node-direct rect {
+        stroke: var(--red);
+        fill: var(--red-soft);
+      }
+
+      .node-read rect {
+        stroke: var(--green);
+        fill: var(--green-soft);
+      }
+
+      .node-indirect rect {
+        stroke: var(--amber);
+        fill: var(--amber-soft);
+      }
+
+      .node-guard rect {
+        stroke: var(--teal);
+        fill: var(--teal-soft);
+      }
+
+      .risk-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .risk-item {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px;
+        background: var(--surface);
+      }
+
+      .risk-item strong {
+        display: block;
+        margin-bottom: 4px;
+      }
+
+      .risk-item span {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .timeline {
+        display: grid;
+        gap: 10px;
+      }
+
+      .timeline-row {
+        display: grid;
+        grid-template-columns: 140px minmax(0, 1fr);
+        gap: 12px;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+      }
+
+      .timeline-time {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .timeline-text {
+        margin: 0;
+      }
+
+      .table-wrap {
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+      }
+
+      table {
+        width: 100%;
+        min-width: 720px;
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        padding: 11px 12px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        color: var(--muted);
+        background: #fbfcfe;
+        font-size: 13px;
+      }
+
+      tr:last-child td {
+        border-bottom: 0;
+      }
+
+      .footer-note {
+        margin: 22px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      @media (max-width: 1080px) {
+        .summary-band,
+        .graph-layout {
+          grid-template-columns: 1fr;
+        }
+
+        .flow {
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+        }
+
+        .flow-step:nth-child(4)::after,
+        .flow-step:nth-child(8)::after {
+          display: none;
+        }
+
+        .patent-point {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
+      @media (max-width: 720px) {
+        .topbar-inner {
+          align-items: stretch;
+          flex-direction: column;
+          padding: 12px 16px;
+        }
+
+        .brand {
+          min-width: 0;
+        }
+
+        .content {
+          padding: 16px;
+        }
+
+        .grid-two,
+        .metric-panel {
+          grid-template-columns: 1fr;
+        }
+
+        .flow {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .flow-step:nth-child(2)::after,
+        .flow-step:nth-child(4)::after,
+        .flow-step:nth-child(6)::after,
+        .flow-step:nth-child(8)::after {
+          display: none;
+        }
+
+        .patent-point {
+          grid-template-columns: 1fr;
+        }
+
+        .timeline-row {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header class="topbar">
+        <div class="topbar-inner">
+          <div class="brand">
+            <h1 class="brand-title">智能体工具调用预执行风险控制</h1>
+            <p class="brand-subtitle">通用专利保护点：动作元组、资源影响图、风险决策、executor 调用控制</p>
+          </div>
+          <div class="scenario-switch" role="group" aria-label="选择演示场景">
+            <button class="scenario-button" type="button" data-scenario="delete" aria-pressed="true">
+              高风险 DELETE 阻断
+            </button>
+            <button class="scenario-button" type="button" data-scenario="select" aria-pressed="false">
+              低风险 SELECT 放行
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main class="content">
+        <section class="summary-band" aria-labelledby="summary-title">
+          <div class="plain-panel">
+            <h2 class="section-title" id="summary-title">案例说明</h2>
+            <p class="lead" id="scenario-summary"></p>
+            <div class="patent-point" aria-label="核心保护点">
+              <div class="point">
+                <strong>拦截时机</strong>
+                <span>发生在目标 executor 被调用前</span>
+              </div>
+              <div class="point">
+                <strong>判断依据</strong>
+                <span>不是工具名称，而是操作、参数、资源和环境</span>
+              </div>
+              <div class="point">
+                <strong>图谱作用</strong>
+                <span>计算直接资源到间接资源的影响路径</span>
+              </div>
+              <div class="point">
+                <strong>技术效果</strong>
+                <span>风险决策直接控制 executor 是否调用</span>
+              </div>
+            </div>
+          </div>
+          <div class="metric-panel" aria-label="执行结果">
+            <div class="metric">
+              <div class="metric-label">风险等级</div>
+              <div class="metric-value" id="metric-risk"></div>
+              <div class="metric-note" id="metric-risk-note"></div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">执行决策</div>
+              <div class="metric-value" id="metric-decision"></div>
+              <div class="metric-note" id="metric-decision-note"></div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">executorInvoked</div>
+              <div class="metric-value" id="metric-invoked"></div>
+              <div class="metric-note">由 ToolExecutionGuard 输出</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">executor 调用次数</div>
+              <div class="metric-value" id="metric-count"></div>
+              <div class="metric-note">用于证明是否真实执行</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section" aria-labelledby="core-title">
+          <div class="plain-panel">
+            <h2 class="section-title" id="core-title">核心保护点：业务无关的执行前控制方法</h2>
+            <p class="lead">
+              SQL 删除只是代表性案例。本专利保护的不是某个 SQL 规则，也不是某个审批流程，而是不同业务工具都可以复用的技术链路：
+              工具调用请求先被拦截，转换为动作元组，再映射到直接和间接受影响资源，生成风险等级，并由执行守卫控制 executor 是否实际调用。
+            </p>
+            <div class="table-wrap" style="margin-top: 14px">
+              <table>
+                <thead>
+                  <tr>
+                    <th>抽象对象</th>
+                    <th>技术含义</th>
+                    <th>SQL 案例</th>
+                    <th>其他业务示例</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>ToolCallRequest</td>
+                    <td>智能体准备调用工具的原始请求</td>
+                    <td>执行 SQL</td>
+                    <td>调用发布工具、配置工具、CRM API、云资源 API</td>
+                  </tr>
+                  <tr>
+                    <td>ActionTuple</td>
+                    <td>统一后的可计算动作</td>
+                    <td>delete + orders + production</td>
+                    <td>deploy + service + production；update + creditLimit + production</td>
+                  </tr>
+                  <tr>
+                    <td>AffectedResource</td>
+                    <td>本次动作直接影响的资源</td>
+                    <td>orders 表</td>
+                    <td>服务、配置项、客户额度、库存策略、存储桶</td>
+                  </tr>
+                  <tr>
+                    <td>ImpactPath</td>
+                    <td>从直接资源传播到间接资源的路径</td>
+                    <td>orders -> 对账任务</td>
+                    <td>配置项 -> 服务链路；客户额度 -> 风控模型</td>
+                  </tr>
+                  <tr>
+                    <td>ToolExecutionGuard</td>
+                    <td>executor 前的门控执行器</td>
+                    <td>不调用 SQL executor</td>
+                    <td>不调用 deploy executor；路由到 sandbox executor</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section class="section" aria-labelledby="flow-title">
+          <h2 class="section-title" id="flow-title">执行前技术控制闭环</h2>
+          <div class="flow">
+            <div class="flow-step">
+              <span class="flow-index">1</span>
+              <div class="flow-name">Agent 请求</div>
+              <div class="flow-desc">自然语言任务生成工具调用</div>
+            </div>
+            <div class="flow-step">
+              <span class="flow-index">2</span>
+              <div class="flow-name">executor 前拦截</div>
+              <div class="flow-desc">工具请求先进入安全网关</div>
+            </div>
+            <div class="flow-step">
+              <span class="flow-index">3</span>
+              <div class="flow-name">动作元组</div>
+              <div class="flow-desc">解析 operation、target、env</div>
+            </div>
+            <div class="flow-step">
+              <span class="flow-index">4</span>
+              <div class="flow-name">直接资源</div>
+              <div class="flow-desc">识别 orders 生产表</div>
+            </div>
+            <div class="flow-step">
+              <span class="flow-index">5</span>
+              <div class="flow-name">影响路径</div>
+              <div class="flow-desc">遍历下游服务和任务</div>
+            </div>
+            <div class="flow-step">
+              <span class="flow-index">6</span>
+              <div class="flow-name">风险等级</div>
+              <div class="flow-desc">综合操作、环境、资源级别</div>
+            </div>
+            <div class="flow-step">
+              <span class="flow-index">7</span>
+              <div class="flow-name">执行守卫</div>
+              <div class="flow-desc">决定 executor 是否被调用</div>
+            </div>
+            <div class="flow-step">
+              <span class="flow-index">8</span>
+              <div class="flow-name">审计证据</div>
+              <div class="flow-desc">记录决策链路和调用结果</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section grid-two" aria-label="输入和动作元组">
+          <div class="code-panel">
+            <div class="panel-head">
+              <span class="panel-title">ToolCallRequest</span>
+              <span class="pill" id="request-pill"></span>
+            </div>
+            <pre id="request-code"></pre>
+          </div>
+          <div class="code-panel">
+            <div class="panel-head">
+              <span class="panel-title">ActionTuple</span>
+              <span class="pill pill-amber">可计算动作</span>
+            </div>
+            <pre id="action-code"></pre>
+          </div>
+        </section>
+
+        <section class="section graph-layout" aria-labelledby="graph-title">
+          <div class="graph-canvas">
+            <div class="graph-head">
+              <h2 class="graph-title" id="graph-title">资源影响图</h2>
+              <p class="graph-subtitle" id="graph-subtitle"></p>
+            </div>
+            <div class="graph-svg-wrap">
+              <svg viewBox="0 0 960 430" role="img" aria-labelledby="svg-title svg-desc">
+                <title id="svg-title">订单表资源影响图</title>
+                <desc id="svg-desc">展示 Agent 工具调用到 SQL executor、orders 表和下游服务的影响关系。</desc>
+                <defs>
+                  <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#9aa8ba"></path>
+                  </marker>
+                  <marker id="arrow-risk" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#c2412f"></path>
+                  </marker>
+                </defs>
+
+                <path id="edge-agent-gateway" class="edge" marker-end="url(#arrow)" d="M 170 80 C 215 80, 230 80, 275 80"></path>
+                <path id="edge-gateway-guard" class="edge" marker-end="url(#arrow)" d="M 425 80 C 470 80, 485 80, 530 80"></path>
+                <path id="edge-guard-executor" class="edge" marker-end="url(#arrow)" d="M 680 80 C 725 80, 740 80, 785 80"></path>
+                <path id="edge-gateway-orders" class="edge edge-risk" marker-end="url(#arrow-risk)" d="M 350 118 C 350 166, 350 182, 350 228"></path>
+                <path id="edge-orders-service" class="edge edge-risk" marker-end="url(#arrow-risk)" d="M 430 270 C 490 226, 520 205, 580 160"></path>
+                <path id="edge-orders-job" class="edge edge-risk" marker-end="url(#arrow-risk)" d="M 430 290 C 500 290, 535 290, 605 290"></path>
+                <path id="edge-orders-report" class="edge edge-risk" marker-end="url(#arrow-risk)" d="M 430 310 C 500 350, 535 368, 605 390"></path>
+
+                <g class="node" transform="translate(45 48)">
+                  <rect rx="8" width="130" height="64"></rect>
+                  <text x="16" y="27">Agent</text>
+                  <text class="node-subtitle" x="16" y="47">Ralph / LLM</text>
+                </g>
+
+                <g class="node node-guard" transform="translate(280 42)">
+                  <rect rx="8" width="150" height="76"></rect>
+                  <text x="16" y="28">安全网关</text>
+                  <text class="node-subtitle" x="16" y="49">动作解析 + 风险分析</text>
+                  <text class="node-subtitle" x="16" y="65">executor 前拦截</text>
+                </g>
+
+                <g class="node node-guard" transform="translate(535 42)">
+                  <rect rx="8" width="150" height="76"></rect>
+                  <text x="16" y="28">ToolExecutionGuard</text>
+                  <text class="node-subtitle" x="16" y="49">控制是否调用</text>
+                  <text class="node-subtitle" x="16" y="65">输出调用结果</text>
+                </g>
+
+                <g class="node" id="executor-node" transform="translate(790 48)">
+                  <rect rx="8" width="130" height="64"></rect>
+                  <text x="16" y="27">SQL executor</text>
+                  <text class="node-subtitle" id="executor-subtitle" x="16" y="47"></text>
+                </g>
+
+                <g class="node node-direct" id="orders-node" transform="translate(265 235)">
+                  <rect rx="8" width="170" height="88"></rect>
+                  <text x="16" y="27">orders 表</text>
+                  <text class="node-subtitle" x="16" y="49">直接影响资源</text>
+                  <text class="node-subtitle" id="orders-subtitle" x="16" y="68"></text>
+                </g>
+
+                <g class="node node-indirect" transform="translate(610 120)">
+                  <rect rx="8" width="170" height="70"></rect>
+                  <text x="16" y="28">order-service</text>
+                  <text class="node-subtitle" x="16" y="49">订单查询和状态流转</text>
+                </g>
+
+                <g class="node node-indirect" transform="translate(610 255)">
+                  <rect rx="8" width="170" height="70"></rect>
+                  <text x="16" y="28">payment-reconcile-job</text>
+                  <text class="node-subtitle" x="16" y="49">支付对账任务</text>
+                </g>
+
+                <g class="node node-indirect" transform="translate(610 360)">
+                  <rect rx="8" width="170" height="50"></rect>
+                  <text x="16" y="30">order-report</text>
+                </g>
+              </svg>
+            </div>
+          </div>
+
+          <aside class="risk-list" aria-label="风险要素">
+            <div class="risk-item">
+              <strong>操作类型</strong>
+              <span id="risk-operation"></span>
+            </div>
+            <div class="risk-item">
+              <strong>执行环境</strong>
+              <span>production，生产环境需要更严格控制。</span>
+            </div>
+            <div class="risk-item">
+              <strong>资源级别</strong>
+              <span>orders 表为 restricted + critical。</span>
+            </div>
+            <div class="risk-item">
+              <strong>影响范围</strong>
+              <span id="risk-scope"></span>
+            </div>
+            <div class="risk-item">
+              <strong>执行守卫结果</strong>
+              <span id="risk-guard"></span>
+            </div>
+          </aside>
+        </section>
+
+        <section class="section" aria-labelledby="audit-title">
+          <h2 class="section-title" id="audit-title">审计回放</h2>
+          <div class="timeline" id="timeline"></div>
+        </section>
+
+        <section class="section" aria-labelledby="generalize-title">
+          <h2 class="section-title" id="generalize-title">泛化到其他业务</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>业务场景</th>
+                  <th>工具调用</th>
+                  <th>直接影响资源</th>
+                  <th>间接影响资源</th>
+                  <th>控制决策</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>CI/CD 发布</td>
+                  <td>deploy payment-service production</td>
+                  <td>支付服务、发布流水线</td>
+                  <td>订单服务、账户服务、告警系统</td>
+                  <td>测试失败时 deploy executor 调用次数为 0</td>
+                </tr>
+                <tr>
+                  <td>配置中心</td>
+                  <td>update payment.timeout production</td>
+                  <td>生产配置项</td>
+                  <td>依赖该配置的服务链路</td>
+                  <td>生产 executor 不直接调用，路由到 sandbox / canary</td>
+                </tr>
+                <tr>
+                  <td>客户管理</td>
+                  <td>update customer credit limit</td>
+                  <td>客户授信记录</td>
+                  <td>风控模型、审批流、财务系统</td>
+                  <td>缺少审批单时 API executor 不调用</td>
+                </tr>
+                <tr>
+                  <td>财务付款</td>
+                  <td>transfer batch production</td>
+                  <td>付款批次、收款账户</td>
+                  <td>余额系统、对账系统、通知系统</td>
+                  <td>高金额批次进入人工确认</td>
+                </tr>
+                <tr>
+                  <td>供应链库存</td>
+                  <td>update inventory safety stock</td>
+                  <td>库存策略记录</td>
+                  <td>补货任务、采购计划、门店可售库存</td>
+                  <td>先进入仿真或灰度策略</td>
+                </tr>
+                <tr>
+                  <td>云平台</td>
+                  <td>delete object bucket production</td>
+                  <td>对象存储桶</td>
+                  <td>备份任务、数据同步、报表任务</td>
+                  <td>生产删除请求被阻断</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="footer-note">
+            不同业务的资源影响图可以不同，但保护点保持一致：executor 调用前拦截 -> 动作元组 -> 直接资源 -> 间接影响路径 -> 风险等级 -> 执行守卫 -> executor 调用控制结果 -> 审计证据。
+          </p>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      const scenarios = {
+        delete: {
+          summary:
+            "Agent 准备在 production 数据库中执行 DELETE FROM orders WHERE status='PENDING'。系统在 SQL executor 被调用前拦截请求，解析出 delete 动作、orders 生产核心表和下游影响路径，最终阻断 executor 调用。",
+          requestPill: ["DELETE", "pill-red"],
+          risk: ["prohibited", "status-red", "命中生产核心表删除硬阻断规则"],
+          decision: ["block", "status-red", "阻断执行，不调用 SQL executor"],
+          invoked: ["false", "status-red"],
+          count: ["0", "status-red"],
+          graphSubtitle:
+            "红色路径表示 DELETE 操作对生产 orders 表及下游资源的风险传播。",
+          executorSubtitle: "未调用",
+          ordersSubtitle: "DELETE + production",
+          request: {
+            id: "req-rv-001-sql-delete-pending-orders",
+            actor: "agent:ralph",
+            taskPurpose: "清理 production 风险建模环境中的待支付订单",
+            toolType: "sql",
+            environment: "production",
+            createdAt: "2026-04-29T03:00:00.000Z",
+            rawPayload: {
+              sql: "DELETE FROM orders WHERE status='PENDING'",
+              database: "orders-prod",
+            },
+          },
+          action: {
+            actor: "agent:ralph",
+            taskPurpose: "清理 production 风险建模环境中的待支付订单",
+            toolType: "sql",
+            operation: "delete",
+            target: "orders",
+            parameters: {
+              sql: "DELETE FROM orders WHERE status='PENDING'",
+              database: "orders-prod",
+              where: "status='PENDING'",
+            },
+            environment: "production",
+          },
+          riskOperation:
+            "delete，属于破坏性操作；生产核心表删除被识别为禁止风险。",
+          riskScope:
+            "直接影响 orders 表，间接影响订单服务、支付对账任务、订单报表。",
+          riskGuard:
+            "ToolExecutionGuard 返回 executorInvoked=false，SQL executor 调用次数为 0。",
+          timeline: [
+            ["T0", "Agent 输出 SQL 删除工具调用请求。"],
+            ["T1", "安全网关在 SQL executor 前拦截请求。"],
+            ["T2", "解析动作元组：operation=delete，target=orders，environment=production。"],
+            ["T3", "识别直接影响资源 orders 表，并遍历到 order-service、payment-reconcile-job、order-report。"],
+            ["T4", "风险等级为 prohibited，执行决策为 block。"],
+            ["T5", "ToolExecutionGuard 不调用 SQL executor，executor 调用次数为 0。"],
+          ],
+        },
+        select: {
+          summary:
+            "Agent 准备统计 production 中 PENDING 订单数量和金额。系统同样在 executor 前分析请求，但识别出本次操作是只读聚合查询，不修改数据，因此允许只读 SQL executor 执行一次。",
+          requestPill: ["SELECT", "pill-green"],
+          risk: ["low", "status-green", "只读聚合查询，未触发写入或删除"],
+          decision: ["allow", "status-green", "允许只读 executor 执行"],
+          invoked: ["true", "status-green"],
+          count: ["1", "status-green"],
+          graphSubtitle:
+            "绿色节点表示本次请求只读取 orders 表；下游资源用于影响认知，但不产生写入传播。",
+          executorSubtitle: "调用 1 次",
+          ordersSubtitle: "SELECT + production",
+          request: {
+            id: "req-rv-002-sql-readonly-pending-orders",
+            actor: "agent:ralph",
+            taskPurpose: "统计 production 风险建模环境中的待支付订单",
+            toolType: "sql",
+            environment: "production",
+            createdAt: "2026-04-29T03:10:00.000Z",
+            rawPayload: {
+              sql:
+                "SELECT COUNT(*) AS pending_count, SUM(amount_cents) AS pending_amount_cents FROM orders WHERE status='PENDING'",
+              database: "orders-prod-readonly",
+            },
+          },
+          action: {
+            actor: "agent:ralph",
+            taskPurpose: "统计 production 风险建模环境中的待支付订单",
+            toolType: "sql",
+            operation: "read",
+            target: "orders",
+            parameters: {
+              sql:
+                "SELECT COUNT(*) AS pending_count, SUM(amount_cents) AS pending_amount_cents FROM orders WHERE status='PENDING'",
+              database: "orders-prod-readonly",
+              where: "status='PENDING'",
+            },
+            environment: "production",
+          },
+          riskOperation:
+            "read，只读聚合查询；不插入、不更新、不删除订单数据。",
+          riskScope:
+            "直接读取 orders 表；下游资源用于影响说明，但本次操作不会写入传播。",
+          riskGuard:
+            "ToolExecutionGuard 返回 executorInvoked=true，只读 SQL executor 调用次数为 1。",
+          timeline: [
+            ["T0", "Agent 输出 SQL 只读统计工具调用请求。"],
+            ["T1", "安全网关在 SQL executor 前拦截请求。"],
+            ["T2", "解析动作元组：operation=read，target=orders，environment=production。"],
+            ["T3", "识别直接资源 orders 表，并确认操作不修改数据。"],
+            ["T4", "风险等级为 low，执行决策为 allow。"],
+            ["T5", "ToolExecutionGuard 调用只读 SQL executor，executor 调用次数为 1。"],
+          ],
+        },
+      };
+
+      const formatJson = (value) => JSON.stringify(value, null, 2);
+
+      const setClassedText = (id, parts) => {
+        const element = document.getElementById(id);
+        element.textContent = parts[0];
+        element.className = `metric-value ${parts[1]}`;
+      };
+
+      const renderTimeline = (rows) => {
+        document.getElementById("timeline").innerHTML = rows
+          .map(
+            ([time, text]) => `
+              <div class="timeline-row">
+                <div class="timeline-time">${time}</div>
+                <p class="timeline-text">${text}</p>
+              </div>
+            `,
+          )
+          .join("");
+      };
+
+      const renderScenario = (key) => {
+        const data = scenarios[key];
+
+        document.getElementById("scenario-summary").textContent = data.summary;
+
+        setClassedText("metric-risk", data.risk);
+        document.getElementById("metric-risk-note").textContent = data.risk[2];
+        setClassedText("metric-decision", data.decision);
+        document.getElementById("metric-decision-note").textContent = data.decision[2];
+        setClassedText("metric-invoked", data.invoked);
+        setClassedText("metric-count", data.count);
+
+        const requestPill = document.getElementById("request-pill");
+        requestPill.textContent = data.requestPill[0];
+        requestPill.className = `pill ${data.requestPill[1]}`;
+
+        document.getElementById("request-code").textContent = formatJson(data.request);
+        document.getElementById("action-code").textContent = formatJson(data.action);
+        document.getElementById("graph-subtitle").textContent = data.graphSubtitle;
+        document.getElementById("executor-subtitle").textContent = data.executorSubtitle;
+        document.getElementById("orders-subtitle").textContent = data.ordersSubtitle;
+        document.getElementById("risk-operation").textContent = data.riskOperation;
+        document.getElementById("risk-scope").textContent = data.riskScope;
+        document.getElementById("risk-guard").textContent = data.riskGuard;
+
+        const ordersNode = document.getElementById("orders-node");
+        ordersNode.setAttribute("class", key === "select" ? "node node-read" : "node node-direct");
+
+        const executorNode = document.getElementById("executor-node");
+        executorNode.setAttribute("class", key === "select" ? "node node-read" : "node");
+
+        for (const edgeId of [
+          "edge-gateway-orders",
+          "edge-orders-service",
+          "edge-orders-job",
+          "edge-orders-report",
+        ]) {
+          const edge = document.getElementById(edgeId);
+          edge.setAttribute("class", key === "select" ? "edge" : "edge edge-risk");
+          edge.setAttribute("marker-end", key === "select" ? "url(#arrow)" : "url(#arrow-risk)");
+        }
+
+        renderTimeline(data.timeline);
+
+        for (const button of document.querySelectorAll(".scenario-button")) {
+          button.setAttribute("aria-pressed", String(button.dataset.scenario === key));
+        }
+      };
+
+      for (const button of document.querySelectorAll(".scenario-button")) {
+        button.addEventListener("click", () => renderScenario(button.dataset.scenario));
+      }
+
+      renderScenario("delete");
+    </script>
+  </body>
+</html>
