@@ -1,0 +1,190 @@
+{
+  "project": "agent-safety-gateway",
+  "branchName": "ralph/agent-safety-gateway-hardening",
+  "description": "Harden agent-safety-gateway from local MVP and Codex demo integration into a more verifiable execution-control gateway with guarded execution APIs, Codex evidence, management visibility, and dry-run adapter readiness.",
+  "validationContext": {
+    "targetRepoRoot": "/home/wangfei/workspace/ralph-loop/agent-safety-gateway",
+    "recommendedRalphCommand": "RALPH_REPO_ROOT=/home/wangfei/workspace/ralph-loop/agent-safety-gateway make ralph-run MAX_ITERATIONS=1",
+    "packageManager": "pnpm",
+    "localPnpmFallback": "PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm <script>",
+    "apiStartup": {
+      "seed": "PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm seed",
+      "command": "PATH=/home/wangfei/.local/node_modules/.bin:$PATH API_PORT=4310 pnpm dev",
+      "healthUrl": "http://127.0.0.1:4310/health"
+    },
+    "browserVerification": {
+      "note": "The current local Node is 18.19.1. Vite 7 dev server requires Node 20.19+ or 22.12+. Until Node is upgraded, use the built dist with a static server or record this blocker.",
+      "apiUrl": "http://127.0.0.1:4310",
+      "webUrl": "http://127.0.0.1:5173",
+      "buildCommand": "PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm build",
+      "staticServerCommand": "node -e 'const http=require(\"http\"),fs=require(\"fs\"),path=require(\"path\");const root=path.resolve(\"apps/web/dist\");http.createServer((req,res)=>{let p=decodeURIComponent(new URL(req.url,\"http://x\").pathname);let f=path.join(root,p===\"/\"?\"index.html\":p);if(!f.startsWith(root)){res.writeHead(403);res.end(\"forbidden\");return;}fs.stat(f,(e,s)=>{if(e||!s.isFile())f=path.join(root,\"index.html\");fs.readFile(f,(err,b)=>{if(err){res.writeHead(404);res.end(\"not found\");return;}res.end(b);});});}).listen(5173,\"127.0.0.1\")'"
+    }
+  },
+  "userStories": [
+    {
+      "id": "ASG-001",
+      "title": "Add guarded execution API for SQL dry-run flow",
+      "description": "As a gateway integrator, I want an API endpoint that performs analysis and guarded execution in one server-side call so that executorInvoked and executorResult are captured by the gateway boundary instead of being inferred by an external MCP wrapper.",
+      "acceptanceCriteria": [
+        "Add an API route for guarded SQL execution that accepts a ToolCallRequest and returns status, executorInvoked, decision, riskLevel, auditId, and executorResult",
+        "The route must use ToolExecutionGuard or an equivalent shared server-side guard path before invoking any executor",
+        "Prohibited production DELETE on orders returns blocked and executorInvoked=false",
+        "Allowed read-only SELECT returns executed only when a configured safe executor is available; otherwise it returns a fail-closed not-configured result without pretending execution happened",
+        "Add API tests for blocked DELETE and allowed/not-configured SELECT behavior",
+        "Typecheck passes",
+        "Relevant API tests pass"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "This closes the current split where MCP calls /api/tool-calls/analyze and then performs local dry-run handling outside the API."
+    },
+    {
+      "id": "ASG-002",
+      "title": "Persist Codex hook decisions as audit evidence",
+      "description": "As a security reviewer, I want Codex PreToolUse hook decisions to be persisted when a command is blocked so that management and evidence pages can show what Codex attempted and why it was stopped.",
+      "acceptanceCriteria": [
+        "Add a local hook-decision repository or audit extension that records Codex hook input summary, adapted ToolCallRequest when available, block reason, and timestamp",
+        "Gateway-backed hook blocks are linked to the auditId returned by /api/tool-calls/analyze",
+        "Local-only hook blocks such as destructive host commands are recorded without requiring a ToolCallRequest",
+        "The hook still returns should_block=true for prohibited SQL DELETE and fails closed when gateway analysis is unavailable",
+        "Add tests covering gateway-backed block persistence and local-only block persistence",
+        "Typecheck passes",
+        "Codex adapter/hook tests pass"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "Current management UI can see gateway audits, but not local-only hook blocks."
+    },
+    {
+      "id": "ASG-003",
+      "title": "Expose execution logs and hook decisions through read-only API endpoints",
+      "description": "As an operator, I want read-only API endpoints for executor logs and Codex hook decisions so that the management UI can display both gateway decisions and actual execution-control outcomes.",
+      "acceptanceCriteria": [
+        "Add GET endpoints for execution logs and Codex hook decisions with simple filters by requestId, auditId, toolType, decision, and environment where applicable",
+        "Endpoints are read-only and never trigger analysis or executor invocation",
+        "Responses use the same error envelope as existing API routes",
+        "Add API tests for list and filter behavior",
+        "Typecheck passes",
+        "API tests pass"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "Builds on ASG-002 persistence and existing execution-log-repository."
+    },
+    {
+      "id": "ASG-004",
+      "title": "Show Codex interception and executor status in management UI",
+      "description": "As a reviewer, I want the management UI to show whether a request came from Codex, whether the hook blocked it, and whether any executor was invoked so that I can visually confirm interception effects.",
+      "acceptanceCriteria": [
+        "Audit list or detail view shows source actor, decision, riskLevel, and executorInvoked or hook-blocked status when available",
+        "Add a Codex interception section to audit detail or a dedicated tab that reads the new hook-decision API",
+        "Blocked SQL DELETE from Codex is visible in the UI with auditId and block reason",
+        "Local-only hook blocks are visible in the UI even when there is no gateway auditId",
+        "UI API client tests are updated for new endpoints",
+        "Typecheck passes",
+        "Verify in browser using validationContext.browserVerification"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "Frontend story. Use static dist server if Node 18 prevents Vite dev server startup."
+    },
+    {
+      "id": "ASG-005",
+      "title": "Harden Codex MCP server protocol and add contract tests",
+      "description": "As a Codex integrator, I want the MCP server behavior covered by tests so that tool listing and tool calls remain compatible with Codex after future changes.",
+      "acceptanceCriteria": [
+        "Add tests for initialize, tools/list, gateway_health, safe_sql blocked DELETE, and safe_sql allowed SELECT not-configured executor behavior",
+        "MCP responses include valid JSON-RPC id, result or error, content, and structuredContent where applicable",
+        "Malformed JSON-RPC input returns a parse error without crashing the process",
+        "Document any intentional MCP limitations in docs/integration/codex-integration.md",
+        "Typecheck or syntax checks pass for services/codex",
+        "Codex MCP tests pass"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "Current MCP server is dependency-free and hand-rolled; contract tests reduce integration risk."
+    },
+    {
+      "id": "ASG-006",
+      "title": "Add real dry-run profile validation and fail-closed diagnostics",
+      "description": "As an operator, I want dry-run executor configuration to be validated before use so that missing or unsafe SQL, CI/CD, or config sandbox settings fail closed with actionable diagnostics.",
+      "acceptanceCriteria": [
+        "Validate ASG_SQL_DRY_RUN_COMMAND, ASG_CICD_DRY_RUN_COMMAND, and ASG_CONFIG_SANDBOX_COMMAND formats before executor invocation",
+        "Reject shell-string commands and require JSON string arrays",
+        "Add health or diagnostic output showing configured, not_configured, or invalid status for each dry-run executor",
+        "Never invoke a dry-run command when validation fails",
+        "Add unit tests for valid, missing, malformed, and unsafe executor command configuration",
+        "Typecheck or syntax checks pass",
+        "Codex executor tests pass"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "Builds on services/codex/src/dry-run-executors.mjs and real-component-adapters.ts."
+    },
+    {
+      "id": "ASG-007",
+      "title": "Expand SQL risk parsing for broad destructive operations",
+      "description": "As a database safety owner, I want destructive SQL such as DROP, TRUNCATE, ALTER, and DELETE without WHERE to be classified safely so that unsupported syntax is blocked with clear evidence instead of only local hook rejection.",
+      "acceptanceCriteria": [
+        "SQL parser recognizes or explicitly rejects DROP, TRUNCATE, ALTER, and DELETE without WHERE with structured parse or risk errors",
+        "Production DROP/TRUNCATE/ALTER against matched or unresolved resources results in block or prohibited-level risk",
+        "DELETE without WHERE includes a risk factor explaining broad table deletion",
+        "Add tests for DROP TABLE orders, TRUNCATE orders, ALTER TABLE orders, and DELETE FROM orders",
+        "Typecheck passes",
+        "API SQL parser and risk tests pass"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "Current hook blocks some unsupported destructive SQL before gateway parsing; better evidence comes from the gateway itself."
+    },
+    {
+      "id": "ASG-008",
+      "title": "Generate Codex integration evidence report",
+      "description": "As a patent and validation reviewer, I want a reproducible evidence report for Codex interception so that RV evidence covers the real Codex adapter, MCP tool, hook, gateway decision, and UI audit path.",
+      "acceptanceCriteria": [
+        "Add a repeatable script or test that runs a Codex-style SQL DELETE hook simulation and captures hook output, auditId, decision, riskLevel, and executorInvoked=false",
+        "Write a Markdown report under docs/evidence/real-validation for the Codex SQL DELETE interception path",
+        "Update docs/evidence/real-validation/summary.md with the Codex evidence row and its mock/real-component status",
+        "The report distinguishes simulated PreToolUse input from an interactive Codex session",
+        "Typecheck or syntax checks pass",
+        "Evidence generation command is documented"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "Use the current manually verified audit path as the starting point, but make it repeatable."
+    },
+    {
+      "id": "ASG-009",
+      "title": "Add authentication and CORS hardening plan for gateway API",
+      "description": "As a deployment owner, I want the API boundary documented and minimally configurable so that local demos remain open but non-local deployments do not expose analysis and audit endpoints without controls.",
+      "acceptanceCriteria": [
+        "Add configuration for allowed CORS origin instead of unconditional wildcard in non-local mode",
+        "Add optional bearer-token middleware that can protect API routes when ASG_API_TOKEN is configured",
+        "Health endpoint remains accessible without leaking sensitive configuration",
+        "Docs explain local demo mode versus protected deployment mode",
+        "Add API tests for open local mode and token-protected mode",
+        "Typecheck passes",
+        "API tests pass"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "Current server sets Access-Control-Allow-Origin=* for all requests."
+    },
+    {
+      "id": "ASG-010",
+      "title": "Stabilize local startup for Node and pnpm environments",
+      "description": "As a developer, I want local start commands to clearly handle Node 18 versus Vite 7 requirements and user-local pnpm installs so that API and management UI verification is repeatable.",
+      "acceptanceCriteria": [
+        "Update local start documentation to mention Node 20.19+ requirement for Vite dev server",
+        "Document the user-local pnpm fallback path used in this environment",
+        "Add a script or runbook section for serving built apps/web/dist when Vite dev server is unavailable",
+        "local:status or documentation explains which ports should be running for API and Web",
+        "No production code behavior changes are required",
+        "Documentation-only validation command is recorded"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "This captures the current Node 18 blocker observed during Web dev server startup."
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+# Ralph Progress
+
+## Codebase Patterns
+- `agent-safety-gateway` is the target repo for this Ralph PRD. Run Ralph from `/home/wangfei/workspace/ralph-loop` with `RALPH_REPO_ROOT=/home/wangfei/workspace/ralph-loop/agent-safety-gateway`.
+- Current PRD: `docs/prd/agent-safety-gateway-patent-state-machines-prd.md`.
+- Current Ralph JSON archive: `docs/prd/ralph-runs/2026-05-01-agent-safety-gateway-patent-state-machines/prd.json`.
+- Patent inputs:
+  - `docs/patent/交底书-禁止副作用义务证明状态机.md`
+  - `docs/patent/交底书-同推理上下文锚点保留证明.md`
+  - `docs/patent/检索报告-禁止副作用义务证明状态机.md`
+  - `docs/patent/检索报告-同推理上下文锚点保留证明.md`
+- Preserve the distinction between fixture validation and real-component validation. Do not claim production integration until a real readonly/dry-run/sandbox adapter has been tested.
+- If `pnpm` is missing from PATH, use `PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm <script>`.
+- Local Node may be 18.19.1; Vite 7 dev server needs Node 20.19+ or 22.12+. Browser verification may require a built `apps/web/dist` static-server fallback.
+
+## Session Log
+Started: 2026-05-01 - agent-safety-gateway patent state machines PRD
+
+---
+
+No Ralph stories from this PRD have been executed yet.

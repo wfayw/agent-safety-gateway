@@ -20,7 +20,9 @@ agent-safety-gateway/
 ├── sample-workspace/     # 本地研发流程样例：任务输入、订单数据、流水线和配置 fixture
 ├── skills/               # 项目相关技能、运行规范或可复用执行说明
 ├── docs/                 # 产品、验证和运行文档
+├── docs/prd/             # PRD、Ralph 任务拆解和历史运行归档
 ├── docs/evidence/        # 真实验证证据与报告输出位置
+├── docs/patent/          # 专利交底书、检索报告、预审材料和 claim mapping
 ├── docs/runbooks/        # 本地启动、验证和故障处理 runbook
 ├── scripts/              # 工作区脚本和临时占位命令
 ├── package.json          # 根工作区脚本
@@ -115,7 +117,7 @@ PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm --filter @agent-safety-ga
   --bundle-id <bundle-id>
 ```
 
-可用 `--request-id <id[,id]>` 按请求导出，或用 `--all` 导出本地 store 中全部证据。用法说明见 `docs/evidence/patent-validation/README.md`，双专利状态机本地验证 runbook 见 `docs/runbooks/patent-state-machines.md`，claim mapping 见 `docs/patent/claim-mapping.md`。
+可用 `--request-id <id[,id]>` 按请求导出，或用 `--all` 导出本地 store 中全部证据。用法说明见 `docs/evidence/patent-validation/README.md`，双专利状态机本地验证 runbook 见 `docs/runbooks/patent-state-machines.md`，PRD 与 Ralph 任务归档见 `docs/prd/`，专利材料索引见 `docs/patent/README.md`，claim mapping 见 `docs/patent/claim-mapping.md`。
 
 ### 运行 API 和 Web
 

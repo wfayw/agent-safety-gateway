@@ -1,0 +1,732 @@
+{
+  "project": "agent-safety-gateway",
+  "branchName": "ralph/agent-safety-gateway-patent-state-machines",
+  "description": "基于两篇专利方向完善 agent-safety-gateway：落地“禁止副作用义务证明状态机”和“同推理上下文锚点保留证明状态机”，使高风险工具调用在上下文充分、执行器禁止副作用证据完整后才允许进入执行许可链路。",
+  "validationContext": {
+    "prdDocument": "docs/prd/agent-safety-gateway-patent-state-machines-prd.md",
+    "patentDocuments": [
+      "docs/patent/交底书-禁止副作用义务证明状态机.md",
+      "docs/patent/交底书-同推理上下文锚点保留证明.md",
+      "docs/patent/检索报告-禁止副作用义务证明状态机.md",
+      "docs/patent/检索报告-同推理上下文锚点保留证明.md"
+    ],
+    "targetRepoRoot": "/home/wangfei/workspace/ralph-loop/agent-safety-gateway",
+    "recommendedRalphCommand": "RALPH_REPO_ROOT=/home/wangfei/workspace/ralph-loop/agent-safety-gateway make ralph-run MAX_ITERATIONS=1",
+    "packageManager": "pnpm",
+    "localPnpmFallback": "PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm <script>",
+    "apiValidation": [
+      "PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm --filter @agent-safety-gateway/api typecheck",
+      "PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm --filter @agent-safety-gateway/api test"
+    ],
+    "webValidation": [
+      "PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm --filter @agent-safety-gateway/web typecheck",
+      "PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm --filter @agent-safety-gateway/web test"
+    ],
+    "sharedValidation": [
+      "PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm --filter @agent-safety-gateway/shared typecheck",
+      "PATH=/home/wangfei/.local/node_modules/.bin:$PATH pnpm --filter @agent-safety-gateway/shared test"
+    ]
+  },
+  "userStories": [
+    {
+      "id": "PAG-001",
+      "title": "新增双专利状态机共享命名空间",
+      "description": "作为网关维护者，我希望为两条专利状态机建立共享类型命名空间，让后续实现拥有稳定的模型边界。",
+      "acceptanceCriteria": [
+        "在共享包中新增 forbidden-side-effect 和 context-retention 两个领域的导出，且不破坏现有导出",
+        "定义两个状态机共用的基础 id、hash、timestamp 等原始类型",
+        "新增 schema 测试，证明现有 ToolCallRequest 导入仍然可用",
+        "运行 shared typecheck 和 shared tests"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "基础任务，只建立共享模型边界，不实现服务逻辑。"
+    },
+    {
+      "id": "PAG-002",
+      "title": "新增 ForbiddenEffectObligation 模型",
+      "description": "作为安全工程师，我希望把禁止副作用建模为显式义务，从而能够按单次操作证明执行器安全性。",
+      "acceptanceCriteria": [
+        "定义 ForbiddenEffectObligation，包含 obligationId、effectType、resourceScope、environment、severity、requiredEvidenceTypes 和 failClosedAction",
+        "支持 SQL、CI/CD、config、script、cloud API 等 effectType",
+        "新增运行时校验 helper 或 schema guard",
+        "新增有效义务和无效义务测试"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "第一篇专利的核心对象。"
+    },
+    {
+      "id": "PAG-003",
+      "title": "新增 EvidencePlan 模型",
+      "description": "作为网关维护者，我希望把禁止副作用义务编译成证据计划，让每个禁止副作用都有明确的证明路径。",
+      "acceptanceCriteria": [
+        "定义 EvidencePlan、NegativeProbePlan 和 SideEffectProbePlan 模型",
+        "每个计划引用一个或多个 ForbiddenEffectObligation id",
+        "计划包含 executorType、targetEnvironment、所需 fixture 和 timeout 策略",
+        "新增计划校验和义务关联测试"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "本任务不实现 runner。"
+    },
+    {
+      "id": "PAG-004",
+      "title": "新增 DeniedCapabilityEvidence 模型",
+      "description": "作为专利证据评审者，我希望主动负能力探测结果被保存为证据，而不是依赖执行器自我声明。",
+      "acceptanceCriteria": [
+        "定义 DeniedCapabilityEvidence，包含 probeId、obligationId、attemptedOperation、observedRejection、rejectionReason、executorFingerprint 和 completedAt",
+        "证据区分 rejected、unexpectedlyAllowed、skipped、errored 等结果",
+        "证据可生成稳定 hash，用于 permit 绑定",
+        "新增证据 hash 和校验测试"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "该证据用于证明危险能力被拒绝。"
+    },
+    {
+      "id": "PAG-005",
+      "title": "新增 SideEffectDeltaEvidence 模型",
+      "description": "作为安全工程师，我希望 dry-run 和 sandbox 执行产生执行前后副作用差异证据。",
+      "acceptanceCriteria": [
+        "定义 SideEffectDeltaEvidence，包含 beforeSnapshotHash、afterSnapshotHash、observedEvents、forbiddenEffectsObserved、effectDelta 和 completedAt",
+        "支持 database、webhook、artifact、trigger、async job、config version 等证据类型",
+        "证据可生成稳定 hash，用于 permit 绑定",
+        "新增无差异和禁止副作用差异测试"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "这不是普通 dry-run 输出，而是副作用差异证明。"
+    },
+    {
+      "id": "PAG-006",
+      "title": "新增 EvidenceCoverageMap 评估器",
+      "description": "作为网关维护者，我希望每个禁止副作用义务都能映射到覆盖它的证据。",
+      "acceptanceCriteria": [
+        "定义 EvidenceCoverageMap，记录每个 obligation 的覆盖状态",
+        "覆盖状态支持 covered、missing、stale、invalidated、failed、notApplicable",
+        "评估器接收 obligations 和 evidence records，并返回确定性的 coverage map",
+        "新增完整覆盖、部分覆盖和失败证据测试"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "这是第一篇专利状态机的核心输入。"
+    },
+    {
+      "id": "PAG-007",
+      "title": "新增 ExecutorSafetyEvidenceState 状态机",
+      "description": "作为执行控制器，我希望把证据覆盖图转换为可否签发执行许可的安全状态。",
+      "acceptanceCriteria": [
+        "定义 EvidenceMissing、EvidencePartial、EvidenceComplete、EvidenceExpired、EvidenceInvalidated、EvidenceFailed 等状态",
+        "状态转移由 EvidenceCoverageMap 和 evidence TTL 决定",
+        "EvidenceComplete 要求所有必需义务都被有效证据覆盖",
+        "新增所有状态转移测试"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "本任务不签发 permit。"
+    },
+    {
+      "id": "PAG-008",
+      "title": "新增执行器漂移指纹模型",
+      "description": "作为平台运营者，我希望凭据、网络、runner、endpoint 或 namespace 漂移时，执行器安全证据自动失效。",
+      "acceptanceCriteria": [
+        "定义 ExecutorDriftFingerprint，包含 credential、networkPolicy、runnerImage、endpoint、namespace 和 config hash",
+        "定义 DriftEvent，包含 previous 和 current fingerprint",
+        "新增 fingerprint 比较 helper，并能识别被漂移影响的证据范围",
+        "新增无漂移、单字段漂移和多字段漂移测试"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "漂移失效服务后续任务实现。"
+    },
+    {
+      "id": "PAG-009",
+      "title": "新增 PermitBinding 和 PermitDeniedEvidence 模型",
+      "description": "作为审计人员，我希望许可和拒绝证据绑定到安全证据，而不是自由文本决策。",
+      "acceptanceCriteria": [
+        "定义 PermitBinding，包含 requestHash、executorId、safetyEvidenceVersion、coverageMapHash、deniedEvidenceHash、sideEffectEvidenceHash、ttl 和 nonce",
+        "定义 PermitDeniedEvidence，包含 permitIssued=false、executorInvoked=false、missingEvidence、invalidatedEvidence 和 reason",
+        "新增校验和 hash helper",
+        "新增许可绑定和拒绝证据测试"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "permit 是状态机出口，本身不是发明点。"
+    },
+    {
+      "id": "PAG-010",
+      "title": "持久化执行器安全证据记录",
+      "description": "作为运营者，我希望禁止副作用义务、证据、覆盖图、安全状态和许可都能持久化用于审计。",
+      "acceptanceCriteria": [
+        "新增本地 JSONL 或 repository，用于存储 obligations、evidence records、coverage maps、safety states、permits 和 denials",
+        "repository 支持按 requestId、executorId、evidenceVersion、auditId 追加和查询",
+        "保持现有存储布局向后兼容",
+        "新增 repository 测试"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "复用当前 storage/repository 模式。"
+    },
+    {
+      "id": "PAG-011",
+      "title": "编译 SQL 禁止副作用义务",
+      "description": "作为数据库安全负责人，我希望 SQL 请求被编译为禁止副作用义务。",
+      "acceptanceCriteria": [
+        "SELECT readonly 请求生成 mutation、DDL、trigger、external effect 等禁止义务",
+        "DELETE、UPDATE、INSERT、DROP、TRUNCATE、ALTER 生成破坏性操作义务",
+        "未解析表生成不确定性义务并 fail closed",
+        "新增 SQL obligation compiler 测试"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "只实现编译器，不实现 probe runner。"
+    },
+    {
+      "id": "PAG-012",
+      "title": "新增 SQL 负能力探测 fixture runner",
+      "description": "作为数据库安全负责人，我希望基于 fixture 的探测证明 readonly SQL executor 会拒绝写入和 DDL。",
+      "acceptanceCriteria": [
+        "实现 SQL write、delete、update、insert、DDL 拒绝探测 runner",
+        "runner 为每个危险操作输出 DeniedCapabilityEvidence",
+        "如果写操作被意外允许，输出 failed evidence",
+        "新增基于本地 fixture 的测试"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": "不得连接生产数据库。"
+    },
+    {
+      "id": "PAG-013",
+      "title": "新增 SQL 副作用快照证据",
+      "description": "作为数据库安全负责人，我希望通过执行前后快照证明 SQL dry-run 没有修改数据或触发副作用。",
+      "acceptanceCriteria": [
+        "实现 rows、trigger logs、async job logs 的 SQL fixture 快照 hash",
+        "dry-run 证据记录执行前后 snapshot hash",
+        "发生 mutation 或 trigger delta 时设置 forbiddenEffectsObserved",
+        "新增无差异和禁止副作用差异测试"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": "补充 SQL negative probe。"
+    },
+    {
+      "id": "PAG-014",
+      "title": "编译 CI/CD 禁止副作用义务",
+      "description": "作为发布安全负责人，我希望生产部署请求被编译为 CI/CD 禁止副作用义务。",
+      "acceptanceCriteria": [
+        "生产部署请求生成 production deploy、webhook、artifact promotion、environment mutation 等禁止义务",
+        "dry-run 发布请求生成 no-real-deploy 义务",
+        "测试失败或测试状态未知生成 fail-closed 义务",
+        "新增 CI/CD obligation compiler 测试"
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": "只实现编译器。"
+    },
+    {
+      "id": "PAG-015",
+      "title": "新增 CI/CD 负能力探测 fixture runner",
+      "description": "作为发布安全负责人，我希望探测证明 CI/CD dry-run executor 会拒绝生产部署动作。",
+      "acceptanceCriteria": [
+        "实现 production deploy endpoint、external webhook、artifact promotion 拒绝探测 fixture",
+        "runner 为每个禁止动作输出 DeniedCapabilityEvidence",
+        "如果 production endpoint 被调用，证据失败",
+        "新增基于本地 pipeline fixture 的测试"
+      ],
+      "priority": 15,
+      "passes": false,
+      "notes": "不接入真实 CI/CD provider。"
+    },
+    {
+      "id": "PAG-016",
+      "title": "新增 CI/CD 副作用快照证据",
+      "description": "作为发布安全负责人，我希望通过执行前后证据证明 dry-run release 没有部署或提升制品。",
+      "acceptanceCriteria": [
+        "快照 deploy logs、webhook logs、artifact promotion state 和 environment version state",
+        "dry-run 后计算 SideEffectDeltaEvidence",
+        "禁止副作用差异在 evidence 中可见",
+        "新增未部署和禁止部署差异测试"
+      ],
+      "priority": 16,
+      "passes": false,
+      "notes": "使用 sample-workspace 的 pipeline 文件。"
+    },
+    {
+      "id": "PAG-017",
+      "title": "编译 config 禁止副作用义务",
+      "description": "作为配置安全负责人，我希望生产配置请求被编译为 namespace 和 credential 相关禁止义务。",
+      "acceptanceCriteria": [
+        "生产配置写入生成 production namespace write、production credential use、production write endpoint 等义务",
+        "sandbox 和 canary 请求生成隔离义务",
+        "未知 namespace 或 rollback capability 生成 fail-closed 义务",
+        "新增 config obligation compiler 测试"
+      ],
+      "priority": 17,
+      "passes": false,
+      "notes": "只实现编译器。"
+    },
+    {
+      "id": "PAG-018",
+      "title": "新增 config 负能力探测 fixture runner",
+      "description": "作为配置安全负责人，我希望探测证明 config sandbox executor 不能写生产资源。",
+      "acceptanceCriteria": [
+        "实现 production namespace write、production credential use、production endpoint access 探测 fixture",
+        "runner 为每个禁止动作输出 DeniedCapabilityEvidence",
+        "如果发生生产访问，证据失败",
+        "新增基于 sample config store 的测试"
+      ],
+      "priority": 18,
+      "passes": false,
+      "notes": "不接入真实配置平台。"
+    },
+    {
+      "id": "PAG-019",
+      "title": "新增 config 副作用快照证据",
+      "description": "作为配置安全负责人，我希望通过执行前后证据证明 sandbox 更新没有修改生产配置。",
+      "acceptanceCriteria": [
+        "在执行前后快照 production 和 sandbox config version",
+        "计算 namespace 变化的 SideEffectDeltaEvidence",
+        "生产配置差异会标记 forbiddenEffectsObserved",
+        "新增仅 sandbox 变化和生产差异测试"
+      ],
+      "priority": 19,
+      "passes": false,
+      "notes": "使用 sample config JSON fixture。"
+    },
+    {
+      "id": "PAG-020",
+      "title": "新增统一证据计划 runner",
+      "description": "作为网关维护者，我希望一个统一 runner 执行证据计划并返回标准化证据记录。",
+      "acceptanceCriteria": [
+        "runner 分发 SQL、CI/CD、config 的 negative probes 和 side-effect probes",
+        "计划配置缺失或不安全时，runner 不调用真实 executor",
+        "runner 返回结构化 evidence 和 runner status",
+        "新增 dispatch、failure、not_configured 行为测试"
+      ],
+      "priority": 20,
+      "passes": false,
+      "notes": "该 runner 用于生成证据，不是最终工具执行。"
+    },
+    {
+      "id": "PAG-021",
+      "title": "新增漂移失效服务",
+      "description": "作为运营者，我希望安全相关指纹漂移时，执行器证据自动失效。",
+      "acceptanceCriteria": [
+        "服务比较当前 ExecutorDriftFingerprint 和 evidence 绑定的 fingerprint",
+        "credential、network、runner、endpoint、namespace 或 config hash 变化会使相关证据失效",
+        "失效证据会更新 ExecutorSafetyEvidenceState",
+        "新增每个漂移字段的测试"
+      ],
+      "priority": 21,
+      "passes": false,
+      "notes": "漂移后必须 fail closed，直到重新探测。"
+    },
+    {
+      "id": "PAG-022",
+      "title": "将 permit gate 集成到 ToolExecutionGuard",
+      "description": "作为执行控制器，我希望 ToolExecutionGuard 在任何 executor 运行前强制检查 ExecutorSafetyEvidenceState。",
+      "acceptanceCriteria": [
+        "Guard 在 executor invocation 前检查 EvidenceComplete、未过期、未漂移状态",
+        "满足条件时创建 PermitBinding",
+        "证据 missing、partial、expired、invalidated 或 failed 时创建 PermitDeniedEvidence",
+        "新增 ToolExecutionGuard 的 permit 和 denial 路径测试"
+      ],
+      "priority": 22,
+      "passes": false,
+      "notes": "这是不可绕过的执行器边界。"
+    },
+    {
+      "id": "PAG-023",
+      "title": "强制 broker fail-closed 执行器调用",
+      "description": "作为平台运营者，我希望真实 executor 调用都经过 broker，且缺失或无效 permit 会被拒绝。",
+      "acceptanceCriteria": [
+        "新增或更新 executor broker，在调用真实 executor adapter 前校验 PermitBinding",
+        "broker 拒绝 stale、mismatched 或 missing permit binding",
+        "broker 对拒绝记录 executorInvoked=false",
+        "新增 broker 测试"
+      ],
+      "priority": 23,
+      "passes": false,
+      "notes": "guarded routes 不允许直接绕过 adapter。"
+    },
+    {
+      "id": "PAG-024",
+      "title": "写入副作用状态机审计记录",
+      "description": "作为审计人员，我希望审计记录展示义务、覆盖图、证据状态、许可和执行器调用状态。",
+      "acceptanceCriteria": [
+        "审计记录包含 forbiddenEffectObligations、coverageMapHash、safetyEvidenceState、permitIssued 和 executorInvoked",
+        "拒绝场景包含 PermitDeniedEvidence",
+        "现有 audit 记录仍然可读取",
+        "新增 audit repository 测试"
+      ],
+      "priority": 24,
+      "passes": false,
+      "notes": "审计记录必须能支撑专利证据。"
+    },
+    {
+      "id": "PAG-025",
+      "title": "暴露副作用证据 API",
+      "description": "作为运营者，我希望通过只读 API 查询义务、覆盖图、证据记录、状态和许可。",
+      "acceptanceCriteria": [
+        "新增按 requestId、auditId、executorId、evidenceVersion 查询副作用证据的只读端点",
+        "端点不得触发 executor 或 probe 执行",
+        "响应遵循现有 API envelope 约定",
+        "新增 list、filter、empty result API 测试"
+      ],
+      "priority": 25,
+      "passes": false,
+      "notes": "本任务只做 API，UI 后续实现。"
+    },
+    {
+      "id": "PAG-026",
+      "title": "在管理端展示副作用证据",
+      "description": "作为评审者，我希望 UI 展示禁止副作用义务、覆盖状态、漂移状态和许可状态。",
+      "acceptanceCriteria": [
+        "审计详情页展示 EvidenceCoverageMap 和 ExecutorSafetyEvidenceState",
+        "UI 标记 missing、stale、invalidated、failed、covered 等义务状态",
+        "PermitBinding 和 PermitDeniedEvidence 可见",
+        "新增 web API client 测试和 UI 测试"
+      ],
+      "priority": 26,
+      "passes": false,
+      "notes": "界面保持紧凑、偏运营工具风格。"
+    },
+    {
+      "id": "PAG-027",
+      "title": "生成副作用专利验证场景",
+      "description": "作为专利评审者，我希望看到 SQL、CI/CD、config 三类场景证明禁止副作用状态机。",
+      "acceptanceCriteria": [
+        "新增 SQL readonly 负能力探测和副作用差异证据文档",
+        "新增 CI/CD dry-run 无部署和漂移失效证据文档",
+        "新增 config sandbox 无生产写入证据文档",
+        "每个场景记录命令、预期状态和 permit outcome"
+      ],
+      "priority": 27,
+      "passes": false,
+      "notes": "文档可以引用生成的 fixture 输出。"
+    },
+    {
+      "id": "PAG-028",
+      "title": "新增 ContextAnchor 领域模型",
+      "description": "作为上下文安全工程师，我希望把上下文锚点建模出来，使高风险决策可以要求具体的模型可见证据。",
+      "acceptanceCriteria": [
+        "定义 ContextAnchor，包含 anchorId、anchorType、sourceIdentity、authorityLevel、resourceScope、createdAt、expiresAt、contentDigest、semanticClaimsDigest、retention flags 和 trustTier",
+        "支持 user_instruction、system_policy、approval_note、tool_result、resource_state、retrieved_document、negative_evidence、delegation_constraint",
+        "新增 validation helpers",
+        "新增 shared tests"
+      ],
+      "priority": 28,
+      "passes": false,
+      "notes": "第二篇专利的基础模型。"
+    },
+    {
+      "id": "PAG-029",
+      "title": "新增 PromptAssemblyManifest 模型",
+      "description": "作为上下文安全工程师，我希望记录生成 tool call 的同一次模型输入装配清单。",
+      "acceptanceCriteria": [
+        "定义 PromptAssemblyManifest，包含 inferenceId、modelId、promptDigest、contextUnitDigests、contextUnitOrder、tokenPositionRanges、summaryDerivationDigests、retrievalQueryDigest、retrievedDocumentDigests、memorySnapshotDigest、systemPolicyDigest",
+        "manifest 可生成稳定 hash",
+        "manifest 字段足以绑定到生成 tool call 的同一次 inference",
+        "新增测试"
+      ],
+      "priority": 29,
+      "passes": false,
+      "notes": "本任务不实现 capture。"
+    },
+    {
+      "id": "PAG-030",
+      "title": "在 deterministic agent adapter 中捕获 prompt manifest",
+      "description": "作为集成者，我希望确定性 agent task adapter 在生成 ToolCallRequest 时同时输出 PromptAssemblyManifest。",
+      "acceptanceCriteria": [
+        "agent adapter 返回与 ToolCallRequest 绑定的 inferenceId 和 PromptAssemblyManifest",
+        "manifest 包含 source task digest 和 context unit digests",
+        "现有 adapter 测试继续通过",
+        "新增测试证明 manifest 和 tool call 使用同一个 inferenceId"
+      ],
+      "priority": 30,
+      "passes": false,
+      "notes": "使用确定性本地 adapter，不接入真实 LLM。"
+    },
+    {
+      "id": "PAG-031",
+      "title": "新增 RequiredContextObligation 编译器接口",
+      "description": "作为网关维护者，我希望把高风险 tool call 编译为必需上下文义务。",
+      "acceptanceCriteria": [
+        "定义 RequiredContextObligation，包含 toolCallDigest、actionImpactClass、requiredAnchors、freshnessWindow、minimumRetentionMode、conflictPolicy、taintPolicy、missingAnchorAction",
+        "新增 tool-specific compiler interface",
+        "compiler 输出引用 ContextAnchor ids",
+        "新增接口测试"
+      ],
+      "priority": 31,
+      "passes": false,
+      "notes": "具体工具编译器后续实现。"
+    },
+    {
+      "id": "PAG-032",
+      "title": "编译 SQL 必需上下文义务",
+      "description": "作为数据库安全负责人，我希望 SQL 写入和破坏性 SQL 必须具备最新用户指令、数据库状态和策略锚点。",
+      "acceptanceCriteria": [
+        "SQL 破坏性或写入类动作要求 latest user instruction、SQL policy、target resource state、rollback context anchors",
+        "readonly SELECT 生成较轻量的上下文义务",
+        "未解析目标表要求显式 uncertainty anchors",
+        "新增 SQL context obligation 测试"
+      ],
+      "priority": 32,
+      "passes": false,
+      "notes": "只实现编译器。"
+    },
+    {
+      "id": "PAG-033",
+      "title": "编译 CI/CD 必需上下文义务",
+      "description": "作为发布安全负责人，我希望部署动作必须具备用户指令、审批约束、测试结果、流水线策略和发布状态锚点。",
+      "acceptanceCriteria": [
+        "production deploy candidate 要求 approval_note、test_result、release_policy、pipeline_state 和 user_instruction anchors",
+        "测试失败或测试状态缺失会创建 negative_evidence anchor requirement",
+        "dry-run-only 审批备注必须要求 verbatim retention",
+        "新增 CI/CD context obligation 测试"
+      ],
+      "priority": 33,
+      "passes": false,
+      "notes": "只实现编译器。"
+    },
+    {
+      "id": "PAG-034",
+      "title": "编译 config 必需上下文义务",
+      "description": "作为配置安全负责人，我希望配置变更必须具备用户指令、审批备注、策略、当前配置和回滚锚点。",
+      "acceptanceCriteria": [
+        "production config change 要求 approval_note、current_config_state、config_policy、rollback_plan 和 user_instruction anchors",
+        "sandbox/canary change 要求 namespace constraint anchors",
+        "危险值要求 negative_evidence anchors",
+        "新增 config context obligation 测试"
+      ],
+      "priority": 34,
+      "passes": false,
+      "notes": "只实现编译器。"
+    },
+    {
+      "id": "PAG-035",
+      "title": "新增 ContextRetentionEvidence 匹配器",
+      "description": "作为上下文安全工程师，我希望把必需上下文锚点和 prompt manifest 匹配，证明模型可见上下文保留状态。",
+      "acceptanceCriteria": [
+        "matcher 为每个 required anchor 输出 ContextRetentionEvidence",
+        "支持 verbatim、certified_summary、retrievable_reference、missing、stale、conflicting、tainted 等 retention mode",
+        "覆盖状态由 obligation 和 manifest 输入确定性计算",
+        "新增每种 retention mode 的测试"
+      ],
+      "priority": 35,
+      "passes": false,
+      "notes": "第二篇专利的核心证明对象。"
+    },
+    {
+      "id": "PAG-036",
+      "title": "新增认证摘要和引用校验器",
+      "description": "作为上下文安全工程师，我希望摘要和引用通过校验后才能满足 required anchors。",
+      "acceptanceCriteria": [
+        "校验器检查 summaryDerivationDigests 与 source anchor digests 的关系",
+        "校验器检查 retrievable references 能解析到匹配 contentDigest",
+        "未认证摘要不能满足 verbatim 或 certified_summary 义务",
+        "新增有效和无效摘要/引用测试"
+      ],
+      "priority": 36,
+      "passes": false,
+      "notes": "可使用确定性的本地校验。"
+    },
+    {
+      "id": "PAG-037",
+      "title": "新增上下文时效、冲突和污染规则",
+      "description": "作为安全评审者，我希望过期、冲突或污染的上下文锚点会阻断高风险决策。",
+      "acceptanceCriteria": [
+        "freshness rule 比较 anchor timestamp 和 obligation freshnessWindow",
+        "conflict rule 检测被遗漏的 negative_evidence 或矛盾 anchors",
+        "taint rule 在低可信指令源影响写操作时标记污染",
+        "新增 stale、conflicting、tainted evidence 测试"
+      ],
+      "priority": 37,
+      "passes": false,
+      "notes": "这些规则输入 ContextSufficiencyState。"
+    },
+    {
+      "id": "PAG-038",
+      "title": "新增 ContextSufficiencyState 状态机",
+      "description": "作为网关维护者，我希望把上下文保留证据转换为控制执行能否继续的状态。",
+      "acceptanceCriteria": [
+        "定义 Sufficient、SufficientByCertifiedSummary、RegroundRequired、ReapprovalRequired、Stale、Conflicting、Contaminated、Insufficient 状态",
+        "状态机使用逐锚点 ContextRetentionEvidence",
+        "缺失 verbatim approval note 时按策略输出 ReapprovalRequired 或 Insufficient",
+        "新增状态转移测试"
+      ],
+      "priority": 38,
+      "passes": false,
+      "notes": "本任务不集成 executor。"
+    },
+    {
+      "id": "PAG-039",
+      "title": "集成重新 grounding、重新审批和拒绝决策",
+      "description": "作为执行控制器，我希望上下文不足时在执行器安全检查前产生可执行的网关决策。",
+      "acceptanceCriteria": [
+        "RegroundRequired 产生结构化 reground action，且不调用 executor",
+        "ReapprovalRequired 创建或引用 approval flow，且不调用 executor",
+        "Conflicting、Contaminated、Insufficient 产生 deny decision",
+        "新增 decision engine 测试"
+      ],
+      "priority": 39,
+      "passes": false,
+      "notes": "应复用现有 decision 约定。"
+    },
+    {
+      "id": "PAG-040",
+      "title": "持久化 ContextAdequacyEvidence",
+      "description": "作为审计人员，我希望上下文义务、prompt manifest、保留证据和充分性状态都能被持久化。",
+      "acceptanceCriteria": [
+        "新增 ContextAnchor、PromptAssemblyManifest、RequiredContextObligation、ContextRetentionEvidence、ContextSufficiencyState、ContextAdequacyEvidence 的 repository storage",
+        "记录可按 requestId、auditId、inferenceId、toolCallDigest 查询",
+        "证据 hash 稳定",
+        "新增 repository 测试"
+      ],
+      "priority": 40,
+      "passes": false,
+      "notes": "复用当前本地存储模式。"
+    },
+    {
+      "id": "PAG-041",
+      "title": "将上下文充分性证据绑定到 permit decision",
+      "description": "作为网关维护者，我希望高风险 tool call 的 executor permit 评估必须依赖上下文充分性。",
+      "acceptanceCriteria": [
+        "高风险 tool call 只有 context state sufficient 后才能进入 forbidden-effect permit gate",
+        "PermitBinding 在可用时包含 contextAdequacyEvidenceHash",
+        "上下文拒绝记录 executorInvoked=false",
+        "新增充分上下文和不足上下文的集成测试"
+      ],
+      "priority": 41,
+      "passes": false,
+      "notes": "连接两篇专利，但不混淆两套模型。"
+    },
+    {
+      "id": "PAG-042",
+      "title": "暴露上下文证据 API",
+      "description": "作为运营者，我希望通过只读 API 查询上下文锚点、prompt manifest、保留证据和充分性状态。",
+      "acceptanceCriteria": [
+        "新增按 requestId、auditId、inferenceId、toolCallDigest 查询上下文证据的只读端点",
+        "端点不得触发分析、LLM 调用或 executor invocation",
+        "响应遵循现有 API envelope 约定",
+        "新增 API 测试"
+      ],
+      "priority": 42,
+      "passes": false,
+      "notes": "本任务只做 API，UI 后续实现。"
+    },
+    {
+      "id": "PAG-043",
+      "title": "在管理端展示上下文证据",
+      "description": "作为评审者，我希望 UI 展示生成 tool call 时必需上下文锚点是否实际可见。",
+      "acceptanceCriteria": [
+        "审计详情页展示 RequiredContextObligation 和 PromptAssemblyManifest 摘要",
+        "UI 展示每个 anchor 的 retention status",
+        "UI 解释 reground、reapproval、deny、sufficient 等状态",
+        "新增 web API client 测试和 UI 测试"
+      ],
+      "priority": 43,
+      "passes": false,
+      "notes": "保持界面简洁、面向运营审计。"
+    },
+    {
+      "id": "PAG-044",
+      "title": "生成上下文专利验证场景",
+      "description": "作为专利评审者，我希望看到缺失用户指令、过期审批和遗漏反证信息的可复现实验证据。",
+      "acceptanceCriteria": [
+        "新增缺失最新用户指令导致 deny 或 reground 的证据文档",
+        "新增 dry-run-only 审批过期导致 reapproval 的证据文档",
+        "新增遗漏 negative evidence 导致 conflict denial 的证据文档",
+        "每个场景记录 manifest、obligations、retention evidence、state 和 decision"
+      ],
+      "priority": 44,
+      "passes": false,
+      "notes": "文档可以引用 fixture JSON 输出。"
+    },
+    {
+      "id": "PAG-045",
+      "title": "实现统一专利前置执行流水线",
+      "description": "作为网关集成者，我希望上下文证明先于禁止副作用证明运行，形成一个确定性的前置执行流水线。",
+      "acceptanceCriteria": [
+        "pipeline 顺序固定为 context obligation proof、forbidden-effect obligation proof、permit decision",
+        "context failure 阻止 evidence runner 和 executor invocation，除非策略明确允许 held mode",
+        "forbidden-effect failure 阻止 executor invocation",
+        "新增成功和失败顺序的集成测试"
+      ],
+      "priority": 45,
+      "passes": false,
+      "notes": "这是两篇专利组合后的产品主流程。"
+    },
+    {
+      "id": "PAG-046",
+      "title": "新增 SQL 端到端专利场景",
+      "description": "作为专利评审者，我希望一个 SQL 场景同时证明上下文保留和禁止副作用证据。",
+      "acceptanceCriteria": [
+        "场景从 agent SQL task 开始，并产生 PromptAssemblyManifest",
+        "场景生成 SQL RequiredContextObligation 和 ForbiddenEffectObligation",
+        "场景在无有效上下文或缺失副作用证据时阻断 DELETE",
+        "证据文档记录 permitIssued 和 executorInvoked"
+      ],
+      "priority": 46,
+      "passes": false,
+      "notes": "使用本地 sample-workspace 数据。"
+    },
+    {
+      "id": "PAG-047",
+      "title": "新增 CI/CD 端到端专利场景",
+      "description": "作为专利评审者，我希望一个 CI/CD 场景证明 dry-run-only 审批上下文和无生产部署副作用。",
+      "acceptanceCriteria": [
+        "场景从 production deploy agent task 和 prompt manifest 开始",
+        "要求并验证 dry-run-only 或 failed-test 上下文",
+        "CI/CD 证据证明没有 deploy endpoint、webhook 或 artifact promotion",
+        "证据文档记录状态转移和 permit outcome"
+      ],
+      "priority": 47,
+      "passes": false,
+      "notes": "使用本地 pipeline fixture。"
+    },
+    {
+      "id": "PAG-048",
+      "title": "新增 config 端到端专利场景",
+      "description": "作为专利评审者，我希望一个 config 场景证明 namespace 上下文和 sandbox 无生产写入证据。",
+      "acceptanceCriteria": [
+        "场景从 production config change agent task 和 prompt manifest 开始",
+        "Required context 包含 namespace constraint、approval note、current config 和 rollback anchors",
+        "Forbidden-effect evidence 证明没有 production namespace write",
+        "证据文档记录状态转移和 permit outcome"
+      ],
+      "priority": 48,
+      "passes": false,
+      "notes": "使用本地 config-store fixture。"
+    },
+    {
+      "id": "PAG-049",
+      "title": "新增专利证据导出和 claim mapping",
+      "description": "作为专利和合规评审者，我希望导出可提交的证据包，并映射到两篇专利的权利要求链路。",
+      "acceptanceCriteria": [
+        "新增脚本或 API，将选定 audit、context evidence、side-effect evidence、permits、denials 导出到 docs/evidence/patent-validation",
+        "更新 docs/patent/claim-mapping.md，覆盖两篇专利方向",
+        "claim mapping 引用具体代码路径和证据文件",
+        "新增导出命令的测试或 smoke validation"
+      ],
+      "priority": 49,
+      "passes": false,
+      "notes": "让工程实现可以直接支撑专利撰写。"
+    },
+    {
+      "id": "PAG-050",
+      "title": "更新专利状态机实施 runbook",
+      "description": "作为维护者，我希望有一份 runbook 说明如何在本地验证两条专利状态机。",
+      "acceptanceCriteria": [
+        "新增 docs/runbooks/patent-state-machines.md",
+        "记录 seed、API、web、test 和 evidence export 命令",
+        "记录 SQL、CI/CD、config 场景的预期结果",
+        "从 README 或现有 runbook 索引链接该文档"
+      ],
+      "priority": 50,
+      "passes": false,
+      "notes": "本 PRD 的最终文档任务。"
+    }
+  ]
+}

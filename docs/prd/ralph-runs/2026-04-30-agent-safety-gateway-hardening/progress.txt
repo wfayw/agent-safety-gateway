@@ -1,0 +1,8 @@
+## Codebase Patterns
+- `agent-safety-gateway` is the target repo for this Ralph PRD. Run Ralph from `/home/wangfei/workspace/ralph-loop` with `RALPH_REPO_ROOT=/home/wangfei/workspace/ralph-loop/agent-safety-gateway`.
+- The local environment currently has Node 18.19.1. Vite 7 dev server needs Node 20.19+ or 22.12+; browser verification may need the built `apps/web/dist` static-server fallback from `prd.json.validationContext`.
+- If `pnpm` is missing from PATH, this environment has a user-local fallback at `/home/wangfei/.local/node_modules/.bin/pnpm`.
+
+## Session Log
+Started: 2026-04-30
+---
